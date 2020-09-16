@@ -1,0 +1,12 @@
+﻿<?xml version="1.0"?>
+<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" SOAP-ENV:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+	<SOAP-ENV:Body>
+		<m:Exchange xmlns:m="urn:schemas-microsoft-com:service:mstrustagreement:1">
+			<HostID xmlns:dt="urn:schemas-microsoft-com:datatypes" dt:dt="string">uuid:e73681eb-1c62-4083-bd99-a1c408d30457</HostID>
+			<HostCertificate xmlns:dt="urn:schemas-microsoft-com:datatypes" dt:dt="string">AAABAANiMIIDXjCCAkagAwIBAgIQwbJUvtUqm5BN/V5oF+JvOjANBgkqhkiG9w0BAQUFADA3MTUwMwYDVQQDEyxNaWNyb3NvZnQgV2luZG93cyBNZWRpYSBDZW50ZXIgRXh0ZW5kZXIgSG9zdDAeFw0wODAxMTQwMjUzNDhaFw0zODAxMTMwOTE2NTBaMDcxNTAzBgNVBAMTLE1pY3Jvc29mdCBXaW5kb3dzIE1lZGlhIENlbnRlciBFeHRlbmRlciBIb3N0MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtwJXbDjMejg+VKMLCkghR9tbpnLX0ni+tKsJ+nucZV6s/kABszxCVDeAxNiiasG26OmqEsSs3ZnrHaleIGe0b/dEnGMR3jlKrWt61KMKuItNMcXQckUU7+gAAfjdLxEicZGmorjN9ZmPYOpTZs9DL48XPM5fvASuQSXwGOe4ojdVyZ8i0zOFc1NgADGLKVqktfySYiE5yy0un7850tM2+p9JuM6XZy8B4nw9liGv7bd/iExF6uT1xka+HxhcfdLZql03ARESGtsQ5jXezyFtqfaYCaajRCtMPOrPBuQ6qhM6vB7Cg8LjXpJBap9/AB88b+z8bM4bJUkRHH5pxwU23QIDAQABo2YwZDA0BgNVHREELTArhil1dWlkOmU3MzY4MWViLTFjNjItNDA4My1iZDk5LWExYzQwOGQzMDQ1NzALBgNVHQ8EBAMCBPAwHwYDVR0lBBgwFgYIKwYBBQUHAwEGCisGAQQBgjcKBQwwDQYJKoZIhvcNAQEFBQADggEBAKZ9UbCic89BhSrfyuGo467v8mhD9yS/wJBTlnPScc5s+Ehhfsn0Va7UjkcRlEYh62sW0Kx8X/li/lBt0ldwgZZK7+NASAG7oP7udOmH+z/MGX82q4FCU0zAH9vZ+Nie++QE9/w7oxUz5zEx8GljxRAc0WKTQQyVGS56/Nt8kxYhZEQssBG7jxNZKi/sBT+DNJcgyYQM2/uu1zLF+vIYVPgigia03RLtY35lR9Mu6v5mGc0ViOVYyvLEVTDCpoXVidBR2vYPnrZ3Z+X82LJrwh+ay4HMZDHqv5cbVJnzAwugf6vVhp3BwXQCLkYFkvgjusYXFDH+DH0QIKe0ZtGnDp4=</HostCertificate>
+			<IterationsRequired xmlns:dt="urn:schemas-microsoft-com:datatypes" dt:dt="ui1">4</IterationsRequired>
+			<HostConfirmAuthenticator xmlns:dt="urn:schemas-microsoft-com:datatypes" dt:dt="string">8konzjVSsQbipg+YX9DJV7wEgxw=</HostConfirmAuthenticator>
+		</m:Exchange>
+	</SOAP-ENV:Body>
+</SOAP-ENV:Envelope>
+

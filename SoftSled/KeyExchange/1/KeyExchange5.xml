@@ -1,0 +1,10 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" SOAP-ENV:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+	<SOAP-ENV:Body>
+		<m:Validate xmlns:m="urn:schemas-microsoft-com:service:mstrustagreement:1">
+			<HostID xmlns:dt="urn:schemas-microsoft-com:datatypes" dt:dt="string">uuid:e73681eb-1c62-4083-bd99-a1c408d30457</HostID>
+			<Iteration xmlns:dt="urn:schemas-microsoft-com:datatypes" dt:dt="ui1">1</Iteration>
+			<HostValidateNonce xmlns:dt="urn:schemas-microsoft-com:datatypes" dt:dt="string">Qy6xq6O21LiXoygM2Q1D8YthJSg=</HostValidateNonce>
+		</m:Validate>
+	</SOAP-ENV:Body>
+</SOAP-ENV:Envelope>

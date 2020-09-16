@@ -1,0 +1,9 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<s:Envelope  xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+	<s:Body>
+		<u:ValidateResponse xmlns:u="urn:schemas-microsoft-com:service:mstrustagreement:1">
+			<DeviceValidateNonce>d3pXJikHHTDwGECCLw+xXpXpg1o=</DeviceValidateNonce>
+		</u:ValidateResponse>
+	</s:Body>
+</s:Envelope>
+

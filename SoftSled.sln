@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.29728.190
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SoftSled", "SoftSled\SoftSled.csproj", "{E5890526-62AA-4CCC-B4E6-73EACBCBCC8B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UPnP", "UPnP\UPnP.csproj", "{EFD4E06D-5620-4AB8-B51C-8F19F20DF970}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{E5890526-62AA-4CCC-B4E6-73EACBCBCC8B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E5890526-62AA-4CCC-B4E6-73EACBCBCC8B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E5890526-62AA-4CCC-B4E6-73EACBCBCC8B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E5890526-62AA-4CCC-B4E6-73EACBCBCC8B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EFD4E06D-5620-4AB8-B51C-8F19F20DF970}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EFD4E06D-5620-4AB8-B51C-8F19F20DF970}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EFD4E06D-5620-4AB8-B51C-8F19F20DF970}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EFD4E06D-5620-4AB8-B51C-8F19F20DF970}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {16E3B1C1-6903-4B35-954A-C6E36500A8A8}
+	EndGlobalSection
+EndGlobal

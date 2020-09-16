@@ -1,0 +1,63 @@
+﻿<?xml version='1.0'?>
+<root xmlns:pnpx="http://schemas.microsoft.com/windows/pnpx/2005/11" xmlns:a="urn:schemas-upnp-org:service-1-0" xmlns="urn:schemas-upnp-org:device-1-0">
+	<specVersion>
+		<major>1</major>
+		<minor>0</minor>
+	</specVersion>
+	<device>
+		<pnpx:X_deviceCategory>MediaDevices</pnpx:X_deviceCategory>
+		<deviceType>urn:schemas-microsoft-com:device:MediaCenterExtenderMFD:1</deviceType>
+		<friendlyName>Xbox 360 Media Center Extender</friendlyName>
+		<manufacturer>Microsoft Corporation</manufacturer>
+		<manufacturerURL>http://www.xbox.com/</manufacturerURL>
+		<modelDescription>Xbox 360 Media Center Extender</modelDescription>
+		<modelName>Xbox 360</modelName>
+		<modelNumber></modelNumber>
+		<modelURL>http://go.microsoft.com/fwlink/?LinkID=53081</modelURL>
+		<serialNumber></serialNumber>
+		<UDN>uuid:10000000-0000-0000-0200-00125AB07AEF</UDN>
+		<UPC></UPC>
+		<serviceList>
+			<service>
+				<serviceType>urn:schemas-microsoft-com:service:NULL:1</serviceType>
+				<serviceId>urn:microsoft-com:serviceId:NULL</serviceId>
+				<SCPDURL>/XD/NULL.xml</SCPDURL>
+				<controlURL>/UD/?0</controlURL>
+				<eventSubURL/>
+			</service>
+		</serviceList>
+		<deviceList>
+			<device>
+				<pnpx:X_compatibleId>MICROSOFT_MCX_0001</pnpx:X_compatibleId>
+				<pnpx:X_deviceCategory>MediaDevices</pnpx:X_deviceCategory>
+				<deviceType>urn:schemas-microsoft-com:device:MediaCenterExtender:1</deviceType>
+				<friendlyName>Xbox 360 Media Center Extender</friendlyName>
+				<manufacturer>Microsoft Corporation</manufacturer>
+				<manufacturerURL>http://www.microsoft.com/</manufacturerURL>
+				<modelDescription>Xbox 360 Media Center Extender</modelDescription>
+				<modelName>Xbox 360</modelName>
+				<modelNumber></modelNumber>
+				<modelURL>http://go.microsoft.com/fwlink/?LinkID=53081</modelURL>
+				<serialNumber></serialNumber>
+				<UDN>uuid:20000000-0000-0000-0200-00125AB07AEF</UDN>
+				<UPC></UPC>
+				<serviceList>
+					<service>
+						<serviceType>urn:schemas-microsoft-com:service:mstrustagreement:1</serviceType>
+						<serviceId>urn:microsoft-com:serviceId:MSTA</serviceId>
+						<SCPDURL>/XD/mstrustagreement.xml</SCPDURL>
+						<controlURL>/UD/?1</controlURL>
+						<eventSubURL/>
+					</service>
+					<service>
+						<serviceType>urn:schemas-microsoft-com:service:msremotedexperience:1</serviceType>
+						<serviceId>urn:schemas-microsoft-com:serviceId:MSRX</serviceId>
+						<SCPDURL>/XD/msremotedexperience.xml</SCPDURL>
+						<controlURL>/UD/?2</controlURL>
+						<eventSubURL/>
+					</service>
+				</serviceList>
+			</device>
+		</deviceList>
+	</device>
+</root>

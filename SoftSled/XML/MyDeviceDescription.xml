@@ -1,0 +1,50 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+	<specVersion>
+		<major>1</major>
+		<minor>0</minor>
+	</specVersion>
+	<device>
+		<deviceType>urn:schemas-microsoft-com:device:MediaCenterExtenderMFD:1</deviceType>
+		<X_deviceCategory xmlns="http://schemas.microsoft.com/windows/pnpx/2005/11">MediaDevices</X_deviceCategory>
+		<friendlyName>SoftSled Media Center Extender</friendlyName>
+		<manufacturer>SoftSled Project</manufacturer>
+		<manufacturerURL>http://softsled.net</manufacturerURL>
+		<modelDescription>SoftSled Extender Software</modelDescription>
+		<modelName>SoftSled Extender</modelName>
+		<modelURL>http://softsled.net/</modelURL>
+		<UDN>uuid:740a20cc-a078-4d53-ac54-56f4972851e5</UDN>
+		<serviceList>
+			<service>
+				<serviceType>urn:schemas-microsoft-com:service:NULL:1</serviceType>
+				<serviceId>urn:microsoft-com:serviceId:NULL</serviceId>
+				<SCPDURL>_urn:microsoft-com:serviceId:NULL_scpd.xml</SCPDURL>
+				<controlURL>_urn:microsoft-com:serviceId:NULL_control</controlURL>
+				<eventSubURL>_urn:microsoft-com:serviceId:NULL_event</eventSubURL>
+			</service>
+		</serviceList>
+		<deviceList>
+			<device>
+				<deviceType>urn:schemas-microsoft-com:device:MediaCenterExtender:1</deviceType>
+				<presentationURL />
+				<X_deviceCategory xmlns="http://schemas.microsoft.com/windows/pnpx/2005/11">MediaDevices</X_deviceCategory>
+				<X_compatibleId xmlns="http://schemas.microsoft.com/windows/pnpx/2005/11">MICROSOFT_MCX_0001</X_compatibleId>
+				<friendlyName>SoftSled Media Center Extender</friendlyName>
+				<manufacturer>SoftSled Project</manufacturer>
+				<modelDescription>SoftSled Extender Software</modelDescription>
+				<modelName>SoftSled Extender</modelName>
+				<modelURL>http://softsled.net/</modelURL>
+				<UDN>uuid:740a20cc-a078-4d53-ac54-56f4972851e5</UDN>
+				<serviceList>
+					<service>
+						<serviceType>urn:schemas-microsoft-com:service:mstrustagreement:1</serviceType>
+						<serviceId>urn:microsoft-com:serviceId:MSTA</serviceId>
+						<SCPDURL>740a20cc-a078-4d53-ac54-56f4972851e5/_urn:microsoft-com:serviceId:MSTA_scpd.xml</SCPDURL>
+						<controlURL>740a20cc-a078-4d53-ac54-56f4972851e5/_urn:microsoft-com:serviceId:MSTA_control</controlURL>
+						<eventSubURL>740a20cc-a078-4d53-ac54-56f4972851e5/_urn:microsoft-com:serviceId:MSTA_event</eventSubURL>
+					</service>
+				</serviceList>
+			</device>
+		</deviceList>
+	</device>
+</root>

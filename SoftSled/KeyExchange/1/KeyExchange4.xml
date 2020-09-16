@@ -1,0 +1,8 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<s:Envelope  xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+	<s:Body>
+		<u:CommitResponse xmlns:u="urn:schemas-microsoft-com:service:mstrustagreement:1">
+			<DeviceValidateAuthenticator>OFv3Wa2nNv9e7b4INqYUL6jMxWs=</DeviceValidateAuthenticator>
+		</u:CommitResponse>
+	</s:Body>
+</s:Envelope>
