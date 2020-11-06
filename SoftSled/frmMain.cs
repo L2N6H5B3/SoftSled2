@@ -89,8 +89,8 @@ namespace SoftSled
             // VCHD - something to do with av signalling
 
             // NOTICE, if you want ehshell.exe to start up in normal Remote Desktop mode, remove the devcaps channel definition bellow. 
-            rdpClient.CreateVirtualChannels("McxSess,MCECaps,avctrl,VCHD");
-            //rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD");
+            //rdpClient.CreateVirtualChannels("McxSess,MCECaps,avctrl,VCHD");
+            rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD");
             rdpClient.Connect();
 
             SetStatus("Remote Desktop Connecting...");
@@ -117,6 +117,7 @@ namespace SoftSled
                 if(rdpClient.Connected == 1)
                     rdpClient.Disconnect();
             }
+            m_device = null;
         }
         private void btnExtenderSetup_Click(object sender, EventArgs e)
         {
