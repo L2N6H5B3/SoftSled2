@@ -3,13 +3,11 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 
-namespace SoftSled.Components
-{
-    public class SoftSledConfig
-    {
+namespace SoftSled.Components {
+    public class SoftSledConfig {
         public bool IsPaired = false;
-        public string RdpLoginHost = "SET";
-        public string RdpLoginUserName = "SET";
-        public string RdpLoginPassword = "SET";
+        public string RdpLoginHost = "";
+        public string RdpLoginUserName = "";
+        public string RdpLoginPassword = "";
     }
 }

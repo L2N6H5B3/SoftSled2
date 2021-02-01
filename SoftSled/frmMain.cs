@@ -12,10 +12,8 @@ using System.Reflection;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 
-namespace SoftSled
-{
-    public partial class frmMain : Form
-    {
+namespace SoftSled {
+    public partial class frmMain : Form {
         // Private members
         private Logger m_logger;
         private ExtenderDevice m_device;
@@ -23,38 +21,32 @@ namespace SoftSled
         private int devCapsIter = 1;
         private int mcxSessIter = 1;
         private int avCtrlIter = 1;
-        private bool isConnecting = false; 
+        private bool isConnecting = false;
         FileStream writer;
 
         private string vChanRootDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\VChan\\";
 
-        public frmMain()
-        {
+        public frmMain() {
             InitializeComponent();
         }
 
         #region Main GUI Commands
-        private void frmMain_Load(object sender, EventArgs e)
-        {
+        private void frmMain_Load(object sender, EventArgs e) {
             InitialiseLogger();
 
             m_logger.LogInfo("OpenSoftSled (http://github.com/l2n6h5b3/SoftSled2)");
 
             SoftSledConfig config = SoftSledConfigManager.ReadConfig();
-            if (!config.IsPaired)
-            {
+            if (!config.IsPaired) {
                 m_logger.LogInfo("Extender is not paired!");
-                SetStatus("Extender is not paired");   
-            }
-            else
-            {
+                SetStatus("Extender is not paired");
+            } else {
                 m_logger.LogInfo("Extender is paired with " + config.RdpLoginHost);
                 SetStatus("Extender ready to connect");
             }
 
         }
-        private void btnExtenderConnect_Click(object sender, EventArgs e)
-        {
+        private void btnExtenderConnect_Click(object sender, EventArgs e) {
             if (m_device != null) {
                 m_device.Stop();
             }
@@ -100,29 +92,25 @@ namespace SoftSled
             TcpListener tcp2 = new TcpListener(3777);
             TcpListener tcp3 = new TcpListener(3778);
             TcpListener tcp4 = new TcpListener(2177);
-           
+
             //new Thread(new ParameterizedThreadStart(Listen)).Start(tcp1);
             //new Thread(new ParameterizedThreadStart(Listen)).Start(tcp2);
-           // new Thread(new ParameterizedThreadStart(Listen)).Start(tcp3);
-           //new Thread(new ParameterizedThreadStart(Listen)).Start(tcp4);
+            // new Thread(new ParameterizedThreadStart(Listen)).Start(tcp3);
+            //new Thread(new ParameterizedThreadStart(Listen)).Start(tcp4);
 
         }
 
 
-        private void btnExtenderDisconnect_Click(object sender, EventArgs e)
-        {
-            if (m_device != null)
-            {
+        private void btnExtenderDisconnect_Click(object sender, EventArgs e) {
+            if (m_device != null) {
                 m_device.Stop();
-                if(rdpClient.Connected == 1)
+                if (rdpClient.Connected == 1)
                     rdpClient.Disconnect();
             }
             m_device = null;
         }
-        private void btnExtenderSetup_Click(object sender, EventArgs e)
-        {
-            if (m_device != null)
-            {
+        private void btnExtenderSetup_Click(object sender, EventArgs e) {
+            if (m_device != null) {
                 MessageBox.Show("Device is already broadcasting!");
                 return;
             }
@@ -133,8 +121,7 @@ namespace SoftSled
             MessageBox.Show("SoftSled is broadcasting! Use the key 1234-3706 to pair the device");
         }
 
-        void InitialiseLogger()
-        {
+        void InitialiseLogger() {
             // For now simply hardcode the logger.
             m_logger = new TextBoxLogger(txtLog, this);
             m_logger.IsLoggingDebug = true;
@@ -142,77 +129,59 @@ namespace SoftSled
         #endregion
 
         #region RDPClient ActiveX Events
-        void rdpClient_OnChannelReceivedData(object sender, AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e)
-        {
-            try
-            {
-                if(chkInVchanDebug.Checked && e.chanName != "McxSess")
+        void rdpClient_OnChannelReceivedData(object sender, AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
+            try {
+                if (chkInVchanDebug.Checked && e.chanName != "McxSess")
                     m_logger.LogDebug("RDP: Received data on channel " + e.chanName);
 
 
-                if (e.chanName == "devcaps")
-                {
+                if (e.chanName == "devcaps") {
                     HandleDevCapsIncoming(e);
-                }
-                else if (e.chanName == "McxSess")
-                {
+                } else if (e.chanName == "McxSess") {
                     HandleMcxSessIncoming(e.data);
-                }
-                else if (e.chanName == "avctrl")
-                {
+                } else if (e.chanName == "avctrl") {
                     HandleAvctrlIncoming(e.data);
-                }
-                else
-                {
+                } else {
                     MessageBox.Show("unhandled data on channel " + e.chanName);
                 }
 
 
+            } catch (Exception ee) {
+                MessageBox.Show(ee.Message + " " + ee.StackTrace);
             }
-           catch (Exception ee)
-           {
-               MessageBox.Show(ee.Message + " " + ee.StackTrace);
-           }
 
         }
-        private static void DumpIncoming(string data, string chan)
-        {
+        private static void DumpIncoming(string data, string chan) {
             string outFileName = Microsoft.VisualBasic.Interaction.InputBox("Enter filename for vchannel dump on channel " + chan, "", "", 400, 400);
 
-            if (!String.IsNullOrEmpty(outFileName))
-            {
-                using (FileStream fs = File.Create(outFileName))
-                {
+            if (!String.IsNullOrEmpty(outFileName)) {
+                using (FileStream fs = File.Create(outFileName)) {
                     byte[] buff = Encoding.Unicode.GetBytes(data);
                     fs.Write(buff, 0, buff.Length);
                 }
             }
 
         }
-        void rdpClient_OnDisconnected(object sender, AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEvent e)
-        {
+        void rdpClient_OnDisconnected(object sender, AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEvent e) {
             m_logger.LogInfo("RDP: Disconnected");
             if (isConnecting == true)
                 SetStatus("Forcibly disconnected from Remote Desktop Host");
 
         }
-        void rdpClient_OnConnected(object sender, EventArgs e)
-        {
+        void rdpClient_OnConnected(object sender, EventArgs e) {
             m_logger.LogInfo("RDP: Connected");
             SetStatus("Remote Desktop Connected! Waiting for Media Center...");
         }
         #endregion
 
         #region VirtualChannel Handlers
-        private void HandleMcxSessIncoming(string data)
-        {
+        private void HandleMcxSessIncoming(string data) {
             byte[] vChanResponse = File.ReadAllBytes(vChanRootDir + "McxSess\\Response");
-            
+
             if (mcxSessIter == 1)
                 SetStatus("Starting Experience...");
 
-            if (mcxSessIter == 5)
-            {
+            if (mcxSessIter == 5) {
                 // The fifth iteration is length of only 31 bytes.
                 // We need to strip one byte as the stock file is 32 bytes.
                 byte[] newBuff = new byte[31];
@@ -239,20 +208,16 @@ namespace SoftSled
             //m_logger.LogDebug("RDP: Sent McxSess iteration " + mcxSessIter.ToString());
 
             mcxSessIter++;
-        
+
 
         }
-        private void HandleDevCapsIncoming(AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e)
-        {
+        private void HandleDevCapsIncoming(AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
             byte[] vChanResponseBuff = null;
 
-            if (devCapsIter == 1)
-            {
+            if (devCapsIter == 1) {
                 // The initial response data for the initialization process.
                 vChanResponseBuff = LoadDevCapsVChan("Initial");
-            }
-            else
-            {
+            } else {
                 // For now, respond true to all capability requests except the capabilities in the white list. 
                 byte[] vChanIncomingBuff = Encoding.Unicode.GetBytes(e.data);
                 string capChar1 = Encoding.ASCII.GetString(vChanIncomingBuff, vChanIncomingBuff.Length - 2, 1).ToUpper();
@@ -292,8 +257,7 @@ namespace SoftSled
                 bool response = false;
                 if (disabledCaps.Contains(capChar1 + capChar2))
                     vChanResponseBuff = LoadDevCapsVChan("Disabled");
-                else
-                {
+                else {
                     vChanResponseBuff = LoadDevCapsVChan("Enabled");
                     response = true;
                 }
@@ -308,57 +272,47 @@ namespace SoftSled
 
             rdpClient.SendOnVirtualChannel("devcaps", Encoding.Unicode.GetString(vChanResponseBuff));
             m_logger.LogDebug("RDP: Sent devcaps citeration " + devCapsIter.ToString());
-           
+
 
             devCapsIter++;
 
 
         }
 
-        private void HandleAvctrlIncoming(string data)
-        {
-            
-           // File.WriteAllBytes("g:\\avctrlIncoming_" + avCtrlIter, Encoding.Unicode.GetBytes(data)); 
+        private void HandleAvctrlIncoming(string data) {
+
+            // File.WriteAllBytes("g:\\avctrlIncoming_" + avCtrlIter, Encoding.Unicode.GetBytes(data)); 
 
             string fileName = vChanRootDir + "avctrl\\av r ";
-            if (avCtrlIter == 4)
-            {
+            if (avCtrlIter == 4) {
                 fileName += "4";
-              //  File.WriteAllText("g:\\4th", data);
-            }
-            else if (avCtrlIter == 5)
-            {
+                //  File.WriteAllText("g:\\4th", data);
+            } else if (avCtrlIter == 5) {
                 fileName += "5";
-            }
-            else if (avCtrlIter == 6)
-            {
+            } else if (avCtrlIter == 6) {
                 fileName += "6";
+            } else if (avCtrlIter == 7) {
+                fileName += "7";
             }
-            else if (avCtrlIter == 7)
-            {
-                fileName += "7"; 
-            }
-            //else if (avCtrlIter == 8) 
-            //  fileName += "8";
-            else
+              //else if (avCtrlIter == 8) 
+              //  fileName += "8";
+              else
                 fileName += "main";
 
 
-            if (avCtrlIter == 8)
-            {
+            if (avCtrlIter == 8) {
                 byte[] rtspBuff = new byte[85];
 
                 string rtspUrl = Encoding.ASCII.GetString(Encoding.Unicode.GetBytes(data), 32, 85);
                 MessageBox.Show(rtspUrl);
 
-               // DoRtspInitial(rtspUrl);
+                // DoRtspInitial(rtspUrl);
             }
 
             byte[] file = File.ReadAllBytes(fileName);
             file[21] = Convert.ToByte(avCtrlIter);
 
-            if (avCtrlIter == 4)
-            {
+            if (avCtrlIter == 4) {
                 // We need to insert the remote host IP into our 4th iteration response.
 
                 byte[] hostIp = Encoding.ASCII.GetBytes(SoftSledConfigManager.ReadConfig().RdpLoginHost);
@@ -373,8 +327,7 @@ namespace SoftSled
             avCtrlIter++;
         }
 
-        private static void DoRtspInitial(string url)
-        {
+        private static void DoRtspInitial(string url) {
             // No resposes so far when making the request beneath. 
             string initial = @"DESCRIBE " + url + @" RTSP/1.0
 Accept: application/sdp
@@ -385,14 +338,13 @@ User-Agent: MCExtender/1.0.0.0
 ";
 
             TcpClient tcp = new TcpClient(SoftSledConfigManager.ReadConfig().RdpLoginHost, 554);
-            
+
             NetworkStream ns = tcp.GetStream();
 
             byte[] initialBuff = Encoding.ASCII.GetBytes(initial);
             ns.Write(initialBuff, 0, initialBuff.Length);
 
-            while (true)
-            {
+            while (true) {
                 byte[] buff = new byte[512];
                 int read = ns.Read(buff, 0, 512);
 
@@ -402,45 +354,37 @@ User-Agent: MCExtender/1.0.0.0
                 buff = new byte[512];
             }
         }
-        
-        byte[] LoadDevCapsVChan(string fileName)
-        {
+
+        byte[] LoadDevCapsVChan(string fileName) {
             string path = vChanRootDir + "devcaps\\" + fileName;
             return File.ReadAllBytes(path);
         }
         #endregion
 
         #region Misc Form Events
-        private void lnkGiveFocus_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
-        {
+        private void lnkGiveFocus_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
             rdpClient.Focus();
         }
-        private void linkLabel2_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
-        {
+        private void linkLabel2_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
             txtLog.Text = "";
         }
-        private void lnkSendCtrlAltDelete_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
-        {
+        private void lnkSendCtrlAltDelete_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
             // This doesn't seem to be working...
             rdpClient.Focus();
             SendKeys.Send("%^+{END}");
         }
-        private void chkLogDebug_CheckedChanged(object sender, EventArgs e)
-        {
+        private void chkLogDebug_CheckedChanged(object sender, EventArgs e) {
             m_logger.IsLoggingDebug = chkLogDebug.Checked;
         }
-        private void lnkShowCtrlHideInfo_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
-        {
+        private void lnkShowCtrlHideInfo_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
             rdpClient.Visible = true;
             panOverlay.Visible = false;
         }
         #endregion
 
         delegate void dTextWrite(string message);
-        void SetStatus(string message)
-        {
-            Invoke(new dTextWrite(delegate(string ex)
-            {
+        void SetStatus(string message) {
+            Invoke(new dTextWrite(delegate (string ex) {
                 lbGenStatus.Text = ex;
                 if (!lbGenStatus.Visible)
                     lbGenStatus.Visible = true;
@@ -449,8 +393,7 @@ User-Agent: MCExtender/1.0.0.0
 
         }
 
-        private void button1_Click_1(object sender, EventArgs e)
-        {
+        private void button1_Click_1(object sender, EventArgs e) {
             avCtrlIter = 1;
         }
 
