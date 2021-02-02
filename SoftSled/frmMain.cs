@@ -11,9 +11,10 @@ using System.Threading;
 using System.Reflection;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Net;
 
 namespace SoftSled {
-    public partial class frmMain : Form {
+    public partial class FrmMain : Form {
         // Private members
         private Logger m_logger;
         private ExtenderDevice m_device;
@@ -22,16 +23,16 @@ namespace SoftSled {
         private int mcxSessIter = 1;
         private int avCtrlIter = 1;
         private bool isConnecting = false;
-        FileStream writer;
+        readonly FileStream writer;
 
         private string vChanRootDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\VChan\\";
 
-        public frmMain() {
+        public FrmMain() {
             InitializeComponent();
         }
 
         #region Main GUI Commands
-        private void frmMain_Load(object sender, EventArgs e) {
+        private void FrmMain_Load(object sender, EventArgs e) {
             InitialiseLogger();
 
             m_logger.LogInfo("OpenSoftSled (http://github.com/l2n6h5b3/SoftSled2)");
@@ -47,6 +48,17 @@ namespace SoftSled {
 
         }
         private void btnExtenderConnect_Click(object sender, EventArgs e) {
+
+            IPAddress localhost = null;
+            var host = Dns.GetHostEntry(Dns.GetHostName());
+            foreach (var ip in host.AddressList) {
+                if (ip.AddressFamily == AddressFamily.InterNetwork) {
+                    localhost = ip;
+                } else {
+                    throw new Exception("No network adapters with an IPv4 address in the system!");
+                }
+            }
+
             if (m_device != null) {
                 m_device.Stop();
             }
@@ -88,10 +100,10 @@ namespace SoftSled {
             SetStatus("Remote Desktop Connecting...");
             isConnecting = true;
 
-            TcpListener tcp1 = new TcpListener(3776);
-            TcpListener tcp2 = new TcpListener(3777);
-            TcpListener tcp3 = new TcpListener(3778);
-            TcpListener tcp4 = new TcpListener(2177);
+            TcpListener tcp1 = new TcpListener(localhost, 3776);
+            TcpListener tcp2 = new TcpListener(localhost, 3777);
+            TcpListener tcp3 = new TcpListener(localhost, 3778);
+            TcpListener tcp4 = new TcpListener(localhost, 2177);
 
             //new Thread(new ParameterizedThreadStart(Listen)).Start(tcp1);
             //new Thread(new ParameterizedThreadStart(Listen)).Start(tcp2);
@@ -101,7 +113,7 @@ namespace SoftSled {
         }
 
 
-        private void btnExtenderDisconnect_Click(object sender, EventArgs e) {
+        private void BtnExtenderDisconnect_Click(object sender, EventArgs e) {
             if (m_device != null) {
                 m_device.Stop();
                 if (rdpClient.Connected == 1)
@@ -109,7 +121,7 @@ namespace SoftSled {
             }
             m_device = null;
         }
-        private void btnExtenderSetup_Click(object sender, EventArgs e) {
+        private void BtnExtenderSetup_Click(object sender, EventArgs e) {
             if (m_device != null) {
                 MessageBox.Show("Device is already broadcasting!");
                 return;
@@ -396,9 +408,6 @@ User-Agent: MCExtender/1.0.0.0
         private void button1_Click_1(object sender, EventArgs e) {
             avCtrlIter = 1;
         }
-
-
-
 
     }
 }

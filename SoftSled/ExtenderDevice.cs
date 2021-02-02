@@ -30,7 +30,7 @@ namespace SoftSled {
         private byte[] _DeviceConfirmNonce;
         private byte[] _DeviceValidateNonce;
         private int _TrustState = 1;
-        private readonly string _OneTimePassword = "9167";
+        private readonly string _OneTimePassword = "1234";
         private string _OneTimePasswordIter;
         private byte _Iterations;
         private byte _Iter;
@@ -42,20 +42,16 @@ namespace SoftSled {
 
             #region Get Logger ################################################
 
-            if (logger == null)
-                throw new ArgumentNullException("logger");
-
             // Add Logger
-            m_logger = logger;
+            m_logger = logger ?? throw new ArgumentNullException("logger");
 
             #endregion ########################################################
 
 
             #region Create Device ID ##########################################
 
-            //Convert the device certificate to Base64 string
             X509Certificate2 deviceCert = new X509Certificate2(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\Certificates\\SoftSled.cer");
-            String certDeviceId = "b8771bb8-5496-498b-a6c7-f2d67a1b0d96"; // default if cert doesn't contain an alternative name
+            string certDeviceId = "b8771bb8-5496-498b-a6c7-f2d67a1b0d96"; // default if cert doesn't contain an alternative name
             foreach (X509Extension certExtension in deviceCert.Extensions) {
                 if (certExtension.Oid.FriendlyName != null && certExtension.Oid.FriendlyName.Equals("Subject Alternative Name")) {
                     certDeviceId = Encoding.ASCII.GetString(certExtension.RawData).Remove(0, 9);
@@ -69,6 +65,7 @@ namespace SoftSled {
 
             #region Create Certificate String #################################
 
+            // Convert the device certificate to Base64 string
             byte[] deviceCertBytes = deviceCert.RawData;
             byte[] newDeviceCertBytes = new byte[deviceCertBytes.Length + 6];
             newDeviceCertBytes[0] = 0x0;
@@ -79,6 +76,51 @@ namespace SoftSled {
             newDeviceCertBytes[5] = BitConverter.GetBytes(deviceCertBytes.Length)[0];
             deviceCertBytes.CopyTo(newDeviceCertBytes, 6);
             _DeviceCertificateString = Convert.ToBase64String(newDeviceCertBytes);
+
+            #endregion ########################################################
+
+
+            #region Create Embedded Device ####################################
+
+            UPnPDevice device1 = UPnPDevice.CreateEmbeddedDevice(1, certDeviceId);
+            device1.FriendlyName = "SoftSled Media Center Extender";
+            device1.Manufacturer = "SoftSled Project";
+            device1.ManufacturerURL = "http://www.codeplex.com/softsled";
+            device1.ModelName = "SoftSled";
+            device1.ModelDescription = "SoftSled Media Center Extender";
+            device1.ModelNumber = "";
+            device1.HasPresentation = false;
+            device1.DeviceURN = "urn:schemas-microsoft-com:device:MediaCenterExtender:1";
+            device1.AddCustomFieldInDescription("X_compatibleId", "MICROSOFT_MCX_0001", "http://schemas.microsoft.com/windows/pnpx/2005/11");
+            device1.AddCustomFieldInDescription("X_deviceCategory", "MediaDevices", "http://schemas.microsoft.com/windows/pnpx/2005/11");
+            device1.AddCustomFieldInDescription("pakVersion", "dv2.0.0", "http://schemas.microsoft.com/windows/mcx/2007/06");
+            device1.AddCustomFieldInDescription("supportedHostVersions", "pc2.0.0", "http://schemas.microsoft.com/windows/mcx/2007/06");
+            device1.ContentHandler = new ContentHandler(m_logger);
+
+            #region Add MSTA Service ##########################################
+
+            TrustAgreementService TrustAgreementService = new TrustAgreementService(m_logger) {
+                TrustState = 4,
+                A_ARG_TYPE_Iteration = Convert.ToByte(5)
+            };
+            TrustAgreementService.External_Exchange = new TrustAgreementService.Delegate_Exchange(TrustAgreementService_Exchange);
+            TrustAgreementService.External_Commit = new TrustAgreementService.Delegate_Commit(TrustAgreementService_Commit);
+            TrustAgreementService.External_Validate = new TrustAgreementService.Delegate_Validate(TrustAgreementService_Validate);
+            TrustAgreementService.External_Confirm = new TrustAgreementService.Delegate_Confirm(TrustAgreementService_Confirm);
+            device1.AddService(TrustAgreementService);
+
+            #endregion ########################################################
+
+
+            #region Add MSRX Service ##########################################
+
+            RemotedExperienceService RemotedExperienceService = new RemotedExperienceService(m_logger);
+            RemotedExperienceService.External_AcquireNonce = new RemotedExperienceService.Delegate_AcquireNonce(RemotedExperienceService_AcquireNonce);
+            RemotedExperienceService.External_Advertise = new RemotedExperienceService.Delegate_Advertise(RemotedExperienceService_Advertise);
+            RemotedExperienceService.External_Inhibit = new RemotedExperienceService.Delegate_Inhibit(RemotedExperienceService_Inhibit);
+            device1.AddService(RemotedExperienceService);
+
+            #endregion ########################################################
 
             #endregion ########################################################
 
@@ -99,66 +141,14 @@ namespace SoftSled {
             device.AddCustomFieldInDescription("X_deviceCategory", "MediaDevices", "http://schemas.microsoft.com/windows/pnpx/2005/11");
             device.ProductCode = "";
             device.SerialNumber = "";
+            device.ContentHandler = new ContentHandler(m_logger);
+            device.AddService(new NullService());
 
-            #endregion ########################################################
-
-
-            rootContentHandler = new ContentHandler(m_logger);
-            device.ContentHandler = rootContentHandler;
-
-            NullService NullService = new NullService();
-            device.AddService(NullService);
-
-
-            #region Create Embedded Device ####################################
-
-            UPnPDevice device1 = UPnPDevice.CreateEmbeddedDevice(1, certDeviceId);
-            device1.FriendlyName = "SoftSled Media Center Extender";
-            device1.Manufacturer = "SoftSled Project";
-            device1.ManufacturerURL = "http://www.codeplex.com/softsled";
-            device1.ModelName = "SoftSled";
-            device1.ModelDescription = "SoftSled Media Center Extender";
-            device1.ModelNumber = "";
-            device1.HasPresentation = false;
-            device1.DeviceURN = "urn:schemas-microsoft-com:device:MediaCenterExtender:1";
-            device1.AddCustomFieldInDescription("X_compatibleId", "MICROSOFT_MCX_0001", "http://schemas.microsoft.com/windows/pnpx/2005/11");
-            device1.AddCustomFieldInDescription("X_deviceCategory", "MediaDevices", "http://schemas.microsoft.com/windows/pnpx/2005/11");
-            device1.AddCustomFieldInDescription("pakVersion", "dv2.0.0", "http://schemas.microsoft.com/windows/mcx/2007/06");
-            device1.AddCustomFieldInDescription("supportedHostVersions", "pc2.0.0", "http://schemas.microsoft.com/windows/mcx/2007/06");
-
-            #endregion ########################################################
-
-
-            mcxContentHandler = new ContentHandler(m_logger);
-            device1.ContentHandler = mcxContentHandler;
-
-
-            #region Add MSTA Service ##########################################
-
-            TrustAgreementService TrustAgreementService = new TrustAgreementService(m_logger);
-            TrustAgreementService.TrustState = 4;
-            TrustAgreementService.A_ARG_TYPE_Iteration = Convert.ToByte(5);
-            TrustAgreementService.External_Commit = new TrustAgreementService.Delegate_Commit(TrustAgreementService_Commit);
-            TrustAgreementService.External_Confirm = new TrustAgreementService.Delegate_Confirm(TrustAgreementService_Confirm);
-            TrustAgreementService.External_Exchange = new TrustAgreementService.Delegate_Exchange(TrustAgreementService_Exchange);
-            TrustAgreementService.External_Validate = new TrustAgreementService.Delegate_Validate(TrustAgreementService_Validate);
-            device1.AddService(TrustAgreementService);
-
-            #endregion ########################################################
-
-
-            #region Add MSRX Service ##########################################
-
-            RemotedExperienceService RemotedExperienceService = new RemotedExperienceService(m_logger);
-            RemotedExperienceService.External_AcquireNonce = new RemotedExperienceService.Delegate_AcquireNonce(RemotedExperienceService_AcquireNonce);
-            RemotedExperienceService.External_Advertise = new RemotedExperienceService.Delegate_Advertise(RemotedExperienceService_Advertise);
-            RemotedExperienceService.External_Inhibit = new RemotedExperienceService.Delegate_Inhibit(RemotedExperienceService_Inhibit);
-            device1.AddService(RemotedExperienceService);
-
-            #endregion ########################################################
-
-
+            // Add Embedded Device to Root Device
             device.AddDevice(device1);
+
+            #endregion ########################################################
+
 
             //Get the device id to use in the communication...
             _DeviceID = "uuid:" + device1.UniqueDeviceName;
@@ -171,13 +161,14 @@ namespace SoftSled {
 
             m_logger.LogInfo("Started Device Broadcasting");
         }
+
         public void Stop() {
             device.StopDevice();
 
             m_logger.LogInfo("Stopped Device Broadcasting");
         }
 
-        #region SOAP RXAD Procedures
+        #region SOAP RXAD Procedures ##########################################
 
         private byte[] _RES_DeviceNonce = null;
         private byte[] _RES_HostNonce = null;
@@ -188,6 +179,7 @@ namespace SoftSled {
         private string _RES_SignatureAlgorithm = null;
         private string _RES_Signature = null;
         private string _RES_HostCertificate = null;
+
         public void RemotedExperienceService_AcquireNonce(System.String HostId, out System.UInt32 Nonce, out System.String SupportedSignatureAlgorithms, out bool AttachCertificate) {
             _RES_DeviceNonce = GenerateNonce();
             Nonce = BitConverter.ToUInt32(_RES_DeviceNonce, 0);
@@ -220,7 +212,7 @@ namespace SoftSled {
             rsa.FromXmlString(File.ReadAllText(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\Certificates\\SoftSledPrivateKey.xml"));
 
             byte[] cryptedPass = Convert.FromBase64String(endpointData["encryptedpassword"]);
-            String rdpPass = "";
+            string rdpPass;
             try {
                 rdpPass = Encoding.ASCII.GetString(rsa.Decrypt(cryptedPass, true));
             } catch (Exception ex) {
@@ -249,17 +241,23 @@ namespace SoftSled {
         public void RemotedExperienceService_Inhibit(System.UInt32 Nonce, System.String HostId, System.String ApplicationId, System.String ApplicationVersion, System.String ApplicationData, System.UInt32 ReasonCode, System.String ReasonMessage, System.String SignatureAlgorithm, System.String Signature, System.String HostCertificate) {
             m_logger.LogInfo("RemotedExperienceService_Inhibit(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + ReasonCode.ToString() + ReasonMessage.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
         }
-        #endregion
 
-        #region SOAP MSTA Procedures
-        public void TrustAgreementService_Exchange(System.String HostID, System.String HostCertificate, System.Byte IterationsRequired, System.String HostConfirmAuthenticator, out System.String DeviceID, out System.String DeviceCertificate, out System.String DeviceConfirmAuthenticator) {
+        #endregion ############################################################
+
+
+        #region SOAP MSTA Procedures ##########################################
+
+        public void TrustAgreementService_Exchange(string HostID, string HostCertificate, byte IterationsRequired, string HostConfirmAuthenticator, out string DeviceID, out string DeviceCertificate, out string DeviceConfirmAuthenticator) {
             // 1. Check
             //   A. The <HostID>, <HostCertificate>, <IterationsRequired>, and <HostConfirmAuthenticator> elements MUST be syntactically validated.
             //   B. The <HostCertificate> (_HostCertificate) MAY be validated as per any vendor-defined rules.
             //   C. The <IterationsRequired> (N) MAY additionally be checked per vendor-defined rules.
-            if (_TrustState != 1) { /* TODO: send soap error message, invald */ }
+            if (_TrustState != 1) {
+                /* TODO: send soap error message, invalid */
+                m_logger.LogError("Exchanging - TrustState Invalid");
+            }
 
-            // 2. Save Parmaters
+            // 2. Save Parameters
             //   _HostID, _HostCertificate, and _HostConfirmAuthenticator
             _HostID = HostID;
             _HostCertificate = Utility.ConvertBase64StringToCert(HostCertificate); // Just because
@@ -290,13 +288,13 @@ namespace SoftSled {
 
         }
 
-        public void TrustAgreementService_Commit(System.String HostID, System.Byte Iteration, System.String HostValidateAuthenticator, out System.String DeviceValidateAuthenticator) {
+        public void TrustAgreementService_Commit(string HostID, byte Iteration, string HostValidateAuthenticator, out string DeviceValidateAuthenticator) {
             // 1. Check
             //    A. The <HostID>, <Iteration>, and <HostValidateAuthenticator> (_HostValidateAuthenticatorIter) elements MUST be syntactically validated.
             //    B. The <HostID> MUST match the value of the _HostID obtained in the Exchange action.
             if (_TrustState != 2) {
                 /* TODO: send soap error message, invald */
-                m_logger.LogError("Invalid TrustState");
+                m_logger.LogError("Committing - TrustState Invalid");
             }
             if (HostID != _HostID) {
                 /* TODO: send soap error message, invald */
@@ -324,26 +322,45 @@ namespace SoftSled {
             m_logger.LogInfo("TrustAgreementService_Commit(HostID : \"" + HostID.ToString() + "\",Iteration : \"" + Iteration.ToString() + "\",HostValidateAuthenticator : " + HostValidateAuthenticator.ToString() + ")");
         }
 
-        public void TrustAgreementService_Validate(System.String HostID, System.Byte Iteration, System.String HostValidateNonce, out System.String DeviceValidateNonce) {
+        public void TrustAgreementService_Validate(string HostID, byte Iteration, string HostValidateNonce, out string DeviceValidateNonce) {
             // 1. Check
             //    A. The <HostID>, <Iteration>, and <HostValidateNonce> (_HostValidateNonceIter) elements MUST be syntactically validated.
             //    B. The <HostID> MUST match the value of the _HostID obtained in the Exchange action.
             //    C. The <Iteration> number MUST be equal to the device's current iteration number, Iter.
             //    D. The value of HMAC(_HostValidateNonceIter, UTF-8(Iter + OTPIter + _HostID + _HostCertificate) ) calculated as specified in section 3.1.1, MUST match the _HostValidateAuthenticatorIter obtained in the Commit action.
-            if (_TrustState != 3) { /* TODO: send soap error message, invald */ }
-            if (HostID != _HostID) { /* TODO: send soap error message, invald */ }
-            if (Iteration != _Iter) { /* TODO: send soap error message, invalid */ }
-            if (_HostValidateAuthenticator != GenerateHostMsgAuthCode(Convert.FromBase64String(HostValidateNonce), _Iter, GetOTPIter())) {
+            if (_TrustState != 3) {
+                /* TODO: send soap error message, invald */
+                m_logger.LogError("Validating - TrustState Invalid");
+            }
+            if (HostID != _HostID) {
+                /* TODO: send soap error message, invald */
+                m_logger.LogError("Validating - HostID Invalid");
+            }
+            if (Iteration != _Iter) {
                 /* TODO: send soap error message, invalid */
-                m_logger.LogInfo("Failed to validate host trust agreement, '" + _HostValidateAuthenticator + "' does not match '" + GenerateHostMsgAuthCode(Convert.FromBase64String(HostValidateNonce), _Iter, GetOTPIter()) + "'");
+                m_logger.LogError("Validating - Iteration Invalid");
+            }
+
+            string generatedHostValidateAuthenticator = GenerateHostMsgAuthCode(Convert.FromBase64String(HostValidateNonce), _Iter, GetOTPIter());
+
+            if (_HostValidateAuthenticator != generatedHostValidateAuthenticator) {
+                /* TODO: send soap error message, invalid */
+                m_logger.LogInfo("Failed to validate host trust agreement, '" + _HostValidateAuthenticator + "' does not match '" + generatedHostValidateAuthenticator + "'");
                 // Note, if we can't validate this how is host going to validate device?
+
+            }
+
+            // 3. Set TrustState from 3 (Validating) to 4 (Confirming), if this is the last iteration, or to 2 (Committing) if this is not the last iteration.
+            if (_Iter == _Iterations) {
+                m_logger.LogInfo("Last Iteration");
+                /* Last iteration */
+                _TrustState = 4;
+            } else {
+                _TrustState = 2;
             }
 
             // 2. Increment Iteration
             _Iter = Convert.ToByte(Convert.ToInt32(_Iter) + 1);
-
-            // 3. Set TrustState from 3 (Validating) to 4 (Confirming), if this is the last iteration, or to 2 (Committing) if this is not the last iteration.
-            if (_Iter == _Iterations) { /* Last iteration */ _TrustState = 4; } else { _TrustState = 2; }
 
             // 4. Send values back to host
             //    DeviceValidateNonce - a Base64 encoded string of _DeviceValidateNonceIter, which is the 20-octet random number acquired in TrustAS_Commit.
@@ -352,7 +369,7 @@ namespace SoftSled {
             m_logger.LogInfo("TrustAgreementService_Validate(HostID : \"" + HostID.ToString() + "\",Iteration : \"" + Iteration.ToString() + "\",HostValidateNonce : \"" + HostValidateNonce.ToString() + "\",\"DeviceValidateNonce : \"" + DeviceValidateNonce + "\")");
         }
 
-        public void TrustAgreementService_Confirm(System.String HostID, System.Byte IterationsRequired, System.String HostConfirmNonce, out System.String DeviceConfirmNonce) {
+        public void TrustAgreementService_Confirm(string HostID, byte IterationsRequired, string HostConfirmNonce, out string DeviceConfirmNonce) {
             // 1. Check
             //    A. The <HostID>, <HostConfirmNonce>, and <IterationsRequired> (N) MUST be syntactically validated.
             //    B. The <HostID> MUST match the value of the _HostID obtained in the Exchange action.
@@ -371,7 +388,6 @@ namespace SoftSled {
             m_logger.LogInfo("Extender has successfully exchanged certificates with host!");
         }
 
-
         private byte[] GenerateNonce() {
             //Generate the nonce 20-octet (160 bits)
             byte[] nonce = new byte[20];
@@ -379,24 +395,31 @@ namespace SoftSled {
             randNum.NextBytes(nonce);
             return nonce;
         }
+
         private string GenerateDeviceMsgAuthCode(byte[] key_Nonce, byte N_or_Iter, string OTP_or_OTPIter) {
             //string N = Convert.ToBase64String(new byte[] { N_or_Iter });
-            byte[] text_Utf8Concat = Encoding.UTF8.GetBytes(N_or_Iter.ToString() + OTP_or_OTPIter + _DeviceID + _DeviceCertificateString);
-
-            HMACSHA1 sha1Hashing = new HMACSHA1(key_Nonce, _UseManagedSHA1);
-            byte[] hashedBytes = sha1Hashing.ComputeHash(text_Utf8Concat);
-
-            return Convert.ToBase64String(hashedBytes);
-        }
-        private string GenerateHostMsgAuthCode(byte[] key_Nonce, byte N_or_Iter, string OTP_or_OTPIter) {
-            byte[] text_Utf8Concat = Encoding.UTF8.GetBytes(N_or_Iter.ToString() + OTP_or_OTPIter + _HostID + _HostCertificateString);
+            byte[] text_Utf8Concat = Encoding.UTF8.GetBytes(N_or_Iter + OTP_or_OTPIter + _DeviceID + _DeviceCertificateString);
             string reverseText = Encoding.UTF8.GetString(text_Utf8Concat);
+            System.Diagnostics.Debug.WriteLine(reverseText);
 
             HMACSHA1 sha1Hashing = new HMACSHA1(key_Nonce, _UseManagedSHA1);
             byte[] hashedBytes = sha1Hashing.ComputeHash(text_Utf8Concat);
 
             return Convert.ToBase64String(hashedBytes);
         }
+
+        private string GenerateHostMsgAuthCode(byte[] key_Nonce, byte N_or_Iter, string OTP_or_OTPIter) {
+            //string N = Convert.ToBase64String(new byte[] { N_or_Iter });
+            byte[] text_Utf8Concat = Encoding.UTF8.GetBytes(N_or_Iter + OTP_or_OTPIter + _HostID + _HostCertificateString);
+            string reverseText = Encoding.UTF8.GetString(text_Utf8Concat);
+            System.Diagnostics.Debug.WriteLine(reverseText);
+
+            HMACSHA1 sha1Hashing = new HMACSHA1(key_Nonce, _UseManagedSHA1);
+            byte[] hashedBytes = sha1Hashing.ComputeHash(text_Utf8Concat);
+
+            return Convert.ToBase64String(hashedBytes);
+        }
+
         private string GetOTPIter() {
             int iterationNum = Convert.ToInt32(_Iter);
             //generate the OTP iteration string.  basically a partial of the whole string that is (string / total_iterations) in length and iteration into it.
@@ -406,8 +429,7 @@ namespace SoftSled {
             m_logger.LogInfo("OTP_Iter for Iteration " + iterationNum + " is " + _OneTimePassword.Substring(start, size));
             return _OneTimePassword.Substring(start, size);
         }
-        #endregion
 
+        #endregion #############################################################
     }
 }
-

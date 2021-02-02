@@ -366,7 +366,7 @@
                     remoteEndPoint = (IPEndPoint) this.rEP;
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 bool flag2 = false;
                 lock (this)

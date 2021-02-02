@@ -1,6 +1,6 @@
 namespace SoftSled
 {
-    partial class frmMain
+    partial class FrmMain
     {
         /// <summary>
         /// Required designer variable.
@@ -28,7 +28,7 @@ namespace SoftSled
         /// </summary>
         private void InitializeComponent()
         {
-            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(frmMain));
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(FrmMain));
             this.rdpClient = new AxMSTSCLib.AxMsRdpClient7();
             this.txtLog = new System.Windows.Forms.TextBox();
             this.button2 = new System.Windows.Forms.Button();
@@ -118,7 +118,7 @@ namespace SoftSled
             this.btnExtenderDisconnect.TabIndex = 11;
             this.btnExtenderDisconnect.Text = "Extender Disconnect";
             this.btnExtenderDisconnect.UseVisualStyleBackColor = true;
-            this.btnExtenderDisconnect.Click += new System.EventHandler(this.btnExtenderDisconnect_Click);
+            this.btnExtenderDisconnect.Click += new System.EventHandler(this.BtnExtenderDisconnect_Click);
             // 
             // btnExtenderSetup
             // 
@@ -128,7 +128,7 @@ namespace SoftSled
             this.btnExtenderSetup.TabIndex = 12;
             this.btnExtenderSetup.Text = "Extender Setup";
             this.btnExtenderSetup.UseVisualStyleBackColor = true;
-            this.btnExtenderSetup.Click += new System.EventHandler(this.btnExtenderSetup_Click);
+            this.btnExtenderSetup.Click += new System.EventHandler(this.BtnExtenderSetup_Click);
             // 
             // lnkSendCtrlAltDelete
             // 
@@ -247,7 +247,7 @@ namespace SoftSled
             this.Controls.Add(this.rdpClient);
             this.Name = "frmMain";
             this.Text = "SoftSled Dev Shell";
-            this.Load += new System.EventHandler(this.frmMain_Load);
+            this.Load += new System.EventHandler(this.FrmMain_Load);
             ((System.ComponentModel.ISupportInitialize)(this.rdpClient)).EndInit();
             this.panOverlay.ResumeLayout(false);
             this.panOverlay.PerformLayout();
