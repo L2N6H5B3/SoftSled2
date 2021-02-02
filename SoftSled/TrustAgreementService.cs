@@ -95,7 +95,7 @@ namespace SoftSled {
         }
         public UPnPModeratedStateVariable.IAccumulator Accumulator_A_ARG_TYPE_EndpointID {
             get {
-                return (((UPnPModeratedStateVariable)_S.GetUPnPService().GetStateVariableObject("A_ARG_TYPE_EndpointID")).Accumulator);
+                return ((UPnPModeratedStateVariable)_S.GetUPnPService().GetStateVariableObject("A_ARG_TYPE_EndpointID")).Accumulator;
             }
             set {
                 ((UPnPModeratedStateVariable)_S.GetUPnPService().GetStateVariableObject("A_ARG_TYPE_EndpointID")).Accumulator = value;
@@ -326,30 +326,28 @@ namespace SoftSled {
             }
 
 
-            public void Exchange(System.String HostID, System.String HostCertificate, System.Byte IterationsRequired, System.String HostConfirmAuthenticator, out System.String DeviceID, out System.String DeviceCertificate, out System.String DeviceConfirmAuthenticator) {
+            public void Exchange(string HostID, string HostCertificate, byte IterationsRequired, string HostConfirmAuthenticator, out string DeviceID, out string DeviceCertificate, out string DeviceConfirmAuthenticator) {
                 if (Outer.External_Exchange != null) {
                     Outer.External_Exchange(HostID, HostCertificate, IterationsRequired, HostConfirmAuthenticator, out DeviceID, out DeviceCertificate, out DeviceConfirmAuthenticator);
                 } else {
                     Sink_Exchange(HostID, HostCertificate, IterationsRequired, HostConfirmAuthenticator, out DeviceID, out DeviceCertificate, out DeviceConfirmAuthenticator);
                 }
             }
-            public void Commit(string HostID, byte Iteration, System.String HostValidateAuthenticator, out System.String DeviceValidateAuthenticator) {
+            public void Commit(string HostID, byte Iteration, string HostValidateAuthenticator, out string DeviceValidateAuthenticator) {
                 if (Outer.External_Commit != null) {
                     Outer.External_Commit(HostID, Iteration, HostValidateAuthenticator, out DeviceValidateAuthenticator);
                 } else {
                     Sink_Commit(HostID, Iteration, HostValidateAuthenticator, out DeviceValidateAuthenticator);
                 }
             }
-            public void Validate(System.String HostID, System.Byte Iteration, System.String HostValidateNonce, out System.String DeviceValidateNonce) {
+            public void Validate(string HostID, byte Iteration, string HostValidateNonce, out string DeviceValidateNonce) {
                 if (Outer.External_Validate != null) {
-                    System.Diagnostics.Debug.WriteLine("Outer Not Null");
                     Outer.External_Validate(HostID, Iteration, HostValidateNonce, out DeviceValidateNonce);
                 } else {
                     Sink_Validate(HostID, Iteration, HostValidateNonce, out DeviceValidateNonce);
                 }
             }
-            public void Confirm(System.String HostID, System.Byte IterationsRequired, System.String HostConfirmNonce, out System.String DeviceConfirmNonce) {
-                System.Diagnostics.Debug.WriteLine("here");
+            public void Confirm(string HostID, byte IterationsRequired, string HostConfirmNonce, out string DeviceConfirmNonce) {
                 if (Outer.External_Confirm != null) {
                     Outer.External_Confirm(HostID, IterationsRequired, HostConfirmNonce, out DeviceConfirmNonce);
                 } else {
@@ -384,7 +382,6 @@ namespace SoftSled {
             OnStateVariableModified_A_ARG_TYPE_EndpointID?.Invoke(this);
         }
         private void OnModifiedSink_TrustState(UPnPStateVariable sender, object NewValue) {
-            System.Diagnostics.Debug.WriteLine($"TrustState Updated: {NewValue}");
             OnStateVariableModified_TrustState?.Invoke(this);
         }
         private void OnModifiedSink_A_ARG_TYPE_Rounds(UPnPStateVariable sender, object NewValue) {
@@ -418,7 +415,7 @@ namespace SoftSled {
         /// <param name="DeviceID">Associated State Variable: A_ARG_TYPE_EndpointID</param>
         /// <param name="DeviceCertificate">Associated State Variable: A_ARG_TYPE_Certificate</param>
         /// <param name="DeviceConfirmAuthenticator">Associated State Variable: A_ARG_TYPE_Authenticator</param>
-        public void Exchange(System.String HostID, System.String HostCertificate, System.Byte IterationsRequired, System.String HostConfirmAuthenticator, out System.String DeviceID, out System.String DeviceCertificate, out System.String DeviceConfirmAuthenticator) {
+        public void Exchange(string HostID, string HostCertificate, byte IterationsRequired, string HostConfirmAuthenticator, out string DeviceID, out string DeviceCertificate, out string DeviceConfirmAuthenticator) {
             System.Diagnostics.Debug.WriteLine("here");
             m_logger.LogInfo("TrustAgreementService_Exchange(\"" + HostID.ToString() + "\",\"" + HostCertificate.ToString() + "\"," + IterationsRequired.ToString() + ",\"" + HostConfirmAuthenticator.ToString() + "\")");
             //ToDo: Add Your implementation here, and remove exception
@@ -434,7 +431,7 @@ namespace SoftSled {
         /// <param name="Iteration">Associated State Variable: A_ARG_TYPE_Iteration</param>
         /// <param name="HostValidateAuthenticator">Associated State Variable: A_ARG_TYPE_Authenticator</param>
         /// <param name="DeviceValidateAuthenticator">Associated State Variable: A_ARG_TYPE_Authenticator</param>
-        public void Commit(System.String HostID, System.Byte Iteration, System.String HostValidateAuthenticator, out System.String DeviceValidateAuthenticator) {
+        public void Commit(string HostID, byte Iteration, string HostValidateAuthenticator, out string DeviceValidateAuthenticator) {
             m_logger.LogInfo("TrustAgreementService_Commit(" + HostID.ToString() + Iteration.ToString() + HostValidateAuthenticator.ToString() + ")");
             //ToDo: Add Your implementation here, and remove exception
             throw (new UPnPCustomException(800, "This method has not been completely implemented..."));
@@ -446,7 +443,7 @@ namespace SoftSled {
         /// <param name="Iteration">Associated State Variable: A_ARG_TYPE_Iteration</param>
         /// <param name="HostValidateNonce">Associated State Variable: A_ARG_TYPE_Nonce</param>
         /// <param name="DeviceValidateNonce">Associated State Variable: A_ARG_TYPE_Nonce</param>
-        public void Validate(System.String HostID, System.Byte Iteration, System.String HostValidateNonce, out System.String DeviceValidateNonce) {
+        public void Validate(string HostID, byte Iteration, string HostValidateNonce, out string DeviceValidateNonce) {
             m_logger.LogInfo("TrustAgreementService_Validate(" + HostID.ToString() + Iteration.ToString() + HostValidateNonce.ToString() + ")");
             //ToDo: Add Your implementation here, and remove exception
             throw (new UPnPCustomException(800, "This method has not been completely implemented..."));
@@ -458,7 +455,7 @@ namespace SoftSled {
         /// <param name="IterationsRequired">Associated State Variable: A_ARG_TYPE_Rounds</param>
         /// <param name="HostConfirmNonce">Associated State Variable: A_ARG_TYPE_Nonce</param>
         /// <param name="DeviceConfirmNonce">Associated State Variable: A_ARG_TYPE_Nonce</param>
-        public void Confirm(System.String HostID, System.Byte IterationsRequired, System.String HostConfirmNonce, out System.String DeviceConfirmNonce) {
+        public void Confirm(string HostID, byte IterationsRequired, string HostConfirmNonce, out string DeviceConfirmNonce) {
             m_logger.LogInfo("TrustAgreementService_Confirm(" + HostID.ToString() + IterationsRequired.ToString() + HostConfirmNonce.ToString() + ")");
             //ToDo: Add Your implementation here, and remove exception
             throw (new UPnPCustomException(800, "This method has not been completely implemented..."));

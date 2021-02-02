@@ -118,6 +118,10 @@
     <None Include="Certificates\softsled.pem">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Include="Certificates\softsledCA.cer" />
+    <None Include="Certificates\softsledCAkey.pem" />
+    <None Include="Certificates\softslednew.cer" />
+    <None Include="Certificates\softslednewkey.pem" />
     <None Include="Documents\CON003_WH06.ppt" />
     <None Include="Documents\CON063_WH06.ppt" />
     <None Include="Firmware\2100image.bin" />
