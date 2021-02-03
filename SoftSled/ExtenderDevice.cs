@@ -5,11 +5,9 @@ using System;
 using System.Collections.Generic;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Cryptography;
-using System.Security.Cryptography.Pkcs;
 using System.IO;
 using System.Reflection;
 using Intel.UPNP;
-using SoftSled;
 using SoftSled.Components;
 using System.Text;
 
@@ -46,9 +44,9 @@ namespace SoftSled {
             #endregion ########################################################
 
 
-            #region Create Device ID ##########################################
+            #region Get Certificate Device ID #################################
 
-            X509Certificate2 deviceCert = new X509Certificate2(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\Certificates\\Xbox360.cer");
+            X509Certificate2 deviceCert = new X509Certificate2(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\Certificates\\Linksys2200.cer");
             string certDeviceId = "b8771bb8-5496-498b-a6c7-f2d67a1b0d96"; // default if cert doesn't contain an alternative name
             foreach (X509Extension certExtension in deviceCert.Extensions) {
                 if (certExtension.Oid.FriendlyName != null && certExtension.Oid.FriendlyName.Equals("Subject Alternative Name")) {
@@ -218,7 +216,7 @@ namespace SoftSled {
             } catch (Exception ex) {
                 m_logger.LogError("RSA decryption of encrypted password failed " + ex.Message);
                 m_logger.LogError("Extender Experience Pairing has failed!");
-                return;
+                rdpPass = "mcxpw123";
             }
 
             string rdpHost = ExperienceEndpointUri.Substring(6, ExperienceEndpointUri.Length - 12);
@@ -284,7 +282,7 @@ namespace SoftSled {
             DeviceCertificate = _DeviceCertificateString;
             DeviceConfirmAuthenticator = GenerateDeviceMsgAuthCode(_DeviceConfirmNonce, _Iterations, _OneTimePassword);
 
-            System.Threading.Thread.Sleep(5000);
+            //System.Threading.Thread.Sleep(5000);
             //m_logger.LogInfo("TrustAgreementService_Exchange(HostID : \"" + HostID.ToString() + "\",HostCertificate : \"" + HostCertificate.ToString() + "\",IterationsRequired : " + IterationsRequired.ToString() + ",HostConfirmAuthenticator : \"" + HostConfirmAuthenticator.ToString() + "\")");
             m_logger.LogInfo("Exchange Complete");
         }
@@ -322,7 +320,7 @@ namespace SoftSled {
             //                                  Base64( HMAC( _DeviceValidateNonceIter, UTF-8( Iter + OTPIter + _DeviceID + _DeviceCertificate ) ).
             DeviceValidateAuthenticator = GenerateDeviceMsgAuthCode(_DeviceValidateNonce, _Iter, GetOTPIter());
 
-            System.Threading.Thread.Sleep(5000);
+            //System.Threading.Thread.Sleep(5000);
             //m_logger.LogInfo("TrustAgreementService_Commit(HostID : \"" + HostID.ToString() + "\",Iteration : \"" + Iteration.ToString() + "\",HostValidateAuthenticator : " + HostValidateAuthenticator.ToString() + ")");
             m_logger.LogInfo("Commit Complete");
         }
@@ -371,7 +369,7 @@ namespace SoftSled {
             //    DeviceValidateNonce - a Base64 encoded string of _DeviceValidateNonceIter, which is the 20-octet random number acquired in TrustAS_Commit.
             DeviceValidateNonce = Convert.ToBase64String(_DeviceValidateNonce);
 
-            System.Threading.Thread.Sleep(5000);
+            //System.Threading.Thread.Sleep(5000);
             //m_logger.LogInfo("TrustAgreementService_Validate(HostID : \"" + HostID.ToString() + "\",Iteration : \"" + Iteration.ToString() + "\",HostValidateNonce : \"" + HostValidateNonce.ToString() + "\",\"DeviceValidateNonce : \"" + DeviceValidateNonce + "\")");
             m_logger.LogInfo("Validate Complete");
         }
@@ -393,8 +391,8 @@ namespace SoftSled {
             //    <DeviceConfirmNonce>, a Base64 encoded string of _DeviceConfirmNonce, which is the 20 octet random number acquired in section TrustAS_Exchange.
             DeviceConfirmNonce = Convert.ToBase64String(_DeviceConfirmNonce);
 
-            m_logger.LogInfo("TrustAgreementService_Confirm(" + HostID.ToString() + IterationsRequired.ToString() + HostConfirmNonce.ToString() + ")");
-            m_logger.LogInfo("Extender has successfully exchanged certificates with host!");
+            //m_logger.LogInfo("TrustAgreementService_Confirm(" + HostID.ToString() + IterationsRequired.ToString() + HostConfirmNonce.ToString() + ")");
+            m_logger.LogInfo("Extender successfully exchanged certificates!");
         }
 
         private byte[] GenerateNonce() {

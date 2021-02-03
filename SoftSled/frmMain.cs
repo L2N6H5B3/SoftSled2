@@ -55,7 +55,7 @@ namespace SoftSled {
                 if (ip.AddressFamily == AddressFamily.InterNetwork) {
                     localhost = ip;
                 } else {
-                    throw new Exception("No network adapters with an IPv4 address in the system!");
+                    //throw new Exception("No network adapters with an IPv4 address in the system!");
                 }
             }
 
@@ -107,7 +107,7 @@ namespace SoftSled {
 
             //new Thread(new ParameterizedThreadStart(Listen)).Start(tcp1);
             //new Thread(new ParameterizedThreadStart(Listen)).Start(tcp2);
-            // new Thread(new ParameterizedThreadStart(Listen)).Start(tcp3);
+            //new Thread(new ParameterizedThreadStart(Listen)).Start(tcp3);
             //new Thread(new ParameterizedThreadStart(Listen)).Start(tcp4);
 
         }
@@ -217,7 +217,7 @@ namespace SoftSled {
             vChanResponse[21] = Convert.ToByte(mcxSessIter);
 
             rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(vChanResponse));
-            //m_logger.LogDebug("RDP: Sent McxSess iteration " + mcxSessIter.ToString());
+            m_logger.LogDebug("RDP: Sent McxSess iteration " + mcxSessIter.ToString());
 
             mcxSessIter++;
 
@@ -373,26 +373,36 @@ User-Agent: MCExtender/1.0.0.0
         }
         #endregion
 
-        #region Misc Form Events
+        #region Misc Form Events ##############################################
+
         private void lnkGiveFocus_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
             rdpClient.Focus();
         }
+
         private void linkLabel2_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
             txtLog.Text = "";
         }
+
         private void lnkSendCtrlAltDelete_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
             // This doesn't seem to be working...
             rdpClient.Focus();
             SendKeys.Send("%^+{END}");
         }
+
         private void chkLogDebug_CheckedChanged(object sender, EventArgs e) {
             m_logger.IsLoggingDebug = chkLogDebug.Checked;
         }
+
         private void lnkShowCtrlHideInfo_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
             rdpClient.Visible = true;
             panOverlay.Visible = false;
         }
-        #endregion
+
+        private void button1_Click_1(object sender, EventArgs e) {
+            avCtrlIter = 1;
+        }
+
+        #endregion ############################################################
 
         delegate void dTextWrite(string message);
         void SetStatus(string message) {
@@ -405,9 +415,7 @@ User-Agent: MCExtender/1.0.0.0
 
         }
 
-        private void button1_Click_1(object sender, EventArgs e) {
-            avCtrlIter = 1;
-        }
+        
 
     }
 }
