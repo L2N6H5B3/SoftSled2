@@ -45,7 +45,7 @@ namespace SoftSled
 
             InitialiseLogger();
 
-            m_logger.LogInfo("OpenSoftSled (http://www.codeplex.com/softsled");
+            System.Diagnostics.Debug.WriteLine("OpenSoftSled (http://www.codeplex.com/softsled");
 
 
             // For now we are passing the instance of the logger. Maybe we should place the logger into a global static class in the future?

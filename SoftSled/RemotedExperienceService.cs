@@ -718,7 +718,7 @@ namespace SoftSled
         /// <param name="AttachCertificate">Associated State Variable: A_ARG_TYPE_Bool</param>
         public void AcquireNonce(System.String HostId, out System.UInt32 Nonce, out System.String SupportedSignatureAlgorithms, out System.Boolean AttachCertificate)
         {
-            m_logger.LogInfo("RemotedExperienceService.AcquireNonce(" + HostId.ToString() + ")");
+            System.Diagnostics.Debug.WriteLine("RemotedExperienceService.AcquireNonce(" + HostId.ToString() + ")");
             //ToDo: Add Your implementation here, and remove exception
             throw (new UPnPCustomException(800, "This method has not been completely implemented..."));
         }
@@ -740,7 +740,7 @@ namespace SoftSled
         /// <param name="HostCertificate">Associated State Variable: A_ARG_TYPE_Certificate</param>
         public void Advertise(System.UInt32 Nonce, System.String HostId, System.String ApplicationId, System.String ApplicationVersion, System.String ApplicationData, System.String HostFriendlyName, System.String ExperienceFriendlyName, System.String ExperienceIconUri, System.String ExperienceEndpointUri, System.String ExperienceEndpointData, System.String SignatureAlgorithm, System.String Signature, System.String HostCertificate)
         {
-            m_logger.LogInfo("RemotedExperienceService_Advertise(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + HostFriendlyName.ToString() + ExperienceFriendlyName.ToString() + ExperienceIconUri.ToString() + ExperienceEndpointUri.ToString() + ExperienceEndpointData.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
+            System.Diagnostics.Debug.WriteLine("RemotedExperienceService_Advertise(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + HostFriendlyName.ToString() + ExperienceFriendlyName.ToString() + ExperienceIconUri.ToString() + ExperienceEndpointUri.ToString() + ExperienceEndpointData.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
             //ToDo: Add Your implementation here, and remove exception
 
 
@@ -768,7 +768,7 @@ namespace SoftSled
         /// <param name="HostCertificate">Associated State Variable: A_ARG_TYPE_Certificate</param>
         public void Inhibit(System.UInt32 Nonce, System.String HostId, System.String ApplicationId, System.String ApplicationVersion, System.String ApplicationData, System.UInt32 ReasonCode, System.String ReasonMessage, System.String SignatureAlgorithm, System.String Signature, System.String HostCertificate)
         {
-            m_logger.LogInfo("RemotedExperienceService_Inhibit(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + ReasonCode.ToString() + ReasonMessage.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
+            System.Diagnostics.Debug.WriteLine("RemotedExperienceService_Inhibit(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + ReasonCode.ToString() + ReasonMessage.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
             //ToDo: Add Your implementation here, and remove exception
             throw (new UPnPCustomException(800, "This method has not been completely implemented..."));
         }

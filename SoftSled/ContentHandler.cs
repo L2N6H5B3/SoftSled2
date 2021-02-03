@@ -23,7 +23,7 @@ namespace SoftSled
         public HTTPMessage HandleContent(string GetWhat, System.Net.IPEndPoint local, HTTPMessage msg, HTTPSession WebSession)
         {
 
-            m_logger.LogInfo("HandleContent GetWhat = '" + GetWhat + "'");
+            System.Diagnostics.Debug.WriteLine("HandleContent GetWhat = '" + GetWhat + "'");
             HTTPMessage message = new HTTPMessage();
             message.StatusCode = 200;
             message.StatusData = "OK";

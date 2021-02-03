@@ -184,7 +184,7 @@ namespace SoftSled {
             SupportedSignatureAlgorithms = "rSASSA-PSS-Default-Identifier";
             AttachCertificate = false;
 
-            m_logger.LogDebug("RemotedExperienceService_AcquireNonce(" + HostId.ToString() + ")");
+            m_logger.LogInfo("RemotedExperienceService_AcquireNonce(" + HostId.ToString() + ")");
         }
 
         public void RemotedExperienceService_Advertise(uint Nonce, string HostId, string ApplicationId, string ApplicationVersion, string ApplicationData, string HostFriendlyName, string ExperienceFriendlyName, string ExperienceIconUri, string ExperienceEndpointUri, string ExperienceEndpointData, string SignatureAlgorithm, string Signature, string HostCertificate) {
@@ -196,7 +196,7 @@ namespace SoftSled {
             _RES_SignatureAlgorithm = SignatureAlgorithm;
             _RES_Signature = Signature;
             _RES_HostCertificate = HostCertificate;
-            m_logger.LogDebug("RemotedExperienceService_Advertise(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + HostFriendlyName.ToString() + ExperienceFriendlyName.ToString() + ExperienceIconUri.ToString() + ExperienceEndpointUri.ToString() + ExperienceEndpointData.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
+            m_logger.LogInfo("RemotedExperienceService_Advertise(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + HostFriendlyName.ToString() + ExperienceFriendlyName.ToString() + ExperienceIconUri.ToString() + ExperienceEndpointUri.ToString() + ExperienceEndpointData.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
 
             // parse endpoint data 
             Dictionary<String, String> endpointData = new Dictionary<string, string>();
@@ -214,17 +214,17 @@ namespace SoftSled {
             try {
                 rdpPass = Encoding.ASCII.GetString(rsa.Decrypt(cryptedPass, true));
             } catch (Exception ex) {
-                m_logger.LogError("RSA decryption of encrypted password failed " + ex.Message);
-                m_logger.LogError("Extender Experience Pairing has failed!");
+                m_logger.LogInfo("RSA decryption of encrypted password failed " + ex.Message);
+                m_logger.LogInfo("Extender Experience Pairing has failed!");
                 rdpPass = "mcxpw123";
             }
 
             string rdpHost = ExperienceEndpointUri.Substring(6, ExperienceEndpointUri.Length - 12);
             string rdpUser = endpointData["user"];
 
-            m_logger.LogDebug("RDP host: " + rdpHost);
-            m_logger.LogDebug("RDP clear text Password: " + rdpPass);
-            m_logger.LogDebug("RDP user: " + rdpUser);
+            m_logger.LogInfo("RDP host: " + rdpHost);
+            m_logger.LogInfo("RDP clear text Password: " + rdpPass);
+            m_logger.LogInfo("RDP user: " + rdpUser);
 
             SoftSledConfig config = SoftSledConfigManager.ReadConfig();
             config.IsPaired = true;
@@ -237,7 +237,7 @@ namespace SoftSled {
         }
 
         public void RemotedExperienceService_Inhibit(uint Nonce, string HostId, string ApplicationId, string ApplicationVersion, string ApplicationData, uint ReasonCode, string ReasonMessage, string SignatureAlgorithm, string Signature, string HostCertificate) {
-            m_logger.LogInfo("RemotedExperienceService_Inhibit(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + ReasonCode.ToString() + ReasonMessage.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
+            m_logger.LogDebug("RemotedExperienceService_Inhibit(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + ReasonCode.ToString() + ReasonMessage.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
         }
 
         #endregion ############################################################
@@ -252,7 +252,7 @@ namespace SoftSled {
             //   C. The <IterationsRequired> (N) MAY additionally be checked per vendor-defined rules.
             if (_TrustState != 1) {
                 /* TODO: send soap error message, invalid */
-                m_logger.LogError("Exchanging - TrustState Invalid");
+                m_logger.LogInfo("Exchanging - TrustState Invalid");
             }
 
             // 2. Save Parameters
@@ -295,15 +295,15 @@ namespace SoftSled {
             //    B. The <HostID> MUST match the value of the _HostID obtained in the Exchange action.
             if (_TrustState != 2) {
                 /* TODO: send soap error message, invald */
-                m_logger.LogError("Committing - TrustState Invalid");
+                m_logger.LogInfo("Committing - TrustState Invalid");
             }
             if (HostID != _HostID) {
                 /* TODO: send soap error message, invald */
-                m_logger.LogError("Invalid HostID");
+                m_logger.LogInfo("Invalid HostID");
             }
             if (Iteration != _Iter) {
                 /* TODO: send soap error message, invalid */
-                m_logger.LogError("Invalid Iteration");
+                m_logger.LogInfo("Invalid Iteration");
             }
 
             // 2. Save the HostValidateAuthenticator for Validation step
@@ -333,15 +333,15 @@ namespace SoftSled {
             //    D. The value of HMAC(_HostValidateNonceIter, UTF-8(Iter + OTPIter + _HostID + _HostCertificate) ) calculated as specified in section 3.1.1, MUST match the _HostValidateAuthenticatorIter obtained in the Commit action.
             if (_TrustState != 3) {
                 /* TODO: send soap error message, invald */
-                m_logger.LogError("Validating - TrustState Invalid");
+                m_logger.LogInfo("Validating - TrustState Invalid");
             }
             if (HostID != _HostID) {
                 /* TODO: send soap error message, invald */
-                m_logger.LogError("Validating - HostID Invalid");
+                m_logger.LogInfo("Validating - HostID Invalid");
             }
             if (Iteration != _Iter) {
                 /* TODO: send soap error message, invalid */
-                m_logger.LogError("Validating - Iteration Invalid");
+                m_logger.LogInfo("Validating - Iteration Invalid");
             }
 
             string generatedHostValidateAuthenticator = GenerateHostMsgAuthCode(Convert.FromBase64String(HostValidateNonce), _Iter, GetOTPIter());
