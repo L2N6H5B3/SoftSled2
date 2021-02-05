@@ -26,6 +26,8 @@ namespace SoftSled {
         private bool isConnecting = false;
         readonly FileStream writer;
         private static RtspListener rtsp_client;
+        private bool rdpInitialised = false;
+        private TcpClient rtspClient;
 
         private string vChanRootDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\VChan\\";
 
@@ -49,6 +51,8 @@ namespace SoftSled {
             }
 
         }
+
+
         private void btnExtenderConnect_Click(object sender, EventArgs e) {
 
             IPAddress localhost = null;
@@ -78,25 +82,18 @@ namespace SoftSled {
             m_device.Start();
 
             m_channelHandler = new McxVirtualChannelHandler();
-            rdpClient.OnConnected += new EventHandler(rdpClient_OnConnected);
-            rdpClient.OnDisconnected += new AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEventHandler(rdpClient_OnDisconnected);
-            rdpClient.OnChannelReceivedData += new AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEventHandler(rdpClient_OnChannelReceivedData);
 
-            rdpClient.AdvancedSettings3.RDPPort = 3390;
-            rdpClient.SecuredSettings.StartProgram = "%windir%\\ehome\\ehshell.exe";
+            // If RDP not Initialised
+            if (!rdpInitialised) {
+                // Initialise RDP
+                InitialiseRdpClient();
+            }
+
             rdpClient.Server = currConfig.RdpLoginHost;
             rdpClient.UserName = currConfig.RdpLoginUserName;
             rdpClient.AdvancedSettings2.ClearTextPassword = currConfig.RdpLoginPassword;
 
-            // McxSess - used by mcrmgr
-            // MCECaps - not known where used
-            // devcaps - used by ehshell to determine extender capabilities
-            // avctrl - used for av signalling
-            // VCHD - something to do with av signalling
-
-            // NOTICE, if you want ehshell.exe to start up in normal Remote Desktop mode, remove the devcaps channel definition bellow. 
-            //rdpClient.CreateVirtualChannels("McxSess,MCECaps,avctrl,VCHD");
-            rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD");
+            // Connect RDP
             rdpClient.Connect();
 
             SetStatus("Remote Desktop Connecting...");
@@ -123,6 +120,7 @@ namespace SoftSled {
             }
             m_device = null;
         }
+
         private void BtnExtenderSetup_Click(object sender, EventArgs e) {
             if (m_device != null) {
                 MessageBox.Show("Device is already broadcasting!");
@@ -140,10 +138,42 @@ namespace SoftSled {
             m_logger = new TextBoxLogger(txtLog, this);
             m_logger.IsLoggingDebug = true;
         }
+
         #endregion
 
-        #region RDPClient ActiveX Events
-        void rdpClient_OnChannelReceivedData(object sender, AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
+
+
+        #region RDPClient ActiveX Events ######################################
+
+        private void InitialiseRdpClient() {
+
+            // Add EventHandlers
+            rdpClient.OnConnected += new EventHandler(RdpClient_OnConnected);
+            rdpClient.OnDisconnected += new AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEventHandler(RdpClient_OnDisconnected);
+            rdpClient.OnChannelReceivedData += new AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEventHandler(RdpClient_OnChannelReceivedData);
+
+            // Set Port
+            rdpClient.AdvancedSettings3.RDPPort = 3390;
+            // Set Start Program
+            rdpClient.SecuredSettings.StartProgram = "%windir%\\ehome\\ehshell.exe";
+
+            // McxSess - used by mcrmgr
+            // MCECaps - not known where used
+            // devcaps - used by ehshell to determine extender capabilities
+            // avctrl - used for av signalling
+            // VCHD - something to do with av signalling
+
+            // NOTICE, if you want ehshell.exe to start up in normal Remote Desktop mode, remove the devcaps channel definition bellow. 
+            //rdpClient.CreateVirtualChannels("McxSess,MCECaps,avctrl,VCHD");
+
+            // Create Virtual Channels
+            rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD");
+
+            // Set RDP Initialised
+            rdpInitialised = true;
+        }
+
+        void RdpClient_OnChannelReceivedData(object sender, AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
             try {
                 if (chkInVchanDebug.Checked && e.chanName != "McxSess")
                     m_logger.LogInfo("RDP: Received data on channel " + e.chanName);
@@ -176,13 +206,15 @@ namespace SoftSled {
             }
 
         }
-        void rdpClient_OnDisconnected(object sender, AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEvent e) {
+        void RdpClient_OnDisconnected(object sender, AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEvent e) {
             m_logger.LogInfo("RDP: Disconnected");
-            if (isConnecting == true)
+            if (isConnecting == true) {
                 SetStatus("Forcibly disconnected from Remote Desktop Host");
+                isConnecting = false;
+            }
 
         }
-        void rdpClient_OnConnected(object sender, EventArgs e) {
+        void RdpClient_OnConnected(object sender, EventArgs e) {
             m_logger.LogInfo("RDP: Connected");
             SetStatus("Remote Desktop Connected! Waiting for Media Center...");
         }
@@ -222,9 +254,8 @@ namespace SoftSled {
             //m_logger.LogInfo("RDP: Sent McxSess iteration " + mcxSessIter.ToString());
 
             mcxSessIter++;
-
-
         }
+
         private void HandleDevCapsIncoming(AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
             byte[] vChanResponseBuff = null;
 
@@ -299,10 +330,9 @@ namespace SoftSled {
 
             byte[] incomingBuff = Encoding.Unicode.GetBytes(data);
             string incomingString = Encoding.ASCII.GetString(incomingBuff);
-            File.WriteAllText("C:\\Users\\Luke\\source\\repos\\SoftSled2\\avctrlIncoming_" + avCtrlIter, incomingString); 
+            File.WriteAllText("C:\\Users\\Luke\\source\\repos\\SoftSled2\\avctrlIncoming_" + avCtrlIter, incomingString);
 
             string fileName = vChanRootDir + "avctrl\\av r ";
-            System.Diagnostics.Debug.WriteLine($"Before: {fileName}");
             
             if (avCtrlIter == 4) {
                 fileName += "4";
@@ -319,17 +349,15 @@ namespace SoftSled {
               else
                 fileName += "main";
 
-            System.Diagnostics.Debug.WriteLine($"After: {fileName}");
-
             if (avCtrlIter == 8) {
                 byte[] rtspBuff = new byte[85];
 
-                string rtspUrl = Encoding.ASCII.GetString(Encoding.Unicode.GetBytes(data), 32, 85);
-                //MessageBox.Show(rtspUrl);
+                // Get the RTSP URL
+                string rtspUrl = Encoding.ASCII.GetString(Encoding.Unicode.GetBytes(data), 32, 97);
 
                 System.Diagnostics.Debug.WriteLine(rtspUrl);
 
-                DoRtspInitial(rtspUrl);
+                RtspInitial(rtspUrl);
             }
 
             byte[] file = File.ReadAllBytes(fileName);
@@ -342,7 +370,6 @@ namespace SoftSled {
                 //Array.Copy(hostIp, 0, file, 36, hostIp.Length);
 
                 string beforeOutString = Encoding.ASCII.GetString(file);
-                File.WriteAllText("C:\\Users\\Luke\\source\\repos\\SoftSled2\\avctrl4-before", beforeOutString);
 
                 int count = 0;
                 for (int i = 36; i < file.Length; i++) {
@@ -351,7 +378,6 @@ namespace SoftSled {
                 }
 
                 string outString = Encoding.ASCII.GetString(file);
-                File.WriteAllText("C:\\Users\\Luke\\source\\repos\\SoftSled2\\avctrl4-after", outString);
             }
 
 
@@ -361,9 +387,9 @@ namespace SoftSled {
             avCtrlIter++;
         }
 
-        private static void DoRtspInitialNew(string url) {
+        private static void DoRtspInitialOld(string url) {
             // Connect to a RTSP Server
-            var tcp_socket = new Rtsp.RtspTcpTransport(SoftSledConfigManager.ReadConfig().RdpLoginHost, 554);
+            var tcp_socket = new Rtsp.RtspTcpTransport(SoftSledConfigManager.ReadConfig().RdpLoginHost, 8554);
 
             if (tcp_socket.Connected == false) {
                 System.Diagnostics.Debug.WriteLine("Error - did not connect");
@@ -475,16 +501,54 @@ namespace SoftSled {
         }
 
 
+        private void RtspInitialtest(string url) {
 
-        private static void DoRtspInitial(string url) {
+            string baseUrl = url.Split('?')[0];
+
+            // Line Breaks
+            string CRLF = "\r\n";
+            string LF = "\\n";
+
+            // Describe Headers
+            string describeAddressHeader       = $"DESCRIBE {url} RTSP/1.0{CRLF}";
+            string describeAcceptHeader         = $"Accept: application/sdp{CRLF}";
+            string describeCseqHeader           = $"CSeq: 1{CRLF}";
+
+            // Setup Headers
+            string setupAddressHeader = $"DESCRIBE {baseUrl}/audio RTSP/1.0{CRLF}";
+            string setupBufferInfoHeader = $"Accept: application/sdp{CRLF}";
+            string setupCseqHeader = $"CSeq: 2{CRLF}";
+
+            // Generic Headers
+            string acceptLangHeader = $"Accept-Language: en-us, *;q=0.1{CRLF}";
+            string supportedHeader = $"Supported: dlna.announce, dlna.rtx-dup{CRLF}";
+            string userAgentHeader = $"User-Agent: MCExtender/1.0.0.0{CRLF}";
+            string dlnaHeader           = $"DLNA-ProtocolInfo: rtsp-rtp-udp:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL;DLNA.ORG_PN=WMAPRO;MICROSOFT.COM_PN=WMALSL{LF}rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3{LF}rtsp-rtp-udp:*:audio/vnd.dolby.dd-rtp:DLNA.ORG_PN=AC3{LF}rtsp-rtp-udp:*:audio/L16:DLNA.ORG_PN=LPCM{LF}http-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM{LF}rtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;DLNA.ORG_PN=MPEG_ES_PAL;DLNA.ORG_PN=MPEG_ES_NTSC;DLNA.ORG_PN=MPEG_ES_PAL_XAC3;DLNA.ORG_PN=MPEG_ES_NTSC_XAC3{LF}rtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=WMVHIGH_LSL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED;MICROSOFT.COM_PN=VC1_APL3_FULL;MICROSOFT.COM_PN=VC1_APL3_PRO{LF}rtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3{LF}rtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=AVC_MP4_MP_HD_MPEG1_L3;MICROSOFT.COM_PN=AVC_MP4_MP_HD_AC3{LF}http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL{CRLF}";
+            
+            // Create Request String
+            string request = describeAddressHeader + describeAcceptHeader + describeCseqHeader + acceptLangHeader + supportedHeader + userAgentHeader;
+
+            Console.WriteLine("Sending to server: {0}", request);
+
+            rtspClient = new TcpClient(SoftSledConfigManager.ReadConfig().RdpLoginHost, 8554);
+            NetworkStream stream = rtspClient.GetStream();
+            StreamReader reader = new StreamReader(stream);
+            StreamWriter writer = new StreamWriter(stream);
+            writer.AutoFlush = true;
+            writer.WriteLine(request);
+
+            string response = reader.ReadLine();
+
+            Console.WriteLine("Received from server: {0}", response);
+
+        }
+
+        private static void DoRtspInitialbroken(string url) {
+            string CRLF = "\r\n";
+            string LF = "\n";
+            string DLNA = $"DLNA-ProtocolInfo: rtsp-rtp-udp:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL;DLNA.ORG_PN=WMAPRO;MICROSOFT.COM_PN=WMALSL{LF}rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3{LF}rtsp-rtp-udp:*:audio/vnd.dolby.dd-rtp:DLNA.ORG_PN=AC3{LF}rtsp-rtp-udp:*:audio/L16:DLNA.ORG_PN=LPCM{LF}http-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM{LF}rtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;DLNA.ORG_PN=MPEG_ES_PAL;DLNA.ORG_PN=MPEG_ES_NTSC;DLNA.ORG_PN=MPEG_ES_PAL_XAC3;DLNA.ORG_PN=MPEG_ES_NTSC_XAC3{LF}rtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=WMVHIGH_LSL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED;MICROSOFT.COM_PN=VC1_APL3_FULL;MICROSOFT.COM_PN=VC1_APL3_PRO{LF}rtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3{LF}rtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=AVC_MP4_MP_HD_MPEG1_L3;MICROSOFT.COM_PN=AVC_MP4_MP_HD_AC3{LF}http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL";
             // No resposes so far when making the request beneath. 
-            string initial = @"DESCRIBE " + url + @" RTSP/1.0
-Accept: application/sdp
-CSeq: 1
-Accept-Language: en-us, *;q=0.1
-Supported: dlna.announce, dlna.rtx-dup
-User-Agent: MCExtender/1.0.0.0
-";
+            string initial = $"DESCRIBE {url} RTSP/1.0{CRLF}Accept: application/sdp{CRLF}CSeq: 1{CRLF}Accept-Language: en-us, *;q=0.1{CRLF}Supported: dlna.announce, dlna.rtx-dup{CRLF}User-Agent: MCExtender/1.0.0.0{CRLF}";
 
             //            string initial = @"DESCRIBE " + url + @" RTSP/1.0
             //Accept: application/sdp
@@ -492,24 +556,24 @@ User-Agent: MCExtender/1.0.0.0
             //Accept-Language: en-us, *;q=0.1
             //Supported: dlna.announce, dlna.rtx-dup
             //User-Agent: MCExtender/1.50.X.090522.00
-            //DLNA-ProtocolInfo: rtsp-rtp-udp:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL;DLNA.ORG_PN=WMAPRO;MICROSOFT.COM_PN=WMALSL
-            //rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3
-            //rtsp-rtp-udp:*:audio/vnd.dolby.dd-rtp:DLNA.ORG_PN=AC3
-            //rtsp-rtp-udp:*:audio/L16:DLNA.ORG_PN=LPCM
-            //http-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM
-            //rtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;DLNA.ORG_PN=MPEG_ES_PAL;DLNA.ORG_PN=MPEG_ES_NTSC;DLNA.ORG_PN=MPEG_ES_PAL_XAC3;DLNA.ORG_PN=MPEG_ES_NTSC_XAC3
-            //rtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=WMVHIGH_LSL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED;MICROSOFT.COM_PN=VC1_APL3_FULL;MICROSOFT.COM_PN=VC1_APL3_PRO
-            //rtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3
-            //rtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=AVC_MP4_MP_HD_MPEG1_L3;MICROSOFT.COM_PN=AVC_MP4_MP_HD_AC3
-            //http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL
-            //";
+            
             System.Diagnostics.Debug.WriteLine(initial);
-            TcpClient tcp = new TcpClient(SoftSledConfigManager.ReadConfig().RdpLoginHost, 554);
+            TcpClient tcp = new TcpClient(SoftSledConfigManager.ReadConfig().RdpLoginHost, 8554);
             NetworkStream ns = tcp.GetStream();
+
             byte[] initialBuff = Encoding.ASCII.GetBytes(initial);
             ns.Write(initialBuff, 0, initialBuff.Length);
+
             System.Diagnostics.Debug.WriteLine("here 1");
+
+            
+            System.Diagnostics.Debug.WriteLine($"Connected: {tcp.Connected}");
+
             while (true) {
+                if (!tcp.Connected) {
+                    System.Diagnostics.Debug.WriteLine("Disconnected");
+                }
+
                 byte[] buff = new byte[512];
                 int read = ns.Read(buff, 0, 512);
                 if (read > 0) {
@@ -520,6 +584,9 @@ User-Agent: MCExtender/1.0.0.0
                 buff = new byte[512];
             }
         }
+
+
+
 
         byte[] LoadDevCapsVChan(string fileName) {
             string path = vChanRootDir + "devcaps\\" + fileName;
