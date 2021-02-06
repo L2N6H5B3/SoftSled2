@@ -177,23 +177,23 @@
             }
             catch (IOException error)
             {
-                System.Diagnostics.Debug.WriteLine("IO Error", error);
+                System.Diagnostics.Debug.WriteLine($"IO Error {error}");
                 _stream.Close();
                 _transport.Close();
             }
             catch (SocketException error)
             {
-                System.Diagnostics.Debug.WriteLine("Socket Error", error);
+                System.Diagnostics.Debug.WriteLine($"Socket Error {error}");
                 _stream.Close();
                 _transport.Close();
             }
             catch (ObjectDisposedException error)
             {
-                System.Diagnostics.Debug.WriteLine("Object Disposed", error);
+                System.Diagnostics.Debug.WriteLine($"Object Disposed {error}");
             }
             catch (Exception error)
             {
-                System.Diagnostics.Debug.WriteLine("Unknow Error", error);
+                System.Diagnostics.Debug.WriteLine($"Unknow Error {error}");
 //                throw;
             }
 

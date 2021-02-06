@@ -13,6 +13,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Net;
 using Rtsp;
+using SoftSled.Components.RTSP;
 
 namespace SoftSled {
     public partial class FrmMain : Form {
@@ -27,6 +28,7 @@ namespace SoftSled {
         readonly FileStream writer;
         private static RtspListener rtsp_client;
         private bool rdpInitialised = false;
+        private string rtspUrl;
         private TcpClient rtspClient;
 
         private string vChanRootDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\VChan\\";
@@ -353,11 +355,14 @@ namespace SoftSled {
                 byte[] rtspBuff = new byte[85];
 
                 // Get the RTSP URL
-                string rtspUrl = Encoding.ASCII.GetString(Encoding.Unicode.GetBytes(data), 32, 97);
+                rtspUrl = Encoding.ASCII.GetString(Encoding.Unicode.GetBytes(data), 32, 97);
 
-                System.Diagnostics.Debug.WriteLine(rtspUrl);
+                RTSPClient client = new RTSPClient();
+                client.Connect(rtspUrl, RTSPClient.RTP_TRANSPORT.UDP);
 
-                RtspInitial(rtspUrl);
+                //System.Diagnostics.Debug.WriteLine(rtspUrl);
+
+                //RtspInitial();
             }
 
             byte[] file = File.ReadAllBytes(fileName);
@@ -387,159 +392,257 @@ namespace SoftSled {
             avCtrlIter++;
         }
 
-        private static void DoRtspInitialOld(string url) {
-            // Connect to a RTSP Server
-            var tcp_socket = new Rtsp.RtspTcpTransport(SoftSledConfigManager.ReadConfig().RdpLoginHost, 8554);
+        //private void RtspInitial() {
+        //    // Connect to a RTSP Server
+        //    var tcp_socket = new Rtsp.RtspTcpTransport(SoftSledConfigManager.ReadConfig().RdpLoginHost, 8554);
 
-            if (tcp_socket.Connected == false) {
-                System.Diagnostics.Debug.WriteLine("Error - did not connect");
-                return;
-            } else {
-                System.Diagnostics.Debug.WriteLine("RTSP Connected");
-            }
+        //    if (tcp_socket.Connected == false) {
+        //        System.Diagnostics.Debug.WriteLine("Error - did not connect");
+        //        return;
+        //    } else {
+        //        System.Diagnostics.Debug.WriteLine("RTSP Connected");
+        //    }
 
-            // Connect a RTSP Listener to the TCP Socket to send messages and listen for replies
-            rtsp_client = new Rtsp.RtspListener(tcp_socket);
+        //    // Connect a RTSP Listener to the TCP Socket to send messages and listen for replies
+        //    rtsp_client = new Rtsp.RtspListener(tcp_socket);
 
-            rtsp_client.MessageReceived += Rtsp_client_MessageReceived;
-            //rtsp_client.DataReceived += Rtsp_client_DataReceived;
+        //    rtsp_client.MessageReceived += Rtsp_client_MessageReceived;
+        //    //rtsp_client.DataReceived += Rtsp_client_DataReceived;
 
-            rtsp_client.Start(); // start reading messages from the server
+        //    rtsp_client.Start(); // start reading messages from the server
 
-            //// send the Describe
-            //Rtsp.Messages.RtspRequest describe_message = new Rtsp.Messages.RtspRequestDescribe();
-            //describe_message.RtspUri = new Uri(url);
-            //describe_message.AddHeader("Accept: application/sdp");
-            //describe_message.AddHeader("CSeq: 1");
-            //describe_message.AddHeader("Accept-Language: en-us, *;q=0.1");
-            //describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-            //describe_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
-            //describe_message.AddHeader("DLNA-ProtocolInfo: rtsp-rtp-udp:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL;DLNA.ORG_PN=WMAPRO;MICROSOFT.COM_PN=WMALSL\nrtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3\nrtsp-rtp-udp:*:audio/vnd.dolby.dd-rtp:DLNA.ORG_PN=AC3\nrtsp-rtp-udp:*:audio/L16:DLNA.ORG_PN=LPCM\nhttp-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM\nrtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;DLNA.ORG_PN=MPEG_ES_PAL;DLNA.ORG_PN=MPEG_ES_NTSC;DLNA.ORG_PN=MPEG_ES_PAL_XAC3;DLNA.ORG_PN=MPEG_ES_NTSC_XAC3\nrtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=WMVHIGH_LSL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED;MICROSOFT.COM_PN=VC1_APL3_FULL;MICROSOFT.COM_PN=VC1_APL3_PRO\nrtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3\nrtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=AVC_MP4_MP_HD_MPEG1_L3;MICROSOFT.COM_PN=AVC_MP4_MP_HD_AC3\nhttp-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL");
-            //rtsp_client.SendMessage(describe_message);
+        //    // send the Describe
+        //    Rtsp.Messages.RtspRequest describe_message = new Rtsp.Messages.RtspRequestDescribe();
+        //    describe_message.RtspUri = new Uri(rtspUrl);
+        //    describe_message.CSeq = 1;
+        //    describe_message.AddHeader("Accept: application/sdp");
+        //    describe_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+        //    describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+        //    describe_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+        //    //describe_message.AddHeader("DLNA-ProtocolInfo: rtsp-rtp-udp:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL;DLNA.ORG_PN=WMAPRO;MICROSOFT.COM_PN=WMALSL\\nrtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3\\nrtsp-rtp-udp:*:audio/vnd.dolby.dd-rtp:DLNA.ORG_PN=AC3\\nrtsp-rtp-udp:*:audio/L16:DLNA.ORG_PN=LPCM\\nhttp-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM\\nrtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;DLNA.ORG_PN=MPEG_ES_PAL;DLNA.ORG_PN=MPEG_ES_NTSC;DLNA.ORG_PN=MPEG_ES_PAL_XAC3;DLNA.ORG_PN=MPEG_ES_NTSC_XAC3\\nrtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=WMVHIGH_LSL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED;MICROSOFT.COM_PN=VC1_APL3_FULL;MICROSOFT.COM_PN=VC1_APL3_PRO\\nrtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3\\nrtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=AVC_MP4_MP_HD_MPEG1_L3;MICROSOFT.COM_PN=AVC_MP4_MP_HD_AC3\\nhttp-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL");
+        //    rtsp_client.SendMessage(describe_message);
+            
+        //}
 
-            // send the Describe
-            Rtsp.Messages.RtspRequest setup_message = new Rtsp.Messages.RtspRequestSetup();
-            setup_message.RtspUri = new Uri("rtsp://10.1.1.100:8554/McxDMS/Mcx1-HTPC/audio");
-            setup_message.AddHeader("CSeq: 2");
-            setup_message.AddHeader("Accept-Language: en-us, *;q=0.1");
-            setup_message.AddHeader("Buffer-Info.dlna.org: dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0");
-            setup_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-            setup_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
-            setup_message.AddHeader("DLNA-ProtocolInfo: rtsp-rtp-udp:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL;DLNA.ORG_PN=WMAPRO;MICROSOFT.COM_PN=WMALSL\nrtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3\nrtsp-rtp-udp:*:audio/vnd.dolby.dd-rtp:DLNA.ORG_PN=AC3\nrtsp-rtp-udp:*:audio/L16:DLNA.ORG_PN=LPCM\nhttp-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM\nrtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;DLNA.ORG_PN=MPEG_ES_PAL;DLNA.ORG_PN=MPEG_ES_NTSC;DLNA.ORG_PN=MPEG_ES_PAL_XAC3;DLNA.ORG_PN=MPEG_ES_NTSC_XAC3\nrtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=WMVHIGH_LSL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED;MICROSOFT.COM_PN=VC1_APL3_FULL;MICROSOFT.COM_PN=VC1_APL3_PRO\nrtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3\nrtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=AVC_MP4_MP_HD_MPEG1_L3;MICROSOFT.COM_PN=AVC_MP4_MP_HD_AC3\nhttp-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL");
-            rtsp_client.SendMessage(setup_message);
-            // The reply will include the SDP data
-        }
+        //private void Rtsp_client_MessageReceived(object sender, Rtsp.RtspChunkEventArgs e) {
+        //    Rtsp.Messages.RtspResponse message = e.Message as Rtsp.Messages.RtspResponse;
 
-        private static void Rtsp_client_MessageReceived(object sender, Rtsp.RtspChunkEventArgs e) {
-            Rtsp.Messages.RtspResponse message = e.Message as Rtsp.Messages.RtspResponse;
+        //    System.Diagnostics.Debug.WriteLine("Received " + message.OriginalRequest.ToString());
 
-            System.Diagnostics.Debug.WriteLine("Received " + message.OriginalRequest.ToString());
+        //    //if (message.OriginalRequest != null && message.OriginalRequest is Rtsp.Messages.RtspRequestOptions) {
+        //    //    // send the DESCRIBE
+        //    //    Rtsp.Messages.RtspRequest describe_message = new Rtsp.Messages.RtspRequestDescribe();
+        //    //    describe_message.RtspUri = new Uri(url);
+        //    //    rtsp_client.SendMessage(describe_message);
+        //    //}
 
-            //if (message.OriginalRequest != null && message.OriginalRequest is Rtsp.Messages.RtspRequestOptions) {
-            //    // send the DESCRIBE
-            //    Rtsp.Messages.RtspRequest describe_message = new Rtsp.Messages.RtspRequestDescribe();
-            //    describe_message.RtspUri = new Uri(url);
-            //    rtsp_client.SendMessage(describe_message);
-            //}
+        //    if (message.OriginalRequest != null && message.OriginalRequest is Rtsp.Messages.RtspRequestDescribe) {
+        //        // Got a reply for DESCRIBE
+        //        // Examine the SDP
+        //        Console.Write(System.Text.Encoding.UTF8.GetString(message.Data));
 
-            //if (message.OriginalRequest != null && message.OriginalRequest is Rtsp.Messages.RtspRequestDescribe) {
-            //    // Got a reply for DESCRIBE
-            //    // Examine the SDP
-            //    Console.Write(System.Text.Encoding.UTF8.GetString(message.Data));
+        //        Rtsp.Sdp.SdpFile sdp_data;
+        //        using (StreamReader sdp_stream = new StreamReader(new MemoryStream(message.Data))) {
+        //            sdp_data = Rtsp.Sdp.SdpFile.Read(sdp_stream);
+        //        }
 
-            //    Rtsp.Sdp.SdpFile sdp_data;
-            //    using (StreamReader sdp_stream = new StreamReader(new MemoryStream(message.Data))) {
-            //        sdp_data = Rtsp.Sdp.SdpFile.Read(sdp_stream);
-            //    }
+        //        // send the Setup
+        //        Rtsp.Messages.RtspRequest setup_message = new Rtsp.Messages.RtspRequestSetup();
+        //        setup_message.RtspUri = new Uri("rtsp://10.1.1.4:8554/McxDMS/Mcx1-WINDOWS7-VM/audio");
+        //        setup_message.CSeq = 2;
+        //        setup_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+        //        setup_message.AddHeader("Buffer-Info.dlna.org: dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0");
+        //        setup_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+        //        setup_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+        //        //setup_message.AddHeader("DLNA-ProtocolInfo: rtsp-rtp-udp:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL;DLNA.ORG_PN=WMAPRO;MICROSOFT.COM_PN=WMALSL\nrtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3\nrtsp-rtp-udp:*:audio/vnd.dolby.dd-rtp:DLNA.ORG_PN=AC3\nrtsp-rtp-udp:*:audio/L16:DLNA.ORG_PN=LPCM\nhttp-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM\nrtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;DLNA.ORG_PN=MPEG_ES_PAL;DLNA.ORG_PN=MPEG_ES_NTSC;DLNA.ORG_PN=MPEG_ES_PAL_XAC3;DLNA.ORG_PN=MPEG_ES_NTSC_XAC3\nrtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=WMVHIGH_LSL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED;MICROSOFT.COM_PN=VC1_APL3_FULL;MICROSOFT.COM_PN=VC1_APL3_PRO\nrtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3\nrtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=AVC_MP4_MP_HD_MPEG1_L3;MICROSOFT.COM_PN=AVC_MP4_MP_HD_AC3\nhttp-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL");
+        //        setup_message.AddHeader("Transport: RTP/AVPF/UDP;unicast;client_port=5004-5005;ssrc=74045455;mode=PLAY");
+        //        rtsp_client.SendMessage(setup_message);
+        //        // The reply will include the SDP data
 
-            //    // Process each 'Media' Attribute in the SDP.
-            //    // If the attribute is for Video, then send a SETUP
-            //    for (int x = 0; x < sdp_data.Medias.Count; x++) {
-            //        if (sdp_data.Medias[x].GetMediaType() == Rtsp.Sdp.Media.MediaType.video) {
-            //            // seach the atributes for control, fmtp and rtpmap
-            //            String control = "";  // the "track" or "stream id"
-            //            String fmtp = ""; // holds SPS and PPS
-            //            String rtpmap = ""; // holds the Payload format, 96 is often used with H264
-            //            foreach (Rtsp.Sdp.Attribut attrib in sdp_data.Medias[x].Attributs) {
-            //                if (attrib.Key.Equals("control")) control = attrib.Value;
-            //                if (attrib.Key.Equals("fmtp")) fmtp = attrib.Value;
-            //                if (attrib.Key.Equals("rtpmap")) rtpmap = attrib.Value;
-            //            }
+        //        // Process each 'Media' Attribute in the SDP.
+        //        // If the attribute is for Video, then send a SETUP
+        //        for (int x = 0; x < sdp_data.Medias.Count; x++) {
+        //            if (sdp_data.Medias[x].GetMediaType() == Rtsp.Sdp.Media.MediaType.video) {
+        //                // seach the atributes for control, fmtp and rtpmap
+        //                String control = "";  // the "track" or "stream id"
+        //                String fmtp = ""; // holds SPS and PPS
+        //                String rtpmap = ""; // holds the Payload format, 96 is often used with H264
+        //                foreach (Rtsp.Sdp.Attribut attrib in sdp_data.Medias[x].Attributs) {
+        //                    if (attrib.Key.Equals("control")) control = attrib.Value;
+        //                    if (attrib.Key.Equals("fmtp")) fmtp = attrib.Value;
+        //                    if (attrib.Key.Equals("rtpmap")) rtpmap = attrib.Value;
+        //                }
 
-            //            // Get the Payload format number for the Video Stream
-            //            String[] split_rtpmap = rtpmap.Split(' ');
-            //            video_payload = 0;
-            //            bool result = Int32.TryParse(split_rtpmap[0], out video_payload);
+        //                // Get the Payload format number for the Video Stream
+        //                String[] split_rtpmap = rtpmap.Split(' ');
+        //                video_payload = 0;
+        //                bool result = Int32.TryParse(split_rtpmap[0], out video_payload);
 
-            //            // Send SETUP for the Video Stream
-            //            // using Interleaved mode (RTP frames over the RTSP socket)
-            //            Rtsp.Messages.RtspRequest setup_message = new Rtsp.Messages.RtspRequestSetup();
-            //            setup_message.RtspUri = new Uri(url + "/" + control);
-            //            setup_message.AddHeader("Transport: RTP/AVP/TCP;interleaved=0");
-            //            rtsp_client.SendMessage(setup_message);
-            //        }
-            //    }
-            //}
+        //                // Send SETUP for the Video Stream
+        //                // using Interleaved mode (RTP frames over the RTSP socket)
+        //                Rtsp.Messages.RtspRequest setup_message = new Rtsp.Messages.RtspRequestSetup();
+        //                setup_message.RtspUri = new Uri(url + "/" + control);
+        //                setup_message.AddHeader("Transport: RTP/AVP/TCP;interleaved=0");
+        //                rtsp_client.SendMessage(setup_message);
+        //            }
+        //        }
+        //    }
 
-            //if (message.OriginalRequest != null && message.OriginalRequest is Rtsp.Messages.RtspRequestSetup) {
-            //    // Got Reply to SETUP
-            //    Console.WriteLine("Got reply from Setup. Session is " + message.Session);
+        //    if (message.OriginalRequest != null && message.OriginalRequest is Rtsp.Messages.RtspRequestSetup) {
+        //        // Got Reply to SETUP
+        //        Console.WriteLine("Got reply from Setup. Session is " + message.Session);
 
-            //    String session = message.Session; // Session value used with Play, Pause, Teardown
+        //        string session = message.Session; // Session value used with Play, Pause, Teardown
 
-            //    // Send PLAY
-            //    Rtsp.Messages.RtspRequest play_message = new Rtsp.Messages.RtspRequestPlay();
-            //    play_message.RtspUri = new Uri(url);
-            //    play_message.Session = session;
-            //    rtsp_client.SendMessage(play_message);
-            //}
+        //        // Send PLAY
+        //        Rtsp.Messages.RtspRequest play_message = new Rtsp.Messages.RtspRequestPlay();
+        //        play_message.RtspUri = new Uri(rtspUrl);
+        //        play_message.CSeq = 3;
+        //        play_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+        //        play_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+        //        play_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+        //        play_message.Session = session;
+        //        rtsp_client.SendMessage(play_message);
+        //    }
 
-            //if (message.OriginalRequest != null && message.OriginalRequest is Rtsp.Messages.RtspRequestPlay) {
-            //    // Got Reply to PLAY
-            //    Console.WriteLine("Got reply from Play  " + message.Command);
-            //}
-        }
+        //    if (message.OriginalRequest != null && message.OriginalRequest is Rtsp.Messages.RtspRequestPlay) {
+        //        // Got Reply to PLAY
+        //        Console.WriteLine("Got reply from Play  " + message.Command);
 
 
-        private void RtspInitialtest(string url) {
 
+
+        //    }
+        //}
+
+
+        //List<byte[]> temporary_rtp_payloads = new List<byte[]>();
+
+        //private void Rtsp_client_DataReceived(object sender, Rtsp.RtspChunkEventArgs e) {
+        //    // RTP Packet Header
+        //    // 0 - Version, P, X, CC, M, PT and Sequence Number
+        //    //32 - Timestamp
+        //    //64 - SSRC
+        //    //96 - CSRCs (optional)
+        //    //nn - Extension ID and Length
+        //    //nn - Extension header
+
+        //    int rtp_version = (e.Message.Data[0] >> 6);
+        //    int rtp_padding = (e.Message.Data[0] >> 5) & 0x01;
+        //    int rtp_extension = (e.Message.Data[0] >> 4) & 0x01;
+        //    int rtp_csrc_count = (e.Message.Data[0] >> 0) & 0x0F;
+        //    int rtp_marker = (e.Message.Data[1] >> 7) & 0x01;
+        //    int rtp_payload_type = (e.Message.Data[1] >> 0) & 0x7F;
+        //    uint rtp_sequence_number = ((uint)e.Message.Data[2] << 8) + (uint)(e.Message.Data[3]);
+        //    uint rtp_timestamp = ((uint)e.Message.Data[4] << 24) + (uint)(e.Message.Data[5] << 16) + (uint)(e.Message.Data[6] << 8) + (uint)(e.Message.Data[7]);
+        //    uint rtp_ssrc = ((uint)e.Message.Data[8] << 24) + (uint)(e.Message.Data[9] << 16) + (uint)(e.Message.Data[10] << 8) + (uint)(e.Message.Data[11]);
+
+        //    int rtp_payload_start = 4 // V,P,M,SEQ
+        //                        + 4 // time stamp
+        //                        + 4 // ssrc
+        //                        + (4 * rtp_csrc_count); // zero or more csrcs
+
+        //    uint rtp_extension_id = 0;
+        //    uint rtp_extension_size = 0;
+        //    if (rtp_extension == 1) {
+        //        rtp_extension_id = ((uint)e.Message.Data[rtp_payload_start + 0] << 8) + (uint)(e.Message.Data[rtp_payload_start + 1] << 0);
+        //        rtp_extension_size = ((uint)e.Message.Data[rtp_payload_start + 2] << 8) + (uint)(e.Message.Data[rtp_payload_start + 3] << 0);
+        //        rtp_payload_start += 4 + (int)rtp_extension_size;  // extension header and extension payload
+        //    }
+
+        //    Console.WriteLine("RTP Data"
+        //                       + " V=" + rtp_version
+        //                       + " P=" + rtp_padding
+        //                       + " X=" + rtp_extension
+        //                       + " CC=" + rtp_csrc_count
+        //                       + " M=" + rtp_marker
+        //                       + " PT=" + rtp_payload_type
+        //                       + " Seq=" + rtp_sequence_number
+        //                       + " Time=" + rtp_timestamp
+        //                       + " SSRC=" + rtp_ssrc
+        //                       + " Size=" + e.Message.Data.Length);
+
+
+        //    if (rtp_payload_type != video_payload) {
+        //        Console.WriteLine("Ignoring this RTP payload");
+        //        return; // ignore this data
+        //    }
+
+
+        //    // If rtp_marker is '1' then this is the final transmission for this packet.
+        //    // If rtp_marker is '0' we need to accumulate data with the same timestamp
+
+        //    // ToDo - Check Timestamp matches
+
+        //    // Add to the tempoary_rtp List
+        //    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
+        //    System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
+        //    temporary_rtp_payloads.Add(rtp_payload);
+
+        //    if (rtp_marker == 1) {
+        //        // Process the RTP frame
+        //        Process_RTP_Frame(temporary_rtp_payloads);
+        //        temporary_rtp_payloads.Clear();
+        //    }
+        //}
+
+
+        private void RtspInitialold(string url) {
+
+            //int requestId = 1;
+
+            // Get RTSP Server Base Address
             string baseUrl = url.Split('?')[0];
 
             // Line Breaks
             string CRLF = "\r\n";
             string LF = "\\n";
 
+            // Generic Headers
+            string acceptLangHeader         = $"Accept-Language: en-us, *;q=0.1{CRLF}";
+            string supportedHeader          = $"Supported: dlna.announce, dlna.rtx-dup{CRLF}";
+            string userAgentHeader          = $"User-Agent: MCExtender/1.0.0.0{CRLF}";
+            string dlnaHeader               = $"DLNA-ProtocolInfo: rtsp-rtp-udp:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL;DLNA.ORG_PN=WMAPRO;MICROSOFT.COM_PN=WMALSL{LF}rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3{LF}rtsp-rtp-udp:*:audio/vnd.dolby.dd-rtp:DLNA.ORG_PN=AC3{LF}rtsp-rtp-udp:*:audio/L16:DLNA.ORG_PN=LPCM{LF}http-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM{LF}rtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;DLNA.ORG_PN=MPEG_ES_PAL;DLNA.ORG_PN=MPEG_ES_NTSC;DLNA.ORG_PN=MPEG_ES_PAL_XAC3;DLNA.ORG_PN=MPEG_ES_NTSC_XAC3{LF}rtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=WMVHIGH_LSL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED;MICROSOFT.COM_PN=VC1_APL3_FULL;MICROSOFT.COM_PN=VC1_APL3_PRO{LF}rtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3{LF}rtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=AVC_MP4_MP_HD_MPEG1_L3;MICROSOFT.COM_PN=AVC_MP4_MP_HD_AC3{LF}http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL{CRLF}";
+
             // Describe Headers
-            string describeAddressHeader       = $"DESCRIBE {url} RTSP/1.0{CRLF}";
-            string describeAcceptHeader         = $"Accept: application/sdp{CRLF}";
-            string describeCseqHeader           = $"CSeq: 1{CRLF}";
+            string describeAddressHeader    = $"DESCRIBE {url} RTSP/1.0{CRLF}";
+            string describeAcceptHeader     = $"Accept: application/sdp{CRLF}";
+            string describeCseqHeader       = $"CSeq: 1{CRLF}";
 
             // Setup Headers
-            string setupAddressHeader = $"DESCRIBE {baseUrl}/audio RTSP/1.0{CRLF}";
-            string setupBufferInfoHeader = $"Accept: application/sdp{CRLF}";
-            string setupCseqHeader = $"CSeq: 2{CRLF}";
+            string setupAddressHeader       = $"SETUP {baseUrl}/audio RTSP/1.0{CRLF}";
+            string setupBufferInfoHeader    = $"Buffer-Info.dlna.org: dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0{CRLF}";
+            string setupCseqHeader          = $"CSeq: 2{CRLF}";
+            string setupTransportHeader     = $"Transport: RTP/AVPF/UDP;unicast;client_port=5004-5005;ssrc=74045455;mode=PLAY{CRLF}";
 
-            // Generic Headers
-            string acceptLangHeader = $"Accept-Language: en-us, *;q=0.1{CRLF}";
-            string supportedHeader = $"Supported: dlna.announce, dlna.rtx-dup{CRLF}";
-            string userAgentHeader = $"User-Agent: MCExtender/1.0.0.0{CRLF}";
-            string dlnaHeader           = $"DLNA-ProtocolInfo: rtsp-rtp-udp:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL;DLNA.ORG_PN=WMAPRO;MICROSOFT.COM_PN=WMALSL{LF}rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3{LF}rtsp-rtp-udp:*:audio/vnd.dolby.dd-rtp:DLNA.ORG_PN=AC3{LF}rtsp-rtp-udp:*:audio/L16:DLNA.ORG_PN=LPCM{LF}http-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM{LF}rtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;DLNA.ORG_PN=MPEG_ES_PAL;DLNA.ORG_PN=MPEG_ES_NTSC;DLNA.ORG_PN=MPEG_ES_PAL_XAC3;DLNA.ORG_PN=MPEG_ES_NTSC_XAC3{LF}rtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=WMVHIGH_LSL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED;MICROSOFT.COM_PN=VC1_APL3_FULL;MICROSOFT.COM_PN=VC1_APL3_PRO{LF}rtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3{LF}rtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=AVC_MP4_MP_HD_MPEG1_L3;MICROSOFT.COM_PN=AVC_MP4_MP_HD_AC3{LF}http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL{CRLF}";
             
-            // Create Request String
-            string request = describeAddressHeader + describeAcceptHeader + describeCseqHeader + acceptLangHeader + supportedHeader + userAgentHeader;
+            // Create Request Strings
+            string describeRequest = describeAddressHeader + describeAcceptHeader + describeCseqHeader + acceptLangHeader + supportedHeader + userAgentHeader;
+            
+            string setupRequest = setupAddressHeader + setupCseqHeader + acceptLangHeader + setupBufferInfoHeader + supportedHeader + userAgentHeader + setupTransportHeader;
 
-            Console.WriteLine("Sending to server: {0}", request);
 
             rtspClient = new TcpClient(SoftSledConfigManager.ReadConfig().RdpLoginHost, 8554);
             NetworkStream stream = rtspClient.GetStream();
             StreamReader reader = new StreamReader(stream);
             StreamWriter writer = new StreamWriter(stream);
             writer.AutoFlush = true;
-            writer.WriteLine(request);
 
-            string response = reader.ReadLine();
+            // Send Describe
+            Console.WriteLine("Sending Describe: {0}", describeRequest);
+            writer.WriteLine(describeRequest);
+
+            string response = reader.ReadToEnd();
 
             Console.WriteLine("Received from server: {0}", response);
+
+            //// Send Setup
+            //Console.WriteLine("Sending Setup: {0}", setupRequest);
+            //writer.WriteLine(setupRequest);
+
+            //response = reader.ReadToEnd();
+
+            //Console.WriteLine("Received from server: {0}", response);
 
         }
 

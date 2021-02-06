@@ -4,11 +4,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Threading;
 using System.Security.Cryptography;
-using Microsoft.VisualBasic.Logging;
 
-namespace RtspClientExample {
+namespace SoftSled.Components.RTSP {
     class RTSPClient {
 
         // Events that applications can receive
@@ -31,41 +29,43 @@ namespace RtspClientExample {
         public enum MEDIA_REQUEST { VIDEO_ONLY, AUDIO_ONLY, VIDEO_AND_AUDIO };
         private enum RTSP_STATUS { WaitingToConnect, Connecting, ConnectFailed, Connected };
 
-        Rtsp.RtspTcpTransport rtsp_socket = null; // RTSP connection
+        Rtsp.RtspTcpTransport rtsp_socket = null;               // RTSP connection
         volatile RTSP_STATUS rtsp_socket_status = RTSP_STATUS.WaitingToConnect;
-        Rtsp.RtspListener rtsp_client = null;   // this wraps around a the RTSP tcp_socket stream
-        RTP_TRANSPORT rtp_transport = RTP_TRANSPORT.UNKNOWN; // Mode, either RTP over UDP or RTP over TCP using the RTSP socket
-        Rtsp.UDPSocket video_udp_pair = null;       // Pair of UDP ports used in RTP over UDP mode or in MULTICAST mode
-        Rtsp.UDPSocket audio_udp_pair = null;       // Pair of UDP ports used in RTP over UDP mode or in MULTICAST mode
-        String url = "";                 // RTSP URL (username & password will be stripped out
-        String username = "";            // Username
-        String password = "";            // Password
-        String hostname = "";            // RTSP Server hostname or IP address
-        int port = 0;                    // RTSP Server TCP Port number
-        String session = "";             // RTSP Session
-        String auth_type = null;         // cached from most recent WWW-Authenticate reply
-        String realm = null;             // cached from most recent WWW-Authenticate reply
-        String nonce = null;             // cached from most recent WWW-Authenticate reply
+        Rtsp.RtspListener rtsp_client = null;                   // this wraps around a the RTSP tcp_socket stream
+        RTP_TRANSPORT rtp_transport = RTP_TRANSPORT.UNKNOWN;    // Mode, either RTP over UDP or RTP over TCP using the RTSP socket
+        Rtsp.UDPSocket video_udp_pair = null;                   // Pair of UDP ports used in RTP over UDP mode or in MULTICAST mode
+        Rtsp.UDPSocket audio_udp_pair = null;                   // Pair of UDP ports used in RTP over UDP mode or in MULTICAST mode
+        string url = "";                                        // RTSP URL (username & password will be stripped out
+        string base_url = "";                                   // RTSP Base URL
+        string username = "";                                   // Username
+        string password = "";                                   // Password
+        string hostname = "";                                   // RTSP Server hostname or IP address
+        int port = 0;                                           // RTSP Server TCP Port number
+        string session = "";                                    // RTSP Session
+        string auth_type = null;                                // cached from most recent WWW-Authenticate reply
+        string realm = null;                                    // cached from most recent WWW-Authenticate reply
+        string nonce = null;                                    // cached from most recent WWW-Authenticate reply
         uint ssrc = 12345;
-        bool client_wants_video = false; // Client wants to receive Video
-        bool client_wants_audio = false; // Client wants to receive Audio
-        Uri video_uri = null;            // URI used for the Video Track
-        int video_payload = -1;          // Payload Type for the Video. (often 96 which is the first dynamic payload value. Bosch use 35)
-        int video_data_channel = -1;     // RTP Channel Number used for the video RTP stream or the UDP port number
-        int video_rtcp_channel = -1;     // RTP Channel Number used for the video RTCP status report messages OR the UDP port number
-        bool h264_sps_pps_fired = false; // True if the SDP included a sprop-Parameter-Set for H264 video
-        bool h265_vps_sps_pps_fired = false; // True if the SDP included a sprop-vps, sprop-sps and sprop_pps for H265 video
-        string video_codec = "";         // Codec used with Payload Types 96..127 (eg "H264")
+        bool client_wants_video = false;                        // Client wants to receive Video
+        bool client_wants_audio = false;                        // Client wants to receive Audio
 
-        Uri audio_uri = null;            // URI used for the Audio Track
-        int audio_payload = -1;          // Payload Type for the Video. (often 96 which is the first dynamic payload value)
-        int audio_data_channel = -1;     // RTP Channel Number used for the audio RTP stream or the UDP port number
-        int audio_rtcp_channel = -1;     // RTP Channel Number used for the audio RTCP status report messages OR the UDP port number
-        string audio_codec = "";         // Codec used with Payload Types (eg "PCMA" or "AMR")
+        Uri video_uri = null;                                   // URI used for the Video Track
+        int video_payload = -1;                                 // Payload Type for the Video. (often 96 which is the first dynamic payload value. Bosch use 35)
+        int video_data_channel = -1;                            // RTP Channel Number used for the video RTP stream or the UDP port number
+        int video_rtcp_channel = -1;                            // RTP Channel Number used for the video RTCP status report messages OR the UDP port number
+        bool h264_sps_pps_fired = false;                        // True if the SDP included a sprop-Parameter-Set for H264 video
+        bool h265_vps_sps_pps_fired = false;                    // True if the SDP included a sprop-vps, sprop-sps and sprop_pps for H265 video
+        string video_codec = "";                                // Codec used with Payload Types 96..127 (eg "H264")
 
-        bool server_supports_get_parameter = false; // Used with RTSP keepalive
-        bool server_supports_set_parameter = false; // Used with RTSP keepalive
-        System.Timers.Timer keepalive_timer = null; // Used with RTSP keepalive
+        Uri audio_uri = null;                                   // URI used for the Audio Track
+        int audio_payload = -1;                                 // Payload Type for the Video. (often 96 which is the first dynamic payload value)
+        int audio_data_channel = -1;                            // RTP Channel Number used for the audio RTP stream or the UDP port number
+        int audio_rtcp_channel = -1;                            // RTP Channel Number used for the audio RTCP status report messages OR the UDP port number
+        string audio_codec = "";                                // Codec used with Payload Types (eg "PCMA" or "AMR")
+
+        bool server_supports_get_parameter = false;             // Used with RTSP keepalive
+        bool server_supports_set_parameter = false;             // Used with RTSP keepalive
+        System.Timers.Timer keepalive_timer = null;             // Used with RTSP keepalive
 
         Rtsp.H264Payload h264Payload = null;
         Rtsp.H265Payload h265Payload = null;
@@ -79,9 +79,9 @@ namespace RtspClientExample {
         public RTSPClient() {
 
         }
+        
 
-
-        public void Connect(String url, RTP_TRANSPORT rtp_transport, MEDIA_REQUEST media_request = MEDIA_REQUEST.VIDEO_AND_AUDIO) {
+        public void Connect(string url, RTP_TRANSPORT rtp_transport, MEDIA_REQUEST media_request = MEDIA_REQUEST.VIDEO_AND_AUDIO) {
 
             Rtsp.RtspUtils.RegisterUri();
 
@@ -166,6 +166,9 @@ namespace RtspClientExample {
             // In the Received Message handler we will send DESCRIBE, SETUP and PLAY
             Rtsp.Messages.RtspRequest options_message = new Rtsp.Messages.RtspRequestOptions();
             options_message.RtspUri = new Uri(this.url);
+            options_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+            options_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+            options_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
             rtsp_client.SendMessage(options_message);
         }
 
@@ -183,6 +186,9 @@ namespace RtspClientExample {
                 Rtsp.Messages.RtspRequest pause_message = new Rtsp.Messages.RtspRequestPause();
                 pause_message.RtspUri = new Uri(url);
                 pause_message.Session = session;
+                pause_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+                pause_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                pause_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
                 if (auth_type != null) {
                     AddAuthorization(pause_message, username, password, auth_type, realm, nonce, url);
                 }
@@ -193,9 +199,12 @@ namespace RtspClientExample {
         public void Play() {
             if (rtsp_client != null) {
                 // Send PLAY
-                Rtsp.Messages.RtspRequest play_message = new Rtsp.Messages.RtspRequestPlay();
+                RtspRequest play_message = new Rtsp.Messages.RtspRequestPlay();
                 play_message.RtspUri = new Uri(url);
                 play_message.Session = session;
+                play_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+                play_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                play_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
                 if (auth_type != null) {
                     AddAuthorization(play_message, username, password, auth_type, realm, nonce, url);
                 }
@@ -203,13 +212,15 @@ namespace RtspClientExample {
             }
         }
 
-
         public void Stop() {
             if (rtsp_client != null) {
                 // Send TEARDOWN
                 Rtsp.Messages.RtspRequest teardown_message = new Rtsp.Messages.RtspRequestTeardown();
                 teardown_message.RtspUri = new Uri(url);
                 teardown_message.Session = session;
+                teardown_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+                teardown_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                teardown_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
                 if (auth_type != null) {
                     AddAuthorization(teardown_message, username, password, auth_type, realm, nonce, url);
                 }
@@ -577,8 +588,8 @@ namespace RtspClientExample {
                     // EG:   Digest realm="AXIS_WS_ACCC8E3A0A8F", nonce="000057c3Y810622bff50b36005eb5efeae118626a161bf", stale=FALSE
                     // EG:   Digest realm="IP Camera(21388)", nonce="534407f373af1bdff561b7b4da295354", stale="FALSE"
 
-                    String www_authenticate = message.Headers[RtspHeaderNames.WWWAuthenticate];
-                    String auth_params = "";
+                    string www_authenticate = message.Headers[RtspHeaderNames.WWWAuthenticate];
+                    string auth_params = "";
 
                     if (www_authenticate.StartsWith("basic", StringComparison.InvariantCultureIgnoreCase)) {
                         auth_type = "Basic";
@@ -641,6 +652,10 @@ namespace RtspClientExample {
                     // Send DESCRIBE
                     Rtsp.Messages.RtspRequest describe_message = new Rtsp.Messages.RtspRequestDescribe();
                     describe_message.RtspUri = new Uri(url);
+                    describe_message.AddHeader("Accept: application/sdp");
+                    describe_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+                    describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                    describe_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
                     if (auth_type != null) {
                         AddAuthorization(describe_message, username, password, auth_type, realm, nonce, url);
                     }
@@ -667,8 +682,22 @@ namespace RtspClientExample {
                 System.Diagnostics.Debug.WriteLine(System.Text.Encoding.UTF8.GetString(message.Data));
 
                 Rtsp.Sdp.SdpFile sdp_data;
+                String control = "";  // the "track" or "stream id"
                 using (StreamReader sdp_stream = new StreamReader(new MemoryStream(message.Data))) {
                     sdp_data = Rtsp.Sdp.SdpFile.Read(sdp_stream);
+
+                    // Find the base RTSP Server URL
+                    foreach (Rtsp.Sdp.Attribut attrib in sdp_data.Attributs) {
+                        // If this is the Control attribute
+                        if (attrib.Key.Equals("control")) {
+                            string sdp_control = attrib.Value;
+                            if (sdp_control.ToLower().StartsWith("rtsp://")) {
+                                control = sdp_control; //absolute path
+                            } else {
+                                control = url + "/" + sdp_control; // relative path
+                            }
+                        }
+                    }
                 }
 
                 // RTP and RTCP 'channels' are used in TCP Interleaved mode (RTP over RTSP)
@@ -689,11 +718,13 @@ namespace RtspClientExample {
                     if (audio && (client_wants_audio == false)) continue; // client does not want audio from the RTSP server
                     if (video && (client_wants_video == false)) continue; // client does not want video from the RTSP server
 
-                    if (audio || video) {
+                    if (video) video_uri = new Uri(control);
+                    if (audio) audio_uri = new Uri(control);
 
+                    if (audio || video) {
+                        
                         // search the attributes for control, rtpmap and fmtp
                         // (fmtp only applies to video)
-                        String control = "";  // the "track" or "stream id"
                         Rtsp.Sdp.AttributFmtp fmtp = null; // holds SPS and PPS in base64 (h264 video)
                         foreach (Rtsp.Sdp.Attribut attrib in sdp_data.Medias[x].Attributs) {
                             if (attrib.Key.Equals("control")) {
@@ -701,10 +732,16 @@ namespace RtspClientExample {
                                 if (sdp_control.ToLower().StartsWith("rtsp://")) {
                                     control = sdp_control; //absolute path
                                 } else {
-                                    control = url + "/" + sdp_control; // relative path
+                                    // If the control URL starts with a Slash
+                                    if (control.EndsWith("/")) {
+                                        // Don't add a Slash
+                                        control = control + sdp_control; // relative path
+                                    } else {
+                                        // Add a Slash
+                                        control = control + "/" + sdp_control; // relative path
+                                    }
                                 }
-                                if (video) video_uri = new Uri(control);
-                                if (audio) audio_uri = new Uri(control);
+
                             }
                             if (attrib.Key.Equals("fmtp")) {
                                 fmtp = attrib as Rtsp.Sdp.AttributFmtp;
@@ -714,7 +751,7 @@ namespace RtspClientExample {
 
                                 // Check if the Codec Used (EncodingName) is one we support
                                 String[] valid_video_codecs = { "H264", "H265" };
-                                String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPEG4-GENERIC" /* for aac */}; // Note some are "mpeg4-generic" lower case
+                                String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC" /* for aac */}; // Note some are "mpeg4-generic" lower case
 
                                 if (video && Array.IndexOf(valid_video_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
                                     // found a valid codec
@@ -775,7 +812,6 @@ namespace RtspClientExample {
                         // Example fmtp is ""96 streamtype=5;profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1210"
                         if (audio && audio_codec.Contains("MPEG4-GENERIC") && fmtp.GetParameter("mode").ToLower().Equals("aac-hbr")) {
                             // Extract config (eg 0x1490 or 0x1210)
-
                             aacPayload = new Rtsp.AACPayload(fmtp.GetParameter("config"));
                         }
 
@@ -805,6 +841,7 @@ namespace RtspClientExample {
                             next_free_rtp_channel += 2;
                             next_free_rtcp_channel += 2;
                         }
+
                         if (rtp_transport == RTP_TRANSPORT.UDP) {
                             int rtp_port = 0;
                             int rtcp_port = 0;
@@ -828,6 +865,7 @@ namespace RtspClientExample {
                                 ClientPort = new PortCouple(rtp_port, rtcp_port), // a UDP Port for data (video or audio). a UDP Port for RTCP status reports
                             };
                         }
+
                         if (rtp_transport == RTP_TRANSPORT.MULTICAST) {
                             // Server sends the RTP packets to a Pair of UDP ports (one for data, one for rtcp control messages)
                             // using Multicast Address and Ports that are in the reply to the SETUP message
@@ -847,14 +885,18 @@ namespace RtspClientExample {
                         }
 
                         // Generate SETUP messages
-                        Rtsp.Messages.RtspRequestSetup setup_message = new Rtsp.Messages.RtspRequestSetup();
+                        RtspRequestSetup setup_message = new RtspRequestSetup();
                         setup_message.RtspUri = new Uri(control);
                         setup_message.AddTransport(transport);
+                        setup_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+                        setup_message.AddHeader("Buffer-Info.dlna.org: dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0");
+                        setup_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                        setup_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
                         if (auth_type != null) {
                             AddAuthorization(setup_message, username, password, auth_type, realm, nonce, url);
                         }
 
-                        // Add SETUP message to list of mesages to send
+                        // Add SETUP message to list of messages to send
                         setup_messages.Add(setup_message);
 
                     }
@@ -923,6 +965,10 @@ namespace RtspClientExample {
                     // send the next SETUP message, after adding in the 'session'
                     Rtsp.Messages.RtspRequestSetup next_setup = setup_messages[0];
                     next_setup.Session = session;
+                    next_setup.AddHeader("Accept-Language: en-us, *;q=0.1");
+                    next_setup.AddHeader("Buffer-Info.dlna.org: dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0");
+                    next_setup.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                    next_setup.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
                     rtsp_client.SendMessage(next_setup);
 
                     setup_messages.RemoveAt(0);
@@ -931,6 +977,9 @@ namespace RtspClientExample {
                     Rtsp.Messages.RtspRequest play_message = new Rtsp.Messages.RtspRequestPlay();
                     play_message.RtspUri = new Uri(url);
                     play_message.Session = session;
+                    play_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+                    play_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                    play_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
                     if (auth_type != null) {
                         AddAuthorization(play_message, username, password, auth_type, realm, nonce, url);
                     }
@@ -964,6 +1013,9 @@ namespace RtspClientExample {
                 Rtsp.Messages.RtspRequest getparam_message = new Rtsp.Messages.RtspRequestGetParameter();
                 getparam_message.RtspUri = new Uri(url);
                 getparam_message.Session = session;
+                getparam_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+                getparam_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                getparam_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
                 if (auth_type != null) {
                     AddAuthorization(getparam_message, username, password, auth_type, realm, nonce, url);
                 }
@@ -973,6 +1025,9 @@ namespace RtspClientExample {
 
                 Rtsp.Messages.RtspRequest options_message = new Rtsp.Messages.RtspRequestOptions();
                 options_message.RtspUri = new Uri(url);
+                options_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+                options_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                options_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
                 if (auth_type != null) {
                     AddAuthorization(options_message, username, password, auth_type, realm, nonce, url);
                 }

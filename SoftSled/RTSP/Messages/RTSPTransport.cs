@@ -66,6 +66,7 @@ mode                =    <"> *Method <"> | Method
             /// RTP/AVP of now
             /// </summary>
             AVP,
+            AVPF
         }
 
         /// <summary>
