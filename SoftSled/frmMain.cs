@@ -14,6 +14,7 @@ using System.Security.Cryptography;
 using System.Net;
 using Rtsp;
 using SoftSled.Components.RTSP;
+using WMPLib;
 
 namespace SoftSled {
     public partial class FrmMain : Form {
@@ -353,6 +354,8 @@ namespace SoftSled {
 
                 RTSPClient client = new RTSPClient();
                 client.Connect(rtspUrl, RTSPClient.RTP_TRANSPORT.UDP);
+
+
             }
 
             byte[] file = File.ReadAllBytes(fileName);
@@ -370,7 +373,6 @@ namespace SoftSled {
 
             }
 
-
             rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(file));
             m_logger.LogDebug("RDP: Sent avctrl iteration " + avCtrlIter.ToString());
 
@@ -382,7 +384,9 @@ namespace SoftSled {
             string path = vChanRootDir + "devcaps\\" + fileName;
             return File.ReadAllBytes(path);
         }
-        #endregion
+
+        #endregion ############################################################
+
 
         #region Misc Form Events ##############################################
 
