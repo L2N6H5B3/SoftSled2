@@ -9,7 +9,7 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 * Create toolbar overlay
 * Create RC6 control forwarder
 * Create full-screen interface
-* Create settings areas
+* Create settings areas (optional, would be used for dedicated device)
     * WLAN
     * Display
     * Audio
