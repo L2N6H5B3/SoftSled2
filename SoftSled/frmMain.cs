@@ -293,7 +293,9 @@ namespace SoftSled {
 
         private void HandleAvctrlIncoming(string data) {
 
-            // File.WriteAllBytes("g:\\avctrlIncoming_" + avCtrlIter, Encoding.Unicode.GetBytes(data)); 
+            // File.WriteAllBytes("g:\\avctrlIncoming_" + avCtrlIter, Encoding.Unicode.GetBytes(data));
+
+            File.WriteAllBytes($"C:\\Users\\Luke\\Documents\\GitHub\\SoftSled2\\SoftSled\\VChan\\avctrl\\new\\10.1.1.20\\avctrlIncoming_{avCtrlIter}", Encoding.Unicode.GetBytes(data));
 
             string fileName = vChanRootDir + "avctrl\\av r ";
             if (avCtrlIter == 4) {
@@ -328,7 +330,6 @@ namespace SoftSled {
                 // We need to insert the remote host IP into our 4th iteration response.
 
                 byte[] hostIp = Encoding.ASCII.GetBytes(SoftSledConfigManager.ReadConfig().RdpLoginHost);
-                Array.Copy(hostIp, 0, file, 36, hostIp.Length);
 
             }
 
