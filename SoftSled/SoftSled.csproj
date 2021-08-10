@@ -74,7 +74,9 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Components\AudioHandler.cs" />
+    <Compile Include="Components\AudioHandler.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
     <Compile Include="Components\Logger.cs" />
     <Compile Include="Components\McxVirtualChannelHandler.cs" />
     <Compile Include="Components\RTSPClient.cs" />
@@ -196,6 +198,12 @@
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
     <None Include="VChan\avctrl\av r 6">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Include="VChan\avctrl\av r 7">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Include="VChan\avctrl\av r 8">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
     <None Include="VChan\avctrl\av r main">

@@ -92,10 +92,14 @@ namespace SoftSled {
                 InitialiseRdpClient();
             }
 
+            // Set RDP Server Address
             rdpClient.Server = currConfig.RdpLoginHost;
+            // Set RDP Username
             rdpClient.UserName = currConfig.RdpLoginUserName;
+            // Set RDP Password
             rdpClient.AdvancedSettings2.ClearTextPassword = currConfig.RdpLoginPassword;
-
+            // Set RDP Color Depth
+            rdpClient.ColorDepth = 32;
             // Connect RDP
             rdpClient.Connect();
 
@@ -281,9 +285,9 @@ namespace SoftSled {
                 disabledCaps.Add("AR");
                 disabledCaps.Add("CR");
                 disabledCaps.Add("CP");
-                disabledCaps.Add("CD");
+                //disabledCaps.Add("CD");
                 disabledCaps.Add("DR");
-                disabledCaps.Add("DV");
+                disabledCaps.Add("DV"); // DVD - DVD Playback
                 disabledCaps.Add("FP");
                 disabledCaps.Add("HC");
                 disabledCaps.Add("HT");
@@ -298,9 +302,21 @@ namespace SoftSled {
                 disabledCaps.Add("TV"); // TVS 
                 disabledCaps.Add("TB"); // TBP - disable the media center toolbar. 
                 disabledCaps.Add("AN"); // ANI - intensive animations over RDP look awful!
+                disabledCaps.Add("2D"); // 2D - Light Animations
                 disabledCaps.Add("VI"); // VIZ - can't do wmp visualisations over RDP!
                 disabledCaps.Add("MU"); // TVS
                 disabledCaps.Add("XT");
+                disabledCaps.Add("ZO");
+                disabledCaps.Add("NL");
+                disabledCaps.Add("BL");
+                disabledCaps.Add("WE");
+                disabledCaps.Add("SY");
+                disabledCaps.Add("SO");
+                disabledCaps.Add("RE");
+                disabledCaps.Add("SU");
+                disabledCaps.Add("MA");
+                //disabledCaps.Add("AU"); // AUD - Audio Playback
+                //disabledCaps.Add("GD"); // GDI - Disable GDI Rendering
 
                 bool response = false;
                 if (disabledCaps.Contains(capChar1 + capChar2))
@@ -327,10 +343,10 @@ namespace SoftSled {
 
             byte[] incomingBuff = Encoding.Unicode.GetBytes(data);
             string incomingString = Encoding.ASCII.GetString(incomingBuff);
-            File.WriteAllText("C:\\Users\\Luke\\source\\repos\\SoftSled2\\avctrlIncoming_" + avCtrlIter, incomingString);
+            File.WriteAllText("C:\\Users\\Luke\\Documents\\GitHub\\SoftSled2\\avctrlIncoming_" + avCtrlIter, incomingString);
 
             string fileName = vChanRootDir + "avctrl\\av r ";
-            
+
             if (avCtrlIter == 4) {
                 fileName += "4";
                 //  File.WriteAllText("g:\\4th", data);
@@ -340,22 +356,42 @@ namespace SoftSled {
                 fileName += "6";
             } else if (avCtrlIter == 7) {
                 fileName += "7";
-            }
-              //else if (avCtrlIter == 8) 
-              //  fileName += "8";
-              else
+            } 
+            //else if (avCtrlIter == 8) {
+            //    fileName += "8";
+            //} else if (avCtrlIter == 9) {
+            //    fileName += "9";
+            //} else if (avCtrlIter == 10) {
+            //    fileName += "10";
+            //} else if (avCtrlIter == 11) {
+            //    fileName += "11";
+            //} else if (avCtrlIter == 12) {
+            //    fileName += "12";
+            //} else if (avCtrlIter == 13) {
+            //    fileName += "13";
+            //} else if (avCtrlIter == 14) {
+            //    fileName += "14";
+            //} else if (avCtrlIter == 15) {
+            //    fileName += "15";
+            //}
+            else {
                 fileName += "main";
+            }
 
             if (avCtrlIter == 8) {
                 byte[] rtspBuff = new byte[85];
 
                 // Get the RTSP URL
-                rtspUrl = Encoding.ASCII.GetString(Encoding.Unicode.GetBytes(data), 32, 97);
+                rtspUrl = Encoding.ASCII.GetString(Encoding.Unicode.GetBytes(data), 32, 97).Trim();
 
-                RTSPClient client = new RTSPClient();
-                client.Connect(rtspUrl, RTSPClient.RTP_TRANSPORT.UDP);
+                System.Diagnostics.Debug.WriteLine(rtspUrl);
 
+                //RTSPClient client = new RTSPClient();
+                //client.Connect(rtspUrl, RTSPClient.RTP_TRANSPORT.UDP);
 
+                System.Diagnostics.Process.Start(@"C:\Users\Luke\Downloads\ffmpeg-4.4-full_build\ffmpeg-4.4-full_build\bin\ffplay.exe", rtspUrl);
+
+                //axWindowsMediaPlayer1.URL = rtspUrl;
             }
 
             byte[] file = File.ReadAllBytes(fileName);
@@ -376,10 +412,11 @@ namespace SoftSled {
             rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(file));
             m_logger.LogDebug("RDP: Sent avctrl iteration " + avCtrlIter.ToString());
 
+            // Increment AvCtrlIter to indicate the current point in the process
             avCtrlIter++;
         }
 
-        
+
         byte[] LoadDevCapsVChan(string fileName) {
             string path = vChanRootDir + "devcaps\\" + fileName;
             return File.ReadAllBytes(path);

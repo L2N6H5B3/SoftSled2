@@ -220,7 +220,7 @@ namespace SoftSled.Components.RTSP {
                 teardown_message.Session = session;
                 teardown_message.AddHeader("Accept-Language: en-us, *;q=0.1");
                 teardown_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-                teardown_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+                teardown_message.AddHeader("User-Agent: MCExtender/1.0.0.0");
                 if (auth_type != null) {
                     AddAuthorization(teardown_message, username, password, auth_type, realm, nonce, url);
                 }

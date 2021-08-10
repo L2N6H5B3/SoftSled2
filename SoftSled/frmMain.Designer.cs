@@ -68,7 +68,7 @@ namespace SoftSled
             this.txtLog.Multiline = true;
             this.txtLog.Name = "txtLog";
             this.txtLog.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
-            this.txtLog.Size = new System.Drawing.Size(333, 401);
+            this.txtLog.Size = new System.Drawing.Size(519, 401);
             this.txtLog.TabIndex = 3;
             // 
             // button2
@@ -230,17 +230,17 @@ namespace SoftSled
             // axWindowsMediaPlayer1
             // 
             this.axWindowsMediaPlayer1.Enabled = true;
-            this.axWindowsMediaPlayer1.Location = new System.Drawing.Point(946, 179);
+            this.axWindowsMediaPlayer1.Location = new System.Drawing.Point(1210, 12);
             this.axWindowsMediaPlayer1.Name = "axWindowsMediaPlayer1";
             this.axWindowsMediaPlayer1.OcxState = ((System.Windows.Forms.AxHost.State)(resources.GetObject("axWindowsMediaPlayer1.OcxState")));
-            this.axWindowsMediaPlayer1.Size = new System.Drawing.Size(258, 84);
+            this.axWindowsMediaPlayer1.Size = new System.Drawing.Size(236, 145);
             this.axWindowsMediaPlayer1.TabIndex = 21;
             // 
             // FrmMain
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(1266, 587);
+            this.ClientSize = new System.Drawing.Size(1458, 587);
             this.Controls.Add(this.axWindowsMediaPlayer1);
             this.Controls.Add(this.button1);
             this.Controls.Add(this.label2);
