@@ -342,21 +342,46 @@ namespace SoftSled {
         private void HandleAvctrlIncoming(string data) {
 
             byte[] incomingBuff = Encoding.Unicode.GetBytes(data);
-            string incomingString = Encoding.ASCII.GetString(incomingBuff);
-            File.WriteAllText("C:\\Users\\Luke\\Documents\\GitHub\\SoftSled2\\avctrlIncoming_" + avCtrlIter, incomingString);
+
+            // Get byte count of incoming data
+            int byteCount = incomingBuff[25];
+            // Create byte array to hold incoming data
+            byte[] incomingData = new byte[byteCount];
+            // Check if there is data to receive
+            if (byteCount > 0) {
+                // Iterate through each expected byte of data
+                for (int index = 0; index < byteCount; index++) {
+                    // Try and Catch Out of Bounds Exception
+                    try {
+                        // Add the expected data byte to the incoming data array
+                        incomingData[index] = incomingBuff[index + 28];
+                    } catch (IndexOutOfRangeException) {
+                        System.Diagnostics.Debug.WriteLine("outOfRange... " + (index + 28));
+                    }
+                }
+            }
+
+            string incomingByteArray = "";
+            foreach (byte b in incomingData) {
+                incomingByteArray += b.ToString("X2") + " ";
+            }
+
+            string incomingString = Encoding.ASCII.GetString(incomingData);
+
+            // Get the actual AVCTRL ITER from incoming bytes
+            avCtrlIter = incomingBuff[13];
 
             string fileName = vChanRootDir + "avctrl\\av r ";
 
             if (avCtrlIter == 4) {
                 fileName += "4";
-                //  File.WriteAllText("g:\\4th", data);
             } else if (avCtrlIter == 5) {
                 fileName += "5";
             } else if (avCtrlIter == 6) {
                 fileName += "6";
             } else if (avCtrlIter == 7) {
                 fileName += "7";
-            } 
+            }
             //else if (avCtrlIter == 8) {
             //    fileName += "8";
             //} else if (avCtrlIter == 9) {
@@ -396,6 +421,14 @@ namespace SoftSled {
 
             byte[] file = File.ReadAllBytes(fileName);
             file[21] = Convert.ToByte(avCtrlIter);
+
+            string outgoingString = Encoding.ASCII.GetString(file);
+
+            string byteArray = "";
+
+            foreach (byte b in file) {
+                byteArray += b.ToString("X2") + " ";
+            }
 
             if (avCtrlIter == 4) {
                 // We need to insert the remote host IP into our 4th iteration response.
