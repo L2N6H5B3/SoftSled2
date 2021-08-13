@@ -1,7 +1,9 @@
+using LibVLCSharp.Shared;
 using Rtsp;
 using SoftSled.Components;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -31,10 +33,26 @@ namespace SoftSled {
         private int DRMRIServiceHandle;
         private int DSMNServiceHandle;
 
+        private int DMCTRegisterMediaEventCallbackCookie;
+        private int DMCTOpenMediaRequestedPlayRate;
+        private string DMCTOpenMediaURL;
+
+        private Media currentMedia;
+
         private string vChanRootDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\VChan\\";
 
+        public LibVLC _libVLC;
+        public MediaPlayer _mp;
+
         public FrmMain() {
+            if (!DesignMode) {
+                Core.Initialize();
+            }
+
             InitializeComponent();
+            _libVLC = new LibVLC();
+            _mp = new MediaPlayer(_libVLC);
+            videoView1.MediaPlayer = _mp;
         }
 
         #region Main GUI Commands
@@ -181,7 +199,7 @@ namespace SoftSled {
         void RdpClient_OnChannelReceivedData(object sender, AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
             try {
                 if (chkInVchanDebug.Checked && e.chanName != "McxSess")
-                    m_logger.LogInfo("RDP: Received data on channel " + e.chanName);
+                    //m_logger.LogInfo("RDP: Received data on channel " + e.chanName);
 
 
                 if (e.chanName == "devcaps") {
@@ -273,52 +291,65 @@ namespace SoftSled {
                 byte[] vChanIncomingBuff = Encoding.Unicode.GetBytes(e.data);
                 string capChar1 = Encoding.ASCII.GetString(vChanIncomingBuff, vChanIncomingBuff.Length - 2, 1).ToUpper();
                 string capChar2 = Encoding.ASCII.GetString(vChanIncomingBuff, vChanIncomingBuff.Length - 1, 1).ToUpper();
+                string capChar3 = Encoding.ASCII.GetString(vChanIncomingBuff, vChanIncomingBuff.Length, 1).ToUpper();
 
-                m_logger.LogDebug("Asked for capability: " + capChar1 + capChar2);
+                //m_logger.LogDebug("Asked for capability: " + capChar1 + capChar2);
 
                 List<String> disabledCaps = new List<string>();
-                disabledCaps.Add("BI"); // BIG - we cannot do Xbox 360 rendering
-                disabledCaps.Add("PH");
-                disabledCaps.Add("POP");
-                disabledCaps.Add("HO");
-                disabledCaps.Add("AR");
-                disabledCaps.Add("CR");
-                disabledCaps.Add("CP");
-                //disabledCaps.Add("CD");
-                disabledCaps.Add("DR");
-                disabledCaps.Add("DV"); // DVD - DVD Playback
-                disabledCaps.Add("FP");
-                disabledCaps.Add("HC");
-                disabledCaps.Add("HT");
-                disabledCaps.Add("DO");
-                disabledCaps.Add("SC");
-                disabledCaps.Add("NL");
-                disabledCaps.Add("RS");
-                disabledCaps.Add("VO");
-                disabledCaps.Add("W3");
-                disabledCaps.Add("RU"); // RUI - we cannot do Xbox 360 rendering
-                disabledCaps.Add("WI"); // WID - disable widescreen for the time being.
-                disabledCaps.Add("TV"); // TVS 
-                disabledCaps.Add("TB"); // TBP - disable the media center toolbar. 
-                disabledCaps.Add("AN"); // ANI - intensive animations over RDP look awful!
-                disabledCaps.Add("2D"); // 2D - Light Animations
-                disabledCaps.Add("VI"); // VIZ - can't do wmp visualisations over RDP!
-                disabledCaps.Add("MU"); // TVS
-                disabledCaps.Add("XT");
-                disabledCaps.Add("ZO");
-                disabledCaps.Add("NL");
-                disabledCaps.Add("BL");
-                disabledCaps.Add("WE");
-                disabledCaps.Add("SY");
-                disabledCaps.Add("SO");
-                disabledCaps.Add("RE");
-                disabledCaps.Add("SU");
-                disabledCaps.Add("MA");
-                //disabledCaps.Add("AU"); // AUD - Audio Playback
-                //disabledCaps.Add("GD"); // GDI - Disable GDI Rendering
+                disabledCaps.Add("PHO"); // Are advanced photo features allowed?
+                //disabledCaps.Add("EXT"); // Are Extender Settings allowed?
+                disabledCaps.Add("MAR"); // Are over-scan margins needed?
+                disabledCaps.Add("POP"); // Are Pop ups allowed?
+                disabledCaps.Add("ZOM"); // Is video zoom mode allowed?
+                disabledCaps.Add("NLZ"); // Is nonlinear zoom supported?
+                disabledCaps.Add("RSZ"); // Is raw stretched zoom supported?
+                disabledCaps.Add("WID"); // Is wide screen enabled?
+                disabledCaps.Add("H10"); // Is 10 feet help allowed? 
+                disabledCaps.Add("WEB"); // Is 10 feet web content allowed? 
+                disabledCaps.Add("H02"); // Is 2 feet help allowed? 
+                disabledCaps.Add("WE2"); // Is 2 feet web content allowed? 
+                //disabledCaps.Add("AUD"); // Is audio allowed?
+                disabledCaps.Add("AUR"); // Is audio Non WMP?
+                disabledCaps.Add("ARA"); // Is auto restart allowed?
+                disabledCaps.Add("BLB"); // Is black letters box needed?
+                disabledCaps.Add("CCC"); // Is CC rendered by the client?
+                disabledCaps.Add("CRC"); // Is CD burning allowed?
+                disabledCaps.Add("CPY"); // Is CD copying allowed?
+                disabledCaps.Add("CDA"); // Is CD playback allowed?
+                disabledCaps.Add("CLO"); // Is the close button shown?
+                disabledCaps.Add("DRC"); // Is DVD burning allowed?
+                disabledCaps.Add("DVD"); // Is DVD playback allowed?
+                disabledCaps.Add("FPD"); // Is FPD allowed?
+                //disabledCaps.Add("GDI"); // Is GDI renderer used?
+                //disabledCaps.Add("HDV"); // Is HD content allowed?
+                //disabledCaps.Add("HDN"); // Is HD content allowed by the network?
+                //disabledCaps.Add("SDN"); // Is SD content allowed by the network?
+                //disabledCaps.Add("REM"); // Is input treated as if from a remote?
+                disabledCaps.Add("ANI"); // Is intensive animation allowed?
+                disabledCaps.Add("2DA"); // Is 2D animation allowed?
+                disabledCaps.Add("HTM"); // Is HTML supported?
+                disabledCaps.Add("DES"); // Is MCE a Windows shell?
+                disabledCaps.Add("DOC"); // Is my Documents populated?
+                disabledCaps.Add("SCR"); // Is a native screensaver required?
+                disabledCaps.Add("ONS"); // Is online spotlight allowed?
+                //disabledCaps.Add("SUP"); // Is RDP super bit allowed?
+                disabledCaps.Add("BIG"); // Is remote UI renderer big-endian?
+                disabledCaps.Add("RUI"); // Is remote UI rendering supported?
+                disabledCaps.Add("SDM"); // Is a screen data mode workaround needed?
+                disabledCaps.Add("TBA"); // Is a Toolbar allowed?
+                disabledCaps.Add("SYN"); // Is transfer to a device allowed?
+                disabledCaps.Add("APP"); // Is tray applet allowed?
+                disabledCaps.Add("TVS"); // Is a TV skin used?
+                //disabledCaps.Add("SOU"); // Is UI sound supported?
+                //disabledCaps.Add("VID"); // Is video allowed?
+                disabledCaps.Add("W32"); // Is Win32 content allowed?
+                disabledCaps.Add("WIN"); // Is window mode allowed?
+                disabledCaps.Add("VIZ"); // Is WMP visualisation allowed?
+                //disabledCaps.Add("VOL"); // Is volume UI allowed?
+                //disabledCaps.Add("MUT"); // Is mute ui allowed?
 
                 bool response = false;
-                if (disabledCaps.Contains(capChar1 + capChar2))
+                if (disabledCaps.Contains(capChar1 + capChar2 + capChar3))
                     vChanResponseBuff = LoadDevCapsVChan("Disabled");
                 else {
                     vChanResponseBuff = LoadDevCapsVChan("Enabled");
@@ -328,11 +359,11 @@ namespace SoftSled {
                 // We need to modify the sequencing integer inside the response.
                 vChanResponseBuff[21] = Convert.ToByte(devCapsIter);
 
-                m_logger.LogDebug("RDP: " + response.ToString().ToUpper() + " for capability " + capChar1 + capChar2);
+                //m_logger.LogDebug("RDP: " + response.ToString().ToUpper() + " for capability " + capChar1 + capChar2);
             }
 
             rdpClient.SendOnVirtualChannel("devcaps", Encoding.Unicode.GetString(vChanResponseBuff));
-            m_logger.LogDebug("RDP: Sent devcaps citeration " + devCapsIter.ToString());
+            //m_logger.LogDebug("RDP: Sent devcaps citeration " + devCapsIter.ToString());
 
 
             devCapsIter++;
@@ -352,10 +383,20 @@ namespace SoftSled {
             int dispatchServiceHandle = Get4ByteInt(incomingBuff, 14);
             int dispatchFunctionHandle = Get4ByteInt(incomingBuff, 18);
 
+
+            //// DEBUG PURPOSES ONLY
+            //string byteArray = "";
+            //foreach (byte b in incomingBuff) {
+            //    byteArray += b.ToString("X2") + " ";
+            //}
+            //// DEBUG PURPOSES ONLY
+
             // Service Handle = Dispenser
             if (dispatchServiceHandle == 0) {
 
-                // CreateService Response
+                #region DSLR Service ##########################################
+
+                // CreateService Request
                 if (dispatchFunctionHandle == 0) {
 
                     // Get CreateService Data
@@ -398,7 +439,7 @@ namespace SoftSled {
 
                     m_logger.LogDebug("AVCTRL: Sent Response CreateService " + dispatchRequestHandle);
                 }
-                // DeleteService Response
+                // DeleteService Request
                 else if (dispatchFunctionHandle == 2) {
 
                     // Get DeleteService Data
@@ -411,265 +452,382 @@ namespace SoftSled {
                     m_logger.LogDebug("AVCTRL: Request DeleteService " + deleteServiceServiceHandle);
 
 
-
-
                     // Send the DeleteService Response
                     //rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(response));
 
                     m_logger.LogDebug("AVCTRL: Sent Response DeleteService " + dispatchRequestHandle);
                 }
-                // Error Response
+                // Error Request
                 else {
                     m_logger.LogDebug("AVCTRL: Request Error " + dispatchRequestHandle);
 
 
                 }
+
+                #endregion ####################################################
+
             }
             // DMCT Service Handle
             else if (dispatchServiceHandle == DMCTServiceHandle) {
 
+                #region DMCT Service ##########################################
+
+                // OpenMedia Request
+                if (dispatchFunctionHandle == 0) {
+
+                    // Get OpenMedia Data
+                    int OpenMediaPayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int OpenMediaChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    int OpenMediaPayloadURLLength = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                    string OpenMediaPayloadURL = GetByteArrayString(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4, OpenMediaPayloadURLLength);
+                    int OpenMediaPayloadSurfaceID = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4 + OpenMediaPayloadURLLength);
+                    int OpenMediaPayloadTimeOut = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4 + OpenMediaPayloadURLLength + 4);
+
+                    m_logger.LogDebug("AVCTRL: Request OpenMedia " + OpenMediaPayloadURL);
+
+                    DMCTOpenMediaURL = OpenMediaPayloadURL;
+
+                    // Create Media Object
+                    currentMedia = new Media(_libVLC, new Uri(OpenMediaPayloadURL));
+                    currentMedia.Parse();
+
+                    // Initialise OpenMedia Response
+                    byte[] response = VChan.AVCTRL.OpenMediaResponse(
+                        GetByteSubArray(incomingBuff, 10, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+
+                    // DEBUG PURPOSES ONLY
+                    string byteArray = "";
+                    foreach (byte b in response) {
+                        byteArray += b.ToString("X2") + " ";
+                    }
+                    // DEBUG PURPOSES ONLY
+
+                    // Send the SetDWORDProperty Response
+                    rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("AVCTRL: Sent Response OpenMedia " + OpenMediaPayloadURL);
+
+                }
+                // Start Request
+                else if (dispatchFunctionHandle == 2) {
+
+                    // Get Start Data
+                    int StartPayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int StartChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    long StartPayloadStartTime = Get8ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                    long StartPayloadUseOptimisedPreroll = Get8ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 8);
+                    int StartPayloadRequestedPlayRate = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 8 + 8);
+                    long StartPayloadAvailableBandwidth = Get8ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 8 + 8 + 4);
+
+                    m_logger.LogDebug("AVCTRL: Request Start " + dispatchRequestHandle);
+
+                    //// Start the child process.
+                    //ffplay = new Process();
+                    //// Redirect the output stream of the child process.
+                    //p.StartInfo.UseShellExecute = false;
+                    //p.StartInfo.RedirectStandardOutput = true;
+                    //p.StartInfo.FileName = "ffplay.exe";
+                    //p.StartInfo.Arguments = $"-i {DMCTOpenMediaURL} -show_entries format=duration -v quiet -of csv=\"p = 0\"";
+                    //p.StartInfo.Arguments = $"-i {DMCTOpenMediaURL} -hide_banner -loglevel 8 -stats  2.09 A-V: -0.004 fd=   6 aq=   31KB vq=   84KB sq=    0B f=0/0";
+                    //p.Start();
+
+                    //Process.Start(@"C:\Users\Luke\Downloads\ffmpeg-4.4-full_build\ffmpeg-4.4-full_build\bin\ffplay.exe", DMCTOpenMediaURL);
+
+                    _mp.Play(currentMedia);
+
+                    // Initialise Start Response
+                    byte[] response = VChan.AVCTRL.StartResponse(
+                        GetByteSubArray(incomingBuff, 10, 4),
+                        DMCTOpenMediaRequestedPlayRate
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+
+                    // DEBUG PURPOSES ONLY
+                    string byteArray = "";
+                    foreach (byte b in response) {
+                        byteArray += b.ToString("X2") + " ";
+                    }
+                    // DEBUG PURPOSES ONLY
+
+                    // Send the SetDWORDProperty Response
+                    rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("AVCTRL: Sent Response Start " + dispatchRequestHandle);
+
+
+                }
+                // GetDuration Request
+                else if (dispatchFunctionHandle == 5) {
+
+                    m_logger.LogDebug("AVCTRL: Request GetDuration " + dispatchRequestHandle);
+
+                    long durationLongMili = Convert.ToInt64(currentMedia.Duration / 10);
+
+                    // Initialise GetDuration Response
+                    byte[] response = VChan.AVCTRL.GetDurationResponse(
+                        GetByteSubArray(incomingBuff, 10, 4),
+                        durationLongMili
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+
+                    // Send the GetDuration Response
+                    rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("AVCTRL: Sent Response GetDuration " + durationLongMili);
+
+                }
+                // GetPosition Request
+                else if (dispatchFunctionHandle == 6) {
+
+                    m_logger.LogDebug("AVCTRL: Request GetPosition " + dispatchRequestHandle);
+
+                    long positionLongMili = Convert.ToInt64(_mp.Time / 10);
+
+                    // Initialise GetPosition Response
+                    byte[] response = VChan.AVCTRL.GetPositionResponse(
+                        GetByteSubArray(incomingBuff, 10, 4),
+                        positionLongMili
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+
+                    // Send the GetPosition Response
+                    rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("AVCTRL: Sent Response GetPosition " + 0);
+
+                }
+                // RegisterMediaEventCallback Request
+                else if (dispatchFunctionHandle == 8) {
+
+                // Get RegisterMediaEventCallback Data
+                int RegisterMediaEventCallbackPayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                int RegisterMediaEventCallbackChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                Guid RegisterMediaEventCallbackClassID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                Guid RegisterMediaEventCallbackServiceID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
+
+                m_logger.LogDebug("AVCTRL: Request RegisterMediaEventCallback " + dispatchRequestHandle);
+
+                DMCTRegisterMediaEventCallbackCookie = 14733;
+
+                // Initialise RegisterMediaEventCallback Response
+                byte[] response = VChan.AVCTRL.RegisterMediaEventCallbackResponse(
+                    GetByteSubArray(incomingBuff, 10, 4),
+                    DMCTRegisterMediaEventCallbackCookie
+                );
+                // Encapsulate the Response (Doesn't seem to work without this?)
+                byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+
+                // Send the RegisterMediaEventCallback Response
+                rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                m_logger.LogDebug("AVCTRL: Sent Response RegisterMediaEventCallback " + dispatchRequestHandle);
+
+            }
+
+                #endregion ####################################################
             }
             // DSPA Service Handle
             else if (dispatchServiceHandle == DSPAServiceHandle) {
-                // Get DSPA Service Data
-                int dspaServicePayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
-                int dspaServiceChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
-                Guid createServiceClassID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
-                Guid createServiceServiceID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
-                int createServiceServiceHandle = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16 + 16);
 
-                m_logger.LogDebug("AVCTRL: Request CreateService " + createServiceServiceHandle);
+                #region DSPA Service ##########################################
+
+                // GetStringProperty Request
+                if (dispatchFunctionHandle == 0) {
+
+                    // Get GetStringProperty Data
+                    int GetStringPropertyPayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int GetStringPropertyChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    int GetStringPropertyPayloadLength = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                    string GetStringPropertyPayloadPropertyName = GetByteArrayString(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4, GetStringPropertyPayloadLength);
+
+                    switch (GetStringPropertyPayloadPropertyName) {
+                        // Property Bag Service
+                        case "XspHostAddress":
+
+                            m_logger.LogDebug("AVCTRL: Request GetStringProperty " + GetStringPropertyPayloadPropertyName);
+
+                            // Initialise GetStringProperty Response
+                            byte[] response = VChan.AVCTRL.GetStringPropertyResponse(
+                                GetByteSubArray(incomingBuff, 10, 4),
+                                SoftSledConfigManager.ReadConfig().RdpLoginHost
+                            );
+                            // Encapsulate the Response (Doesn't seem to work without this?)
+                            byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+
+                            // Send the GetStringProperty Response
+                            rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                            m_logger.LogDebug("AVCTRL: Sent Response GetStringProperty " + GetStringPropertyPayloadPropertyName);
+
+                            break;
+                    }
+                }
+                // GetDWORDProperty Request
+                else if (dispatchFunctionHandle == 2) {
+
+                    // Get GetDWORDProperty Data
+                    int GetDWORDPropertyPayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int GetDWORDPropertyChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    int GetDWORDPropertyPayloadLength = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                    string GetDWORDPropertyPayloadPropertyName = GetByteArrayString(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4, GetDWORDPropertyPayloadLength);
+
+                    switch (GetDWORDPropertyPayloadPropertyName) {
+                        case "IsMuted":
+
+                            m_logger.LogDebug("AVCTRL: Request GetDWORDProperty " + GetDWORDPropertyPayloadPropertyName);
+
+                            // Initialise GetDWORDProperty Response
+                            byte[] isMutedResponse = VChan.AVCTRL.GetDWORDPropertyResponse(
+                                GetByteSubArray(incomingBuff, 10, 4),
+                                0
+                            );
+                            // Encapsulate the Response (Doesn't seem to work without this?)
+                            byte[] encapsulatedIsMutedResponse = VChan.AVCTRL.Encapsulate(isMutedResponse);
+
+                            // Send the GetDWORDProperty Response
+                            rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedIsMutedResponse));
+
+                            m_logger.LogDebug("AVCTRL: Sent Response GetDWORDProperty " + GetDWORDPropertyPayloadPropertyName);
+
+                            break;
+                        case "Volume":
+
+                            m_logger.LogDebug("AVCTRL: Request GetDWORDProperty " + GetDWORDPropertyPayloadPropertyName);
+
+                            // Initialise GetDWORDProperty Response
+                            byte[] volumeResponse = VChan.AVCTRL.GetDWORDPropertyResponse(
+                                GetByteSubArray(incomingBuff, 10, 4),
+                                65535
+                            );
+                            // Encapsulate the Response (Doesn't seem to work without this?)
+                            byte[] encapsulatedVolumeResponse = VChan.AVCTRL.Encapsulate(volumeResponse);
+
+                            // Send the GetDWORDProperty Response
+                            rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedVolumeResponse));
+
+                            m_logger.LogDebug("AVCTRL: Sent Response GetDWORDProperty " + GetDWORDPropertyPayloadPropertyName);
+
+                            break;
+                    }
+                }
+                // SetDWORDProperty Request
+                else if (dispatchFunctionHandle == 3) {
+
+                    // Get SetDWORDProperty Data
+                    int SetDWORDPropertyPayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int SetDWORDPropertyChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    int SetDWORDPropertyPayloadLength = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                    string SetDWORDPropertyPayloadPropertyName = GetByteArrayString(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4, SetDWORDPropertyPayloadLength);
+                    int SetDWORDPropertyPayloadPropertyValue = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4 + SetDWORDPropertyPayloadLength);
+
+                    switch (SetDWORDPropertyPayloadPropertyName) {
+                        case "IsMuted":
+
+                            m_logger.LogDebug("AVCTRL: Request SetDWORDProperty " + SetDWORDPropertyPayloadPropertyName);
+
+                            // Initialise SetDWORDProperty Response
+                            byte[] response = VChan.AVCTRL.SetDWORDPropertyResponse(
+                                GetByteSubArray(incomingBuff, 10, 4)
+                            );
+                            // Encapsulate the Response (Doesn't seem to work without this?)
+                            byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+
+                            // Send the SetDWORDProperty Response
+                            rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                            m_logger.LogDebug("AVCTRL: Sent Response SetDWORDProperty " + SetDWORDPropertyPayloadPropertyName);
+
+                            break;
+                    }
+                }
+
+                #endregion ####################################################
             }
             // DRMRI Service Handle
             else if (dispatchServiceHandle == DRMRIServiceHandle) {
 
+                #region DRMRI Service #########################################
+
+                // RegisterTransmitterService Request
+                if (dispatchFunctionHandle == 0) {
+
+                    // Get RegisterTransmitterService Data
+                    int RegisterTransmitterServicePayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int RegisterTransmitterServiceChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    Guid RegisterTransmitterServiceClassID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+
+                    m_logger.LogDebug("AVCTRL: Request RegisterTransmitterService " + dispatchRequestHandle);
+
+                    // Initialise RegisterTransmitterService Response
+                    byte[] response = VChan.AVCTRL.RegisterTransmitterServiceResponse(
+                        GetByteSubArray(incomingBuff, 10, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+
+                    // Send the RegisterTransmitterService Response
+                    rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("AVCTRL: Sent Response RegisterTransmitterService " + dispatchRequestHandle);
+
+                }
+                // UnregisterTransmitterService Request
+                else if (dispatchFunctionHandle == 1) {
+
+                    // Get UnregisterTransmitterService Data
+                    int RegisterTransmitterServicePayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int RegisterTransmitterServiceChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    Guid RegisterTransmitterServiceClassID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+
+                    m_logger.LogDebug("AVCTRL: Request UnregisterTransmitterService " + dispatchRequestHandle);
+
+                    // Initialise UnregisterTransmitterService Response
+                    byte[] response = VChan.AVCTRL.UnregisterTransmitterServiceResponse(
+                        GetByteSubArray(incomingBuff, 10, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+
+                    // Send the UnregisterTransmitterService Response
+                    rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("AVCTRL: Sent Response UnregisterTransmitterService " + dispatchRequestHandle);
+
+                }
+                // InitiateRegistration Request
+                else if (dispatchFunctionHandle == 2) {
+
+                    // Get InitiateRegistration Data
+                    int InitiateRegistrationPayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int InitiateRegistrationChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+
+                    m_logger.LogDebug("AVCTRL: Request InitiateRegistration " + dispatchRequestHandle);
+
+                    // Initialise InitiateRegistration Response
+                    byte[] response = VChan.AVCTRL.InitiateRegistrationResponse(
+                        GetByteSubArray(incomingBuff, 10, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+
+                    // Send the InitiateRegistration Response
+                    rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("AVCTRL: Sent Response InitiateRegistration " + dispatchRequestHandle);
+
+                }
+
+                #endregion ####################################################
+
             }
             // DSMN Service Handle
             else if (dispatchServiceHandle == DSMNServiceHandle) {
-
-            }
-            // Service Handle = Created Service
-            else {
-
-                // Get the actual AVCTRL ITER from incoming bytes
-                avCtrlIter = incomingBuff[13];
-                // Set the Receive Action Type
-                ReceiveActionType actionType = ReceiveActionType.Unknown;
-
-                // Get byte count of incoming data
-                int byteCount = incomingBuff[25];
-                // Create byte array to hold incoming data
-                byte[] incomingData = new byte[byteCount];
-                // Create array to hold filtered data
-                byte[] filteredData = new byte[byteCount];
-                // Check if there is data to receive
-                if (byteCount > 0) {
-                    // Iterate through each expected byte of data
-                    for (int index = 0; index < byteCount; index++) {
-                        // Try and Catch Out of Bounds Exception
-                        try {
-                            // Add the expected data byte to the incoming data array
-                            incomingData[index] = incomingBuff[index + 28];
-                        } catch (IndexOutOfRangeException) {
-                            System.Diagnostics.Debug.WriteLine("outOfRange... " + (index + 28));
-                        }
-                    }
-
-                    // Check if this is a Data Request or Data Announce
-                    if (incomingData[0] == 0 && incomingData[1] == 0 && incomingData[2] == 0) {
-                        // Create array to hold filtered data
-                        filteredData = new byte[incomingData.Length - 4];
-                        // Get Data
-                        for (int index = 4; index < incomingData.Length; index++) {
-                            // Add this data segment to the filtered data array
-                            filteredData[index - 4] += incomingData[index];
-                        }
-
-                        // If this is a Data Request or Data Announce
-                        switch (incomingData[3]) {
-                            case 7:
-                                // Set Action to Boolean Request
-                                actionType = ReceiveActionType.BooleanRequest;
-                                // Break from Switch Case
-                                break;
-                            case 14:
-                                // Set Action to String Request
-                                actionType = ReceiveActionType.StringRequest;
-                                // Break from Switch Case
-                                break;
-                            case 90:
-                                // Set Action to RTSP Announce
-                                actionType = ReceiveActionType.RSTPUrl;
-                                // Break from Switch Case
-                                break;
-                        }
-                    }
-                }
-
-
-                // DEBUG PURPOSES ONLY
-                string incomingByteArray = "";
-                foreach (byte b in incomingData) {
-                    incomingByteArray += b.ToString("X2") + " ";
-                }
-                // DEBUG PURPOSES ONLY
-
-                // Set base filename for responses
-                string baseFileName = vChanRootDir + @"avctrl\";
-
-                // Initialise Response
-                byte[] response = null;
-
-                // Get the Request by the Request Type
-                if (actionType == ReceiveActionType.BooleanRequest) {
-
-                    // Hold count of clean data
-                    int cleanCount = filteredData.Length;
-                    // Get count of clean data
-                    for (int index = 0; index < filteredData.Length; index++) {
-                        // If the current index data is NULL
-                        if (filteredData[index] == 0) {
-                            // Set the clean data count to the index
-                            cleanCount = index;
-                            // Break from the loop
-                            break;
-                        }
-                    }
-
-                    // Create array to hold cleaned data
-                    byte[] cleanedData = new byte[cleanCount];
-                    // Get Data
-                    for (int index = 0; index < cleanedData.Length; index++) {
-                        // Add this data segment to the filtered data array
-                        cleanedData[index] += filteredData[index];
-                    }
-                    // Get the action data string from the cleaned data array
-                    string actionData = Encoding.ASCII.GetString(cleanedData);
-
-                    // Get the Response file
-                    response = File.ReadAllBytes(baseFileName + actionData.ToLower());
-
-
-                } else if (actionType == ReceiveActionType.StringRequest) {
-
-                    // Hold count of clean data
-                    int cleanCount = filteredData.Length;
-                    // Get count of clean data
-                    for (int index = 0; index < filteredData.Length; index++) {
-                        // If the current index data is NULL
-                        if (filteredData[index] == 0) {
-                            // Set the clean data count to the index
-                            cleanCount = index;
-                            // Break from the loop
-                            break;
-                        }
-                    }
-
-                    // Create array to hold cleaned data
-                    byte[] cleanedData = new byte[cleanCount];
-                    // Get Data
-                    for (int index = 0; index < cleanedData.Length; index++) {
-                        // Add this data segment to the filtered data array
-                        cleanedData[index] += filteredData[index];
-                    }
-                    // Get the action data string from the cleaned data array
-                    string actionData = Encoding.ASCII.GetString(cleanedData);
-
-                    if (avCtrlIter == 4) {
-                        // Get the Response file
-                        response = File.ReadAllBytes(baseFileName + actionData.ToLower());
-
-                        // We need to insert the remote host IP into our 4th iteration response.
-                        byte[] hostIp = Encoding.ASCII.GetBytes(SoftSledConfigManager.ReadConfig().RdpLoginHost);
-
-                        // Create temporary byte array to hold outgoing data
-                        byte[] temp = new byte[response.Length + hostIp.Length];
-                        // Iterate through each byte of data
-                        for (int index = 0; index < temp.Length; index++) {
-                            // If the index is less than the length of the file
-                            if (index < response.Length) {
-                                // Add the contents from the file
-                                temp[index] = response[index];
-                            } else {
-                                // Add the contents from the host IP address
-                                temp[index] = hostIp[index - response.Length];
-                            }
-                        }
-
-                        // Set the response
-                        response = temp;
-                        // Set the data byte length
-                        response[25] = Convert.ToByte(response[25] + hostIp.Length);
-
-                    } else {
-                        // Get the Response file
-                        response = File.ReadAllBytes(baseFileName + "5");
-                    }
-
-                } else if (actionType == ReceiveActionType.RSTPUrl) {
-
-                    // Get the Response file
-                    response = File.ReadAllBytes(baseFileName + "S_OK");
-
-                    // Hold count of clean data
-                    int cleanCount = filteredData.Length;
-                    // Get count of clean data
-                    for (int index = 0; index < filteredData.Length; index++) {
-                        // If the current index data is NULL
-                        if (filteredData[index] == 0) {
-                            // Set the clean data count to the index
-                            cleanCount = index;
-                            // Break from the loop
-                            break;
-                        }
-                    }
-
-                    // Create array to hold cleaned data
-                    byte[] cleanedData = new byte[cleanCount];
-                    // Get Data
-                    for (int index = 0; index < cleanedData.Length; index++) {
-                        // Add this data segment to the filtered data array
-                        cleanedData[index] += filteredData[index];
-                    }
-
-                    // Get the RTSP URL from cleaned data array
-                    rtspUrl = Encoding.ASCII.GetString(cleanedData);
-
-                    System.Diagnostics.Debug.WriteLine(rtspUrl);
-
-                    //RTSPClient client = new RTSPClient();
-                    //client.Connect(rtspUrl, RTSPClient.RTP_TRANSPORT.UDP);
-
-                    System.Diagnostics.Process.Start(@"C:\Users\Luke\Downloads\ffmpeg-4.4-full_build\ffmpeg-4.4-full_build\bin\ffplay.exe", rtspUrl);
-
-                    //axWindowsMediaPlayer1.URL = rtspUrl;
-                } else if (actionType == ReceiveActionType.Unknown) {
-                    if (avCtrlIter == 7) {
-                        response = File.ReadAllBytes(baseFileName + "7");
-                    } else {
-                        response = File.ReadAllBytes(baseFileName + "main");
-                    }
-                }
-
-                // Set the AVCTRL ITER within the Response
-                response[21] = Convert.ToByte(avCtrlIter);
-
-                string outgoingString = Encoding.ASCII.GetString(response);
-
-                // DEBUG PURPOSES ONLY
-                string byteArray = "";
-                foreach (byte b in response) {
-                    byteArray += b.ToString("X2") + " ";
-                }
-                // DEBUG PURPOSES ONLY
-
-                rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(response));
-                m_logger.LogDebug("RDP: Sent avctrl iteration " + avCtrlIter.ToString());
-
-                // Increment AvCtrlIter to indicate the current point in the process
-                avCtrlIter++;
-
-
 
             }
         }
@@ -731,10 +889,21 @@ namespace SoftSled {
             byte[] result = new byte[byteCount];
 
             for (int i = startPosition; i < startPosition + byteCount; i++) {
-                result[i - startPosition] = byteArray[i];
+                try {
+                    result[i - startPosition] = byteArray[i];
+                } catch (IndexOutOfRangeException) {
+
+                }
             }
 
             return result;
+        }
+
+        public static string GetByteArrayString(byte[] byteArray, int startPosition, int length) {
+
+            byte[] result = GetByteSubArray(byteArray, startPosition, length);
+
+            return Encoding.ASCII.GetString(result);
         }
 
         public static int Get4ByteInt(byte[] byteArray, int startPosition) {
@@ -746,6 +915,17 @@ namespace SoftSled {
             }
 
             return BitConverter.ToInt32(result, 0);
+        }
+
+        public static long Get8ByteInt(byte[] byteArray, int startPosition) {
+
+            byte[] result = GetByteSubArray(byteArray, startPosition, 8);
+
+            if (BitConverter.IsLittleEndian) {
+                Array.Reverse(result);
+            }
+
+            return BitConverter.ToInt64(result, 0);
         }
 
         public static int Get2ByteInt(byte[] byteArray, int startPosition) {
@@ -800,6 +980,46 @@ namespace SoftSled {
             // Return the created GUID
             return new Guid(result.ToArray());
         }
+
+        public static string GetMediaDuration(string URL) {
+
+            // Start the child process.
+            Process p = new Process();
+            // Redirect the output stream of the child process.
+            p.StartInfo.UseShellExecute = false;
+            p.StartInfo.RedirectStandardOutput = true;
+            p.StartInfo.FileName = "ffprobe.exe";
+            p.StartInfo.Arguments = $"-i {URL} -show_entries format=duration -v quiet -of csv=\"p = 0\"";
+            p.Start();
+            // Do not wait for the child process to exit before
+            // reading to the end of its redirected stream.
+            // p.WaitForExit();
+            // Read the output stream first and then wait.
+            string output = p.StandardOutput.ReadToEnd();
+            p.WaitForExit();
+
+            return output;
+        }
+
+        //public static string GetMediaPosition() {
+
+        //    // Start the child process.
+        //    Process p = new Process();
+        //    // Redirect the output stream of the child process.
+        //    p.StartInfo.UseShellExecute = false;
+        //    p.StartInfo.RedirectStandardOutput = true;
+        //    p.StartInfo.FileName = "ffprobe.exe";
+        //    p.StartInfo.Arguments = $"-i {URL} -show_entries format=duration -v quiet -of csv=\"p = 0\"";
+        //    p.Start();
+        //    // Do not wait for the child process to exit before
+        //    // reading to the end of its redirected stream.
+        //    // p.WaitForExit();
+        //    // Read the output stream first and then wait.
+        //    string output = p.StandardOutput.ReadToEnd();
+        //    p.WaitForExit();
+
+        //    return output;
+        //}
     }
 
     enum ReceiveActionType {

@@ -1,0 +1,35 @@
+CallingConvention
+dslrRequest = 1
+dslrResponse = 2
+
+
+RegisterMediaEventCallback Request
+0-3 Payload Size (4 bytes).
+4-5 ChildCount (2 bytes).
+6-9 Dispatcher Request CallingConvention (Request Type) (4 bytes).
+10-13 Dispatcher Request RequestHandle (AVCTRL iter) (4 bytes).
+14-17 Dispatcher ServiceHandle (4 bytes).
+18-21 Dispatcher FunctionHandle (4 bytes).
+	22-25 RegisterMediaEventCallback Request Payload Size (4 bytes).
+	26-27 RegisterMediaEventCallback Request ChildCount (2 bytes).
+	28-43 RegisterMediaEventCallback Request Payload ClassID (16 bytes).
+	44-59 RegisterMediaEventCallback Request Payload ServiceID (16 bytes).
+
+0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63
+00 00 00 10 00 01 00 00 00 01 00 00 00 0B 00 00 00 01 00 00 00 08 00 00 00 20 00 00 3A F7 50 F3 13 AD 40 D2 AE 66 9A E3 A0 B3 E2 93 6D 72 A6 15 CA 26 44 20 95 AC 4E 46 95 99 10 15
+
+RegisterMediaEventCallback Response
+0-3 Payload Size (4 bytes).
+4-5 ChildCount (2 bytes).
+6-9 Dispatcher Response CallingConvention (Request Type) (4 bytes).
+10-13 Dispatcher Response RequestHandle (AVCTRL iter) (4 bytes).
+	14-17 RegisterMediaEventCallback Response Payload Size (4 bytes).
+	18-19 RegisterMediaEventCallback Response ChildCount (2 bytes).
+	20-23 RegisterMediaEventCallback Response Payload Result (4 bytes).
+	24-27 RegisterMediaEventCallback Response Payload Cookie (4 bytes).
+
+0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63
+00 00 00 08 00 01 00 00 00 02 00 00 00 0B 00 00 00 08 00 00 00 00 00 00 00 00 39 8D
+
+Encapsulate 
+24 00 00 00 13 00 00 00

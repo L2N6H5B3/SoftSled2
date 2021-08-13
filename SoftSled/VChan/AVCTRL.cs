@@ -37,6 +37,14 @@ namespace SoftSled.VChan {
             return intBytes;
         }
 
+        private static byte[] GetInverse8ByteArrayFromLong(long longValue) {
+            byte[] longBytes = BitConverter.GetBytes(longValue);
+            if (BitConverter.IsLittleEndian) {
+                Array.Reverse(longBytes);
+            }
+            return longBytes;
+        }
+
         private static byte[] GetByteArrayFromInt(int intValue) {
             return BitConverter.GetBytes(intValue);
         }
@@ -140,6 +148,216 @@ namespace SoftSled.VChan {
 
         #region DMCT Functions ################################################
 
+        public static byte[] OpenMediaResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get OpenMedia Byte Arrays
+            byte[] OpenMediaChildCount = new byte[] { 0, 0 };
+            byte[] OpenMediaPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] OpenMediaPropertyPayloadSize = new byte[] { 0, 0, 0, 4 };
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add OpenMedia PayloadSize
+                .Concat(OpenMediaPropertyPayloadSize)
+                // Add OpenMedia ChildCount
+                .Concat(OpenMediaChildCount)
+                // Add OpenMedia Payload Result
+                .Concat(OpenMediaPayloadS_OK);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] StartResponse(byte[] dispatchRequestHandle, int grantedPlayRateInt) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get Start Byte Arrays
+            byte[] StartChildCount = new byte[] { 0, 0 };
+            byte[] StartPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] StartPayloadGrantedPlayRate = GetInverse4ByteArrayFromInt(grantedPlayRateInt);
+            byte[] StartPropertyPayloadSize = GetInverse4ByteArrayFromInt(
+                StartPayloadS_OK.Length +
+                StartPayloadGrantedPlayRate.Length
+            );
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add Start PayloadSize
+                .Concat(StartPropertyPayloadSize)
+                // Add Start ChildCount
+                .Concat(StartChildCount)
+                // Add Start Payload Result
+                .Concat(StartPayloadS_OK)
+                // Add Start Payload GrantedPlayRate
+                .Concat(StartPayloadGrantedPlayRate);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] GetDurationResponse(byte[] dispatchRequestHandle, long durationLong) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get GetDuration Byte Arrays
+            byte[] GetDurationChildCount = new byte[] { 0, 0 };
+            byte[] GetDurationPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] GetDurationPayloadDuration = GetInverse8ByteArrayFromLong(durationLong);
+            byte[] GetDurationPropertyPayloadSize = GetInverse4ByteArrayFromInt(
+                GetDurationPayloadS_OK.Length +
+                GetDurationPayloadDuration.Length
+            );
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add GetDuration PayloadSize
+                .Concat(GetDurationPropertyPayloadSize)
+                // Add GetDuration ChildCount
+                .Concat(GetDurationChildCount)
+                // Add GetDuration Payload Result
+                .Concat(GetDurationPayloadS_OK)
+                // Add GetDuration Payload Duration
+                .Concat(GetDurationPayloadDuration);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] GetPositionResponse(byte[] dispatchRequestHandle, long positionLong) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get GetPosition Byte Arrays
+            byte[] GetPositionChildCount = new byte[] { 0, 0 };
+            byte[] GetPositionPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] GetPositionPayloadPosition = GetInverse8ByteArrayFromLong(positionLong);
+            byte[] GetPositionPropertyPayloadSize = GetInverse4ByteArrayFromInt(
+                GetPositionPayloadS_OK.Length +
+                GetPositionPayloadPosition.Length
+            );
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add GetPosition PayloadSize
+                .Concat(GetPositionPropertyPayloadSize)
+                // Add GetPosition ChildCount
+                .Concat(GetPositionChildCount)
+                // Add GetPosition Payload Result
+                .Concat(GetPositionPayloadS_OK)
+                // Add GetPosition Payload Position
+                .Concat(GetPositionPayloadPosition);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] RegisterMediaEventCallbackResponse(byte[] dispatchRequestHandle, int cookieInt) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get RegisterMediaEventCallback Byte Arrays
+            byte[] RegisterMediaEventCallbackChildCount = new byte[] { 0, 0 };
+            byte[] RegisterMediaEventCallbackPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] RegisterMediaEventCallbackPayloadCookie = GetInverse4ByteArrayFromInt(cookieInt);
+            byte[] RegisterMediaEventCallbackPropertyPayloadSize = GetInverse4ByteArrayFromInt(
+                RegisterMediaEventCallbackPayloadS_OK.Length +
+                RegisterMediaEventCallbackPayloadCookie.Length
+            );
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add RegisterMediaEventCallback PayloadSize
+                .Concat(RegisterMediaEventCallbackPropertyPayloadSize)
+                // Add RegisterMediaEventCallback ChildCount
+                .Concat(RegisterMediaEventCallbackChildCount)
+                // Add RegisterMediaEventCallback Payload Result
+                .Concat(RegisterMediaEventCallbackPayloadS_OK)
+                // Add RegisterMediaEventCallback Payload Cookie
+                .Concat(RegisterMediaEventCallbackPayloadCookie);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
 
         #endregion ############################################################
 
@@ -160,8 +378,10 @@ namespace SoftSled.VChan {
             
             byte[] GetStringPropertyChildCount = new byte[] { 0, 0 };
             byte[] GetStringPropertyPayloadS_OK = new byte[] { 0, 0, 0, 0 };
-            byte[] GetStringPropertyPayloadLength = new byte[] { 0, 0, 0, 0 };
             byte[] GetStringPropertyPayloadPropertyValue = Encoding.ASCII.GetBytes(propertyValueString);
+            byte[] GetStringPropertyPayloadLength = GetInverse4ByteArrayFromInt(
+                GetStringPropertyPayloadPropertyValue.Length
+            );
             byte[] GetStringPropertyPayloadSize = GetInverse4ByteArrayFromInt(
                 GetStringPropertyPayloadS_OK.Length +
                 GetStringPropertyPayloadLength.Length +
@@ -195,11 +415,212 @@ namespace SoftSled.VChan {
             return response.ToArray();
         }
 
+        public static byte[] GetDWORDPropertyResponse(byte[] dispatchRequestHandle, int propertyValueInt) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get GetDWORDProperty Byte Arrays
+            byte[] GetDWORDPropertyChildCount = new byte[] { 0, 0 };
+            byte[] GetDWORDPropertyPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] GetDWORDPropertyPayloadPropertyValue = GetInverse4ByteArrayFromInt(propertyValueInt);
+            byte[] GetDWORDPropertyPayloadLength = GetInverse4ByteArrayFromInt(
+                GetDWORDPropertyPayloadPropertyValue.Length
+            );
+            byte[] GetDWORDPropertyPayloadSize = GetInverse4ByteArrayFromInt(
+                GetDWORDPropertyPayloadS_OK.Length +
+                GetDWORDPropertyPayloadLength.Length +
+                GetDWORDPropertyPayloadPropertyValue.Length
+            );
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add GetDWORDProperty PayloadSize
+                .Concat(GetDWORDPropertyPayloadSize)
+                // Add GetDWORDProperty ChildCount
+                .Concat(GetDWORDPropertyChildCount)
+                // Add GetDWORDProperty Payload Result
+                .Concat(GetDWORDPropertyPayloadS_OK)
+                // Add GetDWORDProperty Payload Length
+                .Concat(GetDWORDPropertyPayloadLength)
+                // Add GetDWORDProperty Payload PropertyValue
+                .Concat(GetDWORDPropertyPayloadPropertyValue);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] SetDWORDPropertyResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get SetDWORDProperty Byte Arrays
+            byte[] SetDWORDPropertyChildCount = new byte[] { 0, 0 };
+            byte[] SetDWORDPropertyPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] SetDWORDPropertyPayloadSize = new byte[] { 0, 0, 0, 4 };
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add SetDWORDProperty PayloadSize
+                .Concat(SetDWORDPropertyPayloadSize)
+                // Add SetDWORDProperty ChildCount
+                .Concat(SetDWORDPropertyChildCount)
+                // Add SetDWORDProperty Payload Result
+                .Concat(SetDWORDPropertyPayloadS_OK);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
         #endregion ############################################################
 
 
         #region DRMRI Functions ###############################################
 
+        public static byte[] RegisterTransmitterServiceResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get CreateService Byte Arrays
+            byte[] RegisterTransmitterServicePayloadSize = new byte[] { 0, 0, 0, 4 };
+            byte[] RegisterTransmitterServiceChildCount = new byte[] { 0, 0 };
+            byte[] RegisterTransmitterServicePayloadS_OK = new byte[] { 0, 0, 0, 0 };
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add RegisterTransmitterService PayloadSize
+                .Concat(RegisterTransmitterServicePayloadSize)
+                // Add RegisterTransmitterService ChildCount
+                .Concat(RegisterTransmitterServiceChildCount)
+                // Add RegisterTransmitterService Payload S_OK
+                .Concat(RegisterTransmitterServicePayloadS_OK);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] UnregisterTransmitterServiceResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get CreateService Byte Arrays
+            byte[] UnregisterTransmitterServicePayloadSize = new byte[] { 0, 0, 0, 4 };
+            byte[] UnregisterTransmitterServiceChildCount = new byte[] { 0, 0 };
+            byte[] UnregisterTransmitterServicePayloadS_OK = new byte[] { 0, 0, 0, 0 };
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add UnregisterTransmitterService PayloadSize
+                .Concat(UnregisterTransmitterServicePayloadSize)
+                // Add UnregisterTransmitterService ChildCount
+                .Concat(UnregisterTransmitterServiceChildCount)
+                // Add UnregisterTransmitterService Payload S_OK
+                .Concat(UnregisterTransmitterServicePayloadS_OK);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] InitiateRegistrationResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get CreateService Byte Arrays
+            byte[] RegisterTransmitterServicePayloadSize = new byte[] { 0, 0, 0, 4 };
+            byte[] RegisterTransmitterServiceChildCount = new byte[] { 0, 0 };
+            byte[] RegisterTransmitterServicePayloadS_OK = new byte[] { 0, 0, 0, 0 };
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add RegisterTransmitterService PayloadSize
+                .Concat(RegisterTransmitterServicePayloadSize)
+                // Add RegisterTransmitterService ChildCount
+                .Concat(RegisterTransmitterServiceChildCount)
+                // Add RegisterTransmitterService Payload S_OK
+                .Concat(RegisterTransmitterServicePayloadS_OK);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
 
         #endregion ############################################################
 
