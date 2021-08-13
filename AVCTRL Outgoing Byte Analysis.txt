@@ -1,7 +1,8 @@
 NOTES:
-Position 0-21 do not change.
-Position 21 indicates current iteration, mirrors incoming AVCTRL ITER.
-
+0-21 do not change.
+21 indicates current iteration, mirrors incoming AVCTRL ITER.
+22-24 do not change (3 bytes).
+25 unknown.
 
 
 RAW HEX:

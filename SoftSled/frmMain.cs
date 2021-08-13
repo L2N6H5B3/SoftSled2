@@ -1,20 +1,14 @@
+using Rtsp;
+using SoftSled.Components;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Drawing;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using System.Windows.Forms;
-using SoftSled.Components;
-using System.IO;
-using System.Threading;
-using System.Reflection;
-using System.Net.Sockets;
-using System.Security.Cryptography;
-using System.Net;
-using Rtsp;
-using SoftSled.Components.RTSP;
-using WMPLib;
 
 namespace SoftSled {
     public partial class FrmMain : Form {
@@ -31,6 +25,11 @@ namespace SoftSled {
         private bool rdpInitialised = false;
         private string rtspUrl;
         private TcpClient rtspClient;
+
+        private int DMCTServiceHandle;
+        private int DSPAServiceHandle;
+        private int DRMRIServiceHandle;
+        private int DSMNServiceHandle;
 
         private string vChanRootDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\VChan\\";
 
@@ -149,7 +148,6 @@ namespace SoftSled {
         #endregion
 
 
-
         #region RDPClient ActiveX Events ######################################
 
         private void InitialiseRdpClient() {
@@ -226,6 +224,7 @@ namespace SoftSled {
             SetStatus("Remote Desktop Connected! Waiting for Media Center...");
         }
         #endregion
+
 
         #region VirtualChannel Handlers
         private void HandleMcxSessIncoming(string data) {
@@ -341,112 +340,338 @@ namespace SoftSled {
 
         private void HandleAvctrlIncoming(string data) {
 
+            // Convert the incoming data to bytes
             byte[] incomingBuff = Encoding.Unicode.GetBytes(data);
 
-            // Get byte count of incoming data
-            int byteCount = incomingBuff[25];
-            // Create byte array to hold incoming data
-            byte[] incomingData = new byte[byteCount];
-            // Check if there is data to receive
-            if (byteCount > 0) {
-                // Iterate through each expected byte of data
-                for (int index = 0; index < byteCount; index++) {
-                    // Try and Catch Out of Bounds Exception
-                    try {
-                        // Add the expected data byte to the incoming data array
-                        incomingData[index] = incomingBuff[index + 28];
-                    } catch (IndexOutOfRangeException) {
-                        System.Diagnostics.Debug.WriteLine("outOfRange... " + (index + 28));
+
+            // Get DSLR Dispatcher Data
+            int dispatchPayloadSize = Get4ByteInt(incomingBuff, 0);
+            int dispatchChildCount = Get2ByteInt(incomingBuff, 4);
+            bool dispatchIsTwoWay = (incomingBuff[6] + incomingBuff[7] + incomingBuff[8] + incomingBuff[9]) == 1 ? true : false;
+            int dispatchRequestHandle = Get4ByteInt(incomingBuff, 10);
+            int dispatchServiceHandle = Get4ByteInt(incomingBuff, 14);
+            int dispatchFunctionHandle = Get4ByteInt(incomingBuff, 18);
+
+            // Service Handle = Dispenser
+            if (dispatchServiceHandle == 0) {
+
+                // CreateService Response
+                if (dispatchFunctionHandle == 0) {
+
+                    // Get CreateService Data
+                    int createServicePayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int createServiceChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    Guid createServiceClassID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                    Guid createServiceServiceID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
+                    int createServiceServiceHandle = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16 + 16);
+
+                    m_logger.LogDebug("AVCTRL: Request CreateService " + createServiceServiceHandle);
+
+                    switch (createServiceClassID.ToString()) {
+                        // DMCT ClassID
+                        case "18c7c708-c529-4639-a846-5847f31b1e83":
+                            DMCTServiceHandle = createServiceServiceHandle;
+                            break;
+                        // DSPA ClassID
+                        case "077bfd3a-7028-4913-bd14-53963dc37754":
+                            DSPAServiceHandle = createServiceServiceHandle;
+                            break;
+                        // DRMRI ClassID
+                        case "b707af79-ca99-42d1-8c60-469fe112001e":
+                            DRMRIServiceHandle = createServiceServiceHandle;
+                            break;
+                        // DSMN ClassID
+                        case "a30dc60e-1e2c-44f2-bfd1-17e51c0cdf19":
+                            DSMNServiceHandle = createServiceServiceHandle;
+                            break;
+                    }
+
+                    // Initialise CreateService Response
+                    byte[] response = VChan.AVCTRL.CreateServiceResponse(
+                        GetByteSubArray(incomingBuff, 10, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+
+                    // Send the CreateService Response
+                    rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("AVCTRL: Sent Response CreateService " + dispatchRequestHandle);
+                }
+                // DeleteService Response
+                else if (dispatchFunctionHandle == 2) {
+
+                    // Get DeleteService Data
+                    int deleteServicePayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int deleteServiceChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    Guid deleteServiceClassID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                    Guid deleteServiceServiceID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
+                    int deleteServiceServiceHandle = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16 + 16);
+
+                    m_logger.LogDebug("AVCTRL: Request DeleteService " + deleteServiceServiceHandle);
+
+
+
+
+                    // Send the DeleteService Response
+                    //rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(response));
+
+                    m_logger.LogDebug("AVCTRL: Sent Response DeleteService " + dispatchRequestHandle);
+                }
+                // Error Response
+                else {
+                    m_logger.LogDebug("AVCTRL: Request Error " + dispatchRequestHandle);
+
+
+                }
+            }
+            // DMCT Service Handle
+            else if (dispatchServiceHandle == DMCTServiceHandle) {
+
+            }
+            // DSPA Service Handle
+            else if (dispatchServiceHandle == DSPAServiceHandle) {
+                // Get DSPA Service Data
+                int dspaServicePayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                int dspaServiceChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                Guid createServiceClassID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                Guid createServiceServiceID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
+                int createServiceServiceHandle = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16 + 16);
+
+                m_logger.LogDebug("AVCTRL: Request CreateService " + createServiceServiceHandle);
+            }
+            // DRMRI Service Handle
+            else if (dispatchServiceHandle == DRMRIServiceHandle) {
+
+            }
+            // DSMN Service Handle
+            else if (dispatchServiceHandle == DSMNServiceHandle) {
+
+            }
+            // Service Handle = Created Service
+            else {
+
+                // Get the actual AVCTRL ITER from incoming bytes
+                avCtrlIter = incomingBuff[13];
+                // Set the Receive Action Type
+                ReceiveActionType actionType = ReceiveActionType.Unknown;
+
+                // Get byte count of incoming data
+                int byteCount = incomingBuff[25];
+                // Create byte array to hold incoming data
+                byte[] incomingData = new byte[byteCount];
+                // Create array to hold filtered data
+                byte[] filteredData = new byte[byteCount];
+                // Check if there is data to receive
+                if (byteCount > 0) {
+                    // Iterate through each expected byte of data
+                    for (int index = 0; index < byteCount; index++) {
+                        // Try and Catch Out of Bounds Exception
+                        try {
+                            // Add the expected data byte to the incoming data array
+                            incomingData[index] = incomingBuff[index + 28];
+                        } catch (IndexOutOfRangeException) {
+                            System.Diagnostics.Debug.WriteLine("outOfRange... " + (index + 28));
+                        }
+                    }
+
+                    // Check if this is a Data Request or Data Announce
+                    if (incomingData[0] == 0 && incomingData[1] == 0 && incomingData[2] == 0) {
+                        // Create array to hold filtered data
+                        filteredData = new byte[incomingData.Length - 4];
+                        // Get Data
+                        for (int index = 4; index < incomingData.Length; index++) {
+                            // Add this data segment to the filtered data array
+                            filteredData[index - 4] += incomingData[index];
+                        }
+
+                        // If this is a Data Request or Data Announce
+                        switch (incomingData[3]) {
+                            case 7:
+                                // Set Action to Boolean Request
+                                actionType = ReceiveActionType.BooleanRequest;
+                                // Break from Switch Case
+                                break;
+                            case 14:
+                                // Set Action to String Request
+                                actionType = ReceiveActionType.StringRequest;
+                                // Break from Switch Case
+                                break;
+                            case 90:
+                                // Set Action to RTSP Announce
+                                actionType = ReceiveActionType.RSTPUrl;
+                                // Break from Switch Case
+                                break;
+                        }
                     }
                 }
-            }
 
-            string incomingByteArray = "";
-            foreach (byte b in incomingData) {
-                incomingByteArray += b.ToString("X2") + " ";
-            }
 
-            string incomingString = Encoding.ASCII.GetString(incomingData);
+                // DEBUG PURPOSES ONLY
+                string incomingByteArray = "";
+                foreach (byte b in incomingData) {
+                    incomingByteArray += b.ToString("X2") + " ";
+                }
+                // DEBUG PURPOSES ONLY
 
-            // Get the actual AVCTRL ITER from incoming bytes
-            avCtrlIter = incomingBuff[13];
+                // Set base filename for responses
+                string baseFileName = vChanRootDir + @"avctrl\";
 
-            string fileName = vChanRootDir + "avctrl\\av r ";
+                // Initialise Response
+                byte[] response = null;
 
-            if (avCtrlIter == 4) {
-                fileName += "4";
-            } else if (avCtrlIter == 5) {
-                fileName += "5";
-            } else if (avCtrlIter == 6) {
-                fileName += "6";
-            } else if (avCtrlIter == 7) {
-                fileName += "7";
-            }
-            //else if (avCtrlIter == 8) {
-            //    fileName += "8";
-            //} else if (avCtrlIter == 9) {
-            //    fileName += "9";
-            //} else if (avCtrlIter == 10) {
-            //    fileName += "10";
-            //} else if (avCtrlIter == 11) {
-            //    fileName += "11";
-            //} else if (avCtrlIter == 12) {
-            //    fileName += "12";
-            //} else if (avCtrlIter == 13) {
-            //    fileName += "13";
-            //} else if (avCtrlIter == 14) {
-            //    fileName += "14";
-            //} else if (avCtrlIter == 15) {
-            //    fileName += "15";
-            //}
-            else {
-                fileName += "main";
-            }
+                // Get the Request by the Request Type
+                if (actionType == ReceiveActionType.BooleanRequest) {
 
-            if (avCtrlIter == 8) {
-                byte[] rtspBuff = new byte[85];
+                    // Hold count of clean data
+                    int cleanCount = filteredData.Length;
+                    // Get count of clean data
+                    for (int index = 0; index < filteredData.Length; index++) {
+                        // If the current index data is NULL
+                        if (filteredData[index] == 0) {
+                            // Set the clean data count to the index
+                            cleanCount = index;
+                            // Break from the loop
+                            break;
+                        }
+                    }
 
-                // Get the RTSP URL
-                rtspUrl = Encoding.ASCII.GetString(Encoding.Unicode.GetBytes(data), 32, 97).Trim();
+                    // Create array to hold cleaned data
+                    byte[] cleanedData = new byte[cleanCount];
+                    // Get Data
+                    for (int index = 0; index < cleanedData.Length; index++) {
+                        // Add this data segment to the filtered data array
+                        cleanedData[index] += filteredData[index];
+                    }
+                    // Get the action data string from the cleaned data array
+                    string actionData = Encoding.ASCII.GetString(cleanedData);
 
-                System.Diagnostics.Debug.WriteLine(rtspUrl);
+                    // Get the Response file
+                    response = File.ReadAllBytes(baseFileName + actionData.ToLower());
 
-                //RTSPClient client = new RTSPClient();
-                //client.Connect(rtspUrl, RTSPClient.RTP_TRANSPORT.UDP);
 
-                System.Diagnostics.Process.Start(@"C:\Users\Luke\Downloads\ffmpeg-4.4-full_build\ffmpeg-4.4-full_build\bin\ffplay.exe", rtspUrl);
+                } else if (actionType == ReceiveActionType.StringRequest) {
 
-                //axWindowsMediaPlayer1.URL = rtspUrl;
-            }
+                    // Hold count of clean data
+                    int cleanCount = filteredData.Length;
+                    // Get count of clean data
+                    for (int index = 0; index < filteredData.Length; index++) {
+                        // If the current index data is NULL
+                        if (filteredData[index] == 0) {
+                            // Set the clean data count to the index
+                            cleanCount = index;
+                            // Break from the loop
+                            break;
+                        }
+                    }
 
-            byte[] file = File.ReadAllBytes(fileName);
-            file[21] = Convert.ToByte(avCtrlIter);
+                    // Create array to hold cleaned data
+                    byte[] cleanedData = new byte[cleanCount];
+                    // Get Data
+                    for (int index = 0; index < cleanedData.Length; index++) {
+                        // Add this data segment to the filtered data array
+                        cleanedData[index] += filteredData[index];
+                    }
+                    // Get the action data string from the cleaned data array
+                    string actionData = Encoding.ASCII.GetString(cleanedData);
 
-            string outgoingString = Encoding.ASCII.GetString(file);
+                    if (avCtrlIter == 4) {
+                        // Get the Response file
+                        response = File.ReadAllBytes(baseFileName + actionData.ToLower());
 
-            string byteArray = "";
+                        // We need to insert the remote host IP into our 4th iteration response.
+                        byte[] hostIp = Encoding.ASCII.GetBytes(SoftSledConfigManager.ReadConfig().RdpLoginHost);
 
-            foreach (byte b in file) {
-                byteArray += b.ToString("X2") + " ";
-            }
+                        // Create temporary byte array to hold outgoing data
+                        byte[] temp = new byte[response.Length + hostIp.Length];
+                        // Iterate through each byte of data
+                        for (int index = 0; index < temp.Length; index++) {
+                            // If the index is less than the length of the file
+                            if (index < response.Length) {
+                                // Add the contents from the file
+                                temp[index] = response[index];
+                            } else {
+                                // Add the contents from the host IP address
+                                temp[index] = hostIp[index - response.Length];
+                            }
+                        }
 
-            if (avCtrlIter == 4) {
-                // We need to insert the remote host IP into our 4th iteration response.
-                byte[] hostIp = Encoding.ASCII.GetBytes(SoftSledConfigManager.ReadConfig().RdpLoginHost);
+                        // Set the response
+                        response = temp;
+                        // Set the data byte length
+                        response[25] = Convert.ToByte(response[25] + hostIp.Length);
 
-                int count = 0;
-                for (int i = 36; i < file.Length; i++) {
-                    file[i] = hostIp[count];
-                    count++;
+                    } else {
+                        // Get the Response file
+                        response = File.ReadAllBytes(baseFileName + "5");
+                    }
+
+                } else if (actionType == ReceiveActionType.RSTPUrl) {
+
+                    // Get the Response file
+                    response = File.ReadAllBytes(baseFileName + "S_OK");
+
+                    // Hold count of clean data
+                    int cleanCount = filteredData.Length;
+                    // Get count of clean data
+                    for (int index = 0; index < filteredData.Length; index++) {
+                        // If the current index data is NULL
+                        if (filteredData[index] == 0) {
+                            // Set the clean data count to the index
+                            cleanCount = index;
+                            // Break from the loop
+                            break;
+                        }
+                    }
+
+                    // Create array to hold cleaned data
+                    byte[] cleanedData = new byte[cleanCount];
+                    // Get Data
+                    for (int index = 0; index < cleanedData.Length; index++) {
+                        // Add this data segment to the filtered data array
+                        cleanedData[index] += filteredData[index];
+                    }
+
+                    // Get the RTSP URL from cleaned data array
+                    rtspUrl = Encoding.ASCII.GetString(cleanedData);
+
+                    System.Diagnostics.Debug.WriteLine(rtspUrl);
+
+                    //RTSPClient client = new RTSPClient();
+                    //client.Connect(rtspUrl, RTSPClient.RTP_TRANSPORT.UDP);
+
+                    System.Diagnostics.Process.Start(@"C:\Users\Luke\Downloads\ffmpeg-4.4-full_build\ffmpeg-4.4-full_build\bin\ffplay.exe", rtspUrl);
+
+                    //axWindowsMediaPlayer1.URL = rtspUrl;
+                } else if (actionType == ReceiveActionType.Unknown) {
+                    if (avCtrlIter == 7) {
+                        response = File.ReadAllBytes(baseFileName + "7");
+                    } else {
+                        response = File.ReadAllBytes(baseFileName + "main");
+                    }
                 }
 
+                // Set the AVCTRL ITER within the Response
+                response[21] = Convert.ToByte(avCtrlIter);
+
+                string outgoingString = Encoding.ASCII.GetString(response);
+
+                // DEBUG PURPOSES ONLY
+                string byteArray = "";
+                foreach (byte b in response) {
+                    byteArray += b.ToString("X2") + " ";
+                }
+                // DEBUG PURPOSES ONLY
+
+                rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(response));
+                m_logger.LogDebug("RDP: Sent avctrl iteration " + avCtrlIter.ToString());
+
+                // Increment AvCtrlIter to indicate the current point in the process
+                avCtrlIter++;
+
+
+
             }
-
-            rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(file));
-            m_logger.LogDebug("RDP: Sent avctrl iteration " + avCtrlIter.ToString());
-
-            // Increment AvCtrlIter to indicate the current point in the process
-            avCtrlIter++;
         }
 
 
@@ -489,6 +714,7 @@ namespace SoftSled {
 
         #endregion ############################################################
 
+
         delegate void dTextWrite(string message);
         void SetStatus(string message) {
             Invoke(new dTextWrite(delegate (string ex) {
@@ -496,9 +722,90 @@ namespace SoftSled {
                 if (!lbGenStatus.Visible)
                     lbGenStatus.Visible = true;
             }), message);
-
-
         }
 
+
+
+        public static byte[] GetByteSubArray(byte[] byteArray, int startPosition, int byteCount) {
+
+            byte[] result = new byte[byteCount];
+
+            for (int i = startPosition; i < startPosition + byteCount; i++) {
+                result[i - startPosition] = byteArray[i];
+            }
+
+            return result;
+        }
+
+        public static int Get4ByteInt(byte[] byteArray, int startPosition) {
+
+            byte[] result = GetByteSubArray(byteArray, startPosition, 4);
+
+            if (BitConverter.IsLittleEndian) {
+                Array.Reverse(result);
+            }
+
+            return BitConverter.ToInt32(result, 0);
+        }
+
+        public static int Get2ByteInt(byte[] byteArray, int startPosition) {
+
+            byte[] result = GetByteSubArray(byteArray, startPosition, 2);
+
+            if (BitConverter.IsLittleEndian) {
+                Array.Reverse(result);
+            }
+
+            return BitConverter.ToInt16(result, 0);
+        }
+
+        public static Guid GetGuid(byte[] byteArray, int startPosition) {
+
+            int byteCount = 16;
+
+            byte[] data1 = new byte[4];
+            byte[] data2 = new byte[2];
+            byte[] data3 = new byte[2];
+            byte[] data4 = new byte[8];
+
+            for (int i = startPosition; i < startPosition + byteCount; i++) {
+                if (i - startPosition < 4) {
+                    data1[i - startPosition] = byteArray[i];
+                } else if (i - startPosition < 6) {
+                    data2[i - startPosition - 4] = byteArray[i];
+                } else if (i - startPosition < 8) {
+                    data3[i - startPosition - 6] = byteArray[i];
+                } else {
+                    data4[i - startPosition - 8] = byteArray[i];
+                }
+            }
+
+            if (BitConverter.IsLittleEndian) {
+                Array.Reverse(data1);
+                Array.Reverse(data2);
+                Array.Reverse(data3);
+            }
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate Array
+            IEnumerable<byte> result = data1
+                // Add Data 2
+                .Concat(data2)
+                // Add Data 3
+                .Concat(data3)
+                // Add Data 4
+                .Concat(data4);
+
+            // Return the created GUID
+            return new Guid(result.ToArray());
+        }
+    }
+
+    enum ReceiveActionType {
+        Unknown,
+        BooleanRequest,
+        StringRequest,
+        RSTPUrl
     }
 }

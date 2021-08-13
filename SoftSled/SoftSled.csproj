@@ -146,6 +146,7 @@
     <Compile Include="RTSP\Sdp\SdpTimeZone.cs" />
     <Compile Include="RTSP\Sdp\Timing.cs" />
     <Compile Include="RTSP\UdpSocket.cs" />
+    <Compile Include="VChan\AVCTRL.cs" />
     <Compile Include="XBox360Device.cs" />
     <EmbeddedResource Include="Form1.resx">
       <SubType>Designer</SubType>
@@ -191,22 +192,31 @@
     </None>
     <None Include="Tools\IntelDigitalHomeDeviceCodeWizard.zip" />
     <None Include="Tools\IntelToolsForUPnPTechnology_v2.zip" />
-    <None Include="VChan\avctrl\av r 4">
+    <None Include="VChan\avctrl\CreateService S_OK">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Include="VChan\avctrl\av r 5">
+    <None Include="VChan\avctrl\rtsp">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Include="VChan\avctrl\av r 6">
+    <None Include="VChan\avctrl\ismuted">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Include="VChan\avctrl\av r 7">
+    <None Include="VChan\avctrl\xsphostaddress">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Include="VChan\avctrl\av r 8">
+    <None Include="VChan\avctrl\5">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Include="VChan\avctrl\av r main">
+    <None Include="VChan\avctrl\6">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Include="VChan\avctrl\7">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Include="VChan\avctrl\8">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Include="VChan\avctrl\S_OK">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
     <None Include="VChan\devcaps\Disabled">
