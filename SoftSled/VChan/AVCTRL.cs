@@ -186,6 +186,44 @@ namespace SoftSled.VChan {
             return response.ToArray();
         }
 
+        public static byte[] CloseMediaResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get CloseMedia Byte Arrays
+            byte[] CloseMediaChildCount = new byte[] { 0, 0 };
+            byte[] CloseMediaPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] CloseMediaPropertyPayloadSize = new byte[] { 0, 0, 0, 4 };
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add CloseMedia PayloadSize
+                .Concat(CloseMediaPropertyPayloadSize)
+                // Add CloseMedia ChildCount
+                .Concat(CloseMediaChildCount)
+                // Add CloseMedia Payload Result
+                .Concat(CloseMediaPayloadS_OK);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
         public static byte[] StartResponse(byte[] dispatchRequestHandle, int grantedPlayRateInt) {
 
             // Get Dispatch Byte Arrays

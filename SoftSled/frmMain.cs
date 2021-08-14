@@ -541,7 +541,21 @@ namespace SoftSled {
                 // CloseMedia Request
                 else if (dispatchFunctionHandle == 1) {
 
-                    System.Diagnostics.Debug.WriteLine("CloseMedia Request not implemented");
+                    m_logger.LogDebug("AVCTRL: Request CloseMedia " + dispatchRequestHandle);
+
+                    _mp.Pause();
+
+                    // Initialise CloseMedia Response
+                    byte[] response = VChan.AVCTRL.CloseMediaResponse(
+                        GetByteSubArray(incomingBuff, 10, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+
+                    // Send the CloseMedia Response
+                    rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("AVCTRL: Sent Response CloseMedia " + dispatchRequestHandle);
 
                 }
                 // Start Request
