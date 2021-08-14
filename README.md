@@ -4,15 +4,18 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 ![Screenshot of the Dev Shell](https://raw.githubusercontent.com/L2N6H5B3/SoftSled2/master/Screenshot.jpg)
 
 ## Current Progress
-* Audio RTSP communication is almost complete, running into issues with RequestHandle reaching 215 and jumping immediately to 65023.
-* Video RTSP communication is started, RTSP playback not working perhaps because of DRM license failure.
+* Audio RTSP communication is close to complete, running into issues with RequestHandle reaching 215 and jumping immediately to 65023.
+* Video RTSP communication is mostly done, RTSP playback not working perhaps because of DRM license failure.
 * Working out RDP devcaps functionality, some new discoveries made..
 
 ## Future Requirements
-* Create toolbar overlay (for mouse support)
-* Create RC6 control forwarder (through avctrl perhaps?)
+* Create Extender Certificate
+* Create RC6 remote control forwarder
 * Create full-screen interface
-* Create settings areas (optional, would be used for dedicated device)
+
+
+## Possible Features to Add
+* Create settings areas (perhaps could be used for dedicated device)
     * WLAN
     * Display
     * Audio
