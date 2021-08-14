@@ -344,7 +344,7 @@ namespace SoftSled {
                 disabledCaps.Add("BI"); // BIG - Is remote UI renderer big-endian?
                 disabledCaps.Add("RU"); // RUI - Is remote UI rendering supported?
                 disabledCaps.Add("SD"); // SDM - Is a screen data mode workaround needed?
-                disabledCaps.Add("TB"); // TBA - Is a Toolbar allowed?
+                //disabledCaps.Add("TB"); // TBA - Is a Toolbar allowed?
                 disabledCaps.Add("SY"); // SYN - Is transfer to a device allowed?
                 disabledCaps.Add("AP"); // APP - Is tray applet allowed?
                 disabledCaps.Add("TV"); // TVS - Is a TV skin used?
@@ -567,17 +567,30 @@ namespace SoftSled {
                     // Encapsulate the Response (Doesn't seem to work without this?)
                     byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
 
-                    // Send the SetDWORDProperty Response
+                    // Send the Start Response
                     rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
                     m_logger.LogDebug("AVCTRL: Sent Response Start " + dispatchRequestHandle);
-
 
                 }
                 // Pause Request
                 else if (dispatchFunctionHandle == 3) {
 
-                    System.Diagnostics.Debug.WriteLine("Pause Request not implemented");
+                    m_logger.LogDebug("AVCTRL: Request Pause " + dispatchRequestHandle);
+
+                    _mp.Pause();
+
+                    // Initialise Pause Response
+                    byte[] response = VChan.AVCTRL.PauseResponse(
+                        GetByteSubArray(incomingBuff, 10, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+
+                    // Send the Pause Response
+                    rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("AVCTRL: Sent Response Pause " + dispatchRequestHandle);
 
                 }
                 // GetDuration Request
