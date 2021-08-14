@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 
 namespace SoftSled.VChan {
-    class AVCTRL {
+    class DSLR {
 
         #region Shared Functions ##############################################
 
@@ -27,6 +27,44 @@ namespace SoftSled.VChan {
 
             // Return the created byte array
             return encapsulated.ToArray();
+        }
+
+        public static byte[] GenericResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get Byte Arrays
+            byte[] ChildCount = new byte[] { 0, 0 };
+            byte[] PayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] PropertyPayloadSize = new byte[] { 0, 0, 0, 4 };
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add PayloadSize
+                .Concat(PropertyPayloadSize)
+                // Add ChildCount
+                .Concat(ChildCount)
+                // Add Payload Result
+                .Concat(PayloadS_OK);
+
+            // Return the created byte array
+            return response.ToArray();
         }
 
         private static byte[] GetInverse4ByteArrayFromInt(int intValue) {
@@ -300,6 +338,44 @@ namespace SoftSled.VChan {
                 .Concat(PauseChildCount)
                 // Add Pause Payload Result
                 .Concat(PausePayloadS_OK);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] StopResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get Stop Byte Arrays
+            byte[] StopChildCount = new byte[] { 0, 0 };
+            byte[] StopPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] StopPropertyPayloadSize = new byte[] { 0, 0, 0, 4 };
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add Stop PayloadSize
+                .Concat(StopPropertyPayloadSize)
+                // Add Stop ChildCount
+                .Concat(StopChildCount)
+                // Add Stop Payload Result
+                .Concat(StopPayloadS_OK);
 
             // Return the created byte array
             return response.ToArray();
@@ -641,6 +717,7 @@ namespace SoftSled.VChan {
             byte[] RegisterTransmitterServicePayloadSize = new byte[] { 0, 0, 0, 4 };
             byte[] RegisterTransmitterServiceChildCount = new byte[] { 0, 0 };
             byte[] RegisterTransmitterServicePayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] RegisterTransmitterServicePayloadDSLR_E_FAIL = new byte[] { 136, 23, 64, 5 };
 
             // Create Base Byte Array
             byte[] baseArray = new byte[0];
@@ -658,8 +735,8 @@ namespace SoftSled.VChan {
                 .Concat(RegisterTransmitterServicePayloadSize)
                 // Add RegisterTransmitterService ChildCount
                 .Concat(RegisterTransmitterServiceChildCount)
-                // Add RegisterTransmitterService Payload S_OK
-                .Concat(RegisterTransmitterServicePayloadS_OK);
+                // Add RegisterTransmitterService Payload
+                .Concat(RegisterTransmitterServicePayloadDSLR_E_FAIL);
 
             // Return the created byte array
             return response.ToArray();
@@ -746,7 +823,167 @@ namespace SoftSled.VChan {
 
         #region DSMN Functions ################################################
 
+        public static byte[] ShellDisconnectResponse(byte[] dispatchRequestHandle) {
 
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get ShellDisconnect Byte Arrays
+            byte[] ShellDisconnectChildCount = new byte[] { 0, 0 };
+            byte[] ShellDisconnectPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] ShellDisconnectPropertyPayloadSize = new byte[] { 0, 0, 0, 4 };
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add ShellDisconnect PayloadSize
+                .Concat(ShellDisconnectPropertyPayloadSize)
+                // Add ShellDisconnect ChildCount
+                .Concat(ShellDisconnectChildCount)
+                // Add ShellDisconnect Payload Result
+                .Concat(ShellDisconnectPayloadS_OK);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] ShellIsActiveResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get ShellIsActive Byte Arrays
+            byte[] ShellIsActiveChildCount = new byte[] { 0, 0 };
+            byte[] ShellIsActivePayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] ShellIsActivePropertyPayloadSize = new byte[] { 0, 0, 0, 4 };
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add ShellIsActive PayloadSize
+                .Concat(ShellIsActivePropertyPayloadSize)
+                // Add ShellIsActive ChildCount
+                .Concat(ShellIsActiveChildCount)
+                // Add ShellIsActive Payload Result
+                .Concat(ShellIsActivePayloadS_OK);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] HeartbeatResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get Heartbeat Byte Arrays
+            byte[] HeartbeatChildCount = new byte[] { 0, 0 };
+            byte[] HeartbeatPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] HeartbeatPropertyPayloadSize = new byte[] { 0, 0, 0, 4 };
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add Heartbeat PayloadSize
+                .Concat(HeartbeatPropertyPayloadSize)
+                // Add Heartbeat ChildCount
+                .Concat(HeartbeatChildCount)
+                // Add Heartbeat Payload Result
+                .Concat(HeartbeatPayloadS_OK);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] GetQWaveSinkInfoResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get GetQWaveSinkInfo Byte Arrays
+            byte[] GetQWaveSinkInfoChildCount = new byte[] { 0, 0 };
+            byte[] GetQWaveSinkInfoPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] GetQWaveSinkInfoPayloadIsSinkRunning = new byte[] { 0, 0, 0, 0 };
+            byte[] GetQWaveSinkInfoPayloadPortNumber = GetInverse4ByteArrayFromInt(2177);
+            byte[] GetQWaveSinkInfoPropertyPayloadSize = GetInverse4ByteArrayFromInt(
+                GetQWaveSinkInfoPayloadS_OK.Length +
+                GetQWaveSinkInfoPayloadIsSinkRunning.Length +
+                GetQWaveSinkInfoPayloadPortNumber.Length
+            );
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add GetQWaveSinkInfo PayloadSize
+                .Concat(GetQWaveSinkInfoPropertyPayloadSize)
+                // Add GetQWaveSinkInfo ChildCount
+                .Concat(GetQWaveSinkInfoChildCount)
+                // Add GetQWaveSinkInfo Payload Result
+                .Concat(GetQWaveSinkInfoPayloadS_OK)
+                // Add GetQWaveSinkInfo Payload IsSinkRunning
+                .Concat(GetQWaveSinkInfoPayloadIsSinkRunning)
+                // Add GetQWaveSinkInfo Payload PortNumber
+                .Concat(GetQWaveSinkInfoPayloadPortNumber);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
 
         #endregion ############################################################
     }

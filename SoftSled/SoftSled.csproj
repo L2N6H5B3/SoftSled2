@@ -93,6 +93,7 @@
     </Reference>
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
+    <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Components\AudioHandler.cs">
@@ -167,7 +168,7 @@
     <Compile Include="RTSP\Sdp\SdpTimeZone.cs" />
     <Compile Include="RTSP\Sdp\Timing.cs" />
     <Compile Include="RTSP\UdpSocket.cs" />
-    <Compile Include="VChan\AVCTRL.cs" />
+    <Compile Include="VChan\DSLR.cs" />
     <Compile Include="XBox360Device.cs" />
     <EmbeddedResource Include="Form1.resx">
       <SubType>Designer</SubType>

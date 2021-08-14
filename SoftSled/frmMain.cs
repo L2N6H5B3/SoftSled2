@@ -11,6 +11,7 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using System.Windows.Forms;
+using System.Windows.Threading;
 
 namespace SoftSled {
     public partial class FrmMain : Form {
@@ -18,9 +19,8 @@ namespace SoftSled {
         private Logger m_logger;
         private ExtenderDevice m_device;
         private McxVirtualChannelHandler m_channelHandler;
-        private int devCapsIter = 1;
-        private int mcxSessIter = 1;
-        private int avCtrlIter = 1;
+        private int devCapsIter;
+        private int mcxSessIter;
         private bool isConnecting = false;
         readonly FileStream writer;
         private static RtspListener rtsp_client;
@@ -28,13 +28,14 @@ namespace SoftSled {
         private string rtspUrl;
         private TcpClient rtspClient;
 
+        // McxSess Virtual Channel
+        private int DSMNServiceHandle;
+
+        // AvCtrl Virtual Channel
         private int DMCTServiceHandle;
         private int DSPAServiceHandle;
         private int DRMRIServiceHandle;
-        private int DSMNServiceHandle;
-
         private int DMCTRegisterMediaEventCallbackCookie;
-        private int DMCTOpenMediaRequestedPlayRate;
         private string DMCTOpenMediaURL;
 
         private Media currentMedia;
@@ -74,6 +75,10 @@ namespace SoftSled {
 
 
         private void btnExtenderConnect_Click(object sender, EventArgs e) {
+
+            // Reset Iteration Variables
+            devCapsIter = 1;
+            mcxSessIter = 1;
 
             IPAddress localhost = null;
             var host = Dns.GetHostEntry(Dns.GetHostName());
@@ -123,10 +128,10 @@ namespace SoftSled {
             SetStatus("Remote Desktop Connecting...");
             isConnecting = true;
 
-            TcpListener tcp1 = new TcpListener(localhost, 3776);
-            TcpListener tcp2 = new TcpListener(localhost, 3777);
-            TcpListener tcp3 = new TcpListener(localhost, 3778);
-            TcpListener tcp4 = new TcpListener(localhost, 2177);
+            //TcpListener tcp1 = new TcpListener(localhost, 3776);
+            //TcpListener tcp2 = new TcpListener(localhost, 3777);
+            //TcpListener tcp3 = new TcpListener(localhost, 3778);
+            //TcpListener tcp4 = new TcpListener(localhost, 2177);
 
             //new Thread(new ParameterizedThreadStart(Listen)).Start(tcp1);
             //new Thread(new ParameterizedThreadStart(Listen)).Start(tcp2);
@@ -163,7 +168,7 @@ namespace SoftSled {
             m_logger.IsLoggingDebug = true;
         }
 
-        #endregion
+        #endregion ############################################################
 
 
         #region RDPClient ActiveX Events ######################################
@@ -230,6 +235,11 @@ namespace SoftSled {
 
         }
         void RdpClient_OnDisconnected(object sender, AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEvent e) {
+
+            // Reset Iteration Variables
+            devCapsIter = 1;
+            mcxSessIter = 1;
+
             m_logger.LogInfo("RDP: Disconnected");
             if (isConnecting == true) {
                 SetStatus("Forcibly disconnected from Remote Desktop Host");
@@ -246,38 +256,267 @@ namespace SoftSled {
 
         #region VirtualChannel Handlers
         private void HandleMcxSessIncoming(string data) {
-            byte[] vChanResponse = File.ReadAllBytes(vChanRootDir + "McxSess\\Response");
 
-            if (mcxSessIter == 1)
-                SetStatus("Starting Experience...");
+            // Convert the incoming data to bytes
+            byte[] incomingBuff = Encoding.Unicode.GetBytes(data);
 
-            if (mcxSessIter == 5) {
-                // The fifth iteration is length of only 31 bytes.
-                // We need to strip one byte as the stock file is 32 bytes.
-                byte[] newBuff = new byte[31];
-                Array.Copy(vChanResponse, newBuff, 31);
+            // Get DSLR Dispatcher Data
+            int dispatchPayloadSize = Get4ByteInt(incomingBuff, 0);
+            int dispatchChildCount = Get2ByteInt(incomingBuff, 4);
+            bool dispatchIsTwoWay = (incomingBuff[6] + incomingBuff[7] + incomingBuff[8] + incomingBuff[9]) == 1 ? true : false;
+            int dispatchRequestHandle = Get4ByteInt(incomingBuff, 10);
+            int dispatchServiceHandle = Get4ByteInt(incomingBuff, 14);
+            int dispatchFunctionHandle = Get4ByteInt(incomingBuff, 18);
 
-                vChanResponse = newBuff;
-
-                // on 5th iteration, 18th byte should be 1, on every other instance, 0
-                // No idea why this is so!
-                // The stock file has a value of 0 for this byte.
-                vChanResponse[18] = Convert.ToByte(1);
-
-                // We take this iteration as the point when the MC experience is visible inside RDP.
-                SetStatus("");
-                panOverlay.Visible = false;
-                rdpClient.Visible = true;
-                m_logger.LogInfo("Experience started");
+            // DEBUG PURPOSES ONLY
+            string incomingByteArray = "";
+            foreach (byte b in incomingBuff) {
+                incomingByteArray += b.ToString("X2") + " ";
             }
+            // DEBUG PURPOSES ONLY
 
-            // Set sequencing integer
-            vChanResponse[21] = Convert.ToByte(mcxSessIter);
+            // Service Handle = Dispenser
+            if (dispatchServiceHandle == 0) {
 
-            rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(vChanResponse));
-            m_logger.LogInfo("RDP: Sent McxSess iteration " + mcxSessIter.ToString());
+                #region DSLR Service ##########################################
 
-            mcxSessIter++;
+                // CreateService Request
+                if (dispatchFunctionHandle == 0) {
+
+                    // Get CreateService Data
+                    int createServicePayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int createServiceChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    Guid createServiceClassID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                    Guid createServiceServiceID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
+                    int createServiceServiceHandle = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16 + 16);
+
+                    m_logger.LogDebug("MCXSESS: Request CreateService " + createServiceServiceHandle);
+
+                    switch (createServiceClassID.ToString()) {
+                        // DSMN ClassID
+                        case "a30dc60e-1e2c-44f2-bfd1-17e51c0cdf19":
+                            DSMNServiceHandle = createServiceServiceHandle;
+                            // Set the Status to Starting Experience
+                            SetStatus("Starting Experience...");
+                            break;
+                    }
+
+                    // Initialise CreateService Response
+                    byte[] response = VChan.DSLR.CreateServiceResponse(
+                        GetByteSubArray(incomingBuff, 10, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
+
+                    // Send the CreateService Response
+                    rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("MCXSESS: Sent Response CreateService " + dispatchRequestHandle);
+                }
+                // DeleteService Request
+                else if (dispatchFunctionHandle == 2) {
+
+                    // Get DeleteService Data
+                    int deleteServicePayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int deleteServiceChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    Guid deleteServiceClassID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                    Guid deleteServiceServiceID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
+                    int deleteServiceServiceHandle = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16 + 16);
+
+                    m_logger.LogDebug("MCXSESS: Request DeleteService " + deleteServiceServiceHandle);
+
+
+                    // Send the DeleteService Response
+                    //rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(response));
+
+                    m_logger.LogDebug("MCXSESS: Sent Response DeleteService " + dispatchRequestHandle);
+                }
+                // Unknown Request
+                else {
+
+                    System.Diagnostics.Debug.WriteLine($"Unknown DSLR Request {dispatchFunctionHandle} not implemented");
+
+                }
+
+                #endregion ####################################################
+
+            }
+            // DSMN Service Handle
+            else if (dispatchServiceHandle == DSMNServiceHandle) {
+
+                #region DSMN Service ##########################################
+
+                // ShellDisconnect Request
+                if (dispatchFunctionHandle == 0) {
+
+                    m_logger.LogDebug("MCXSESS: Request ShellDisconnect " + dispatchServiceHandle);
+
+                    // Get ShellDisconnect Data
+                    int ShellDisconnectPayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int ShellDisconnectChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    int ShellDisconnectPayloadDisconnectReason = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+
+                    // Set status according to Disconnect Reason
+                    switch (ShellDisconnectPayloadDisconnectReason) {
+                        case 0:
+                            SetStatus("Disconnected: Shell exited unexpectedly");
+                            break;
+                        case 1:
+                            SetStatus("Disconnected: Unknown error");
+                            break;
+                        case 2:
+                            SetStatus("Disconnected: Initialisation error");
+                            break;
+                        case 3:
+                            SetStatus("Disconnected: Shell is not responding");
+                            break;
+                        case 4:
+                            SetStatus("Disconnected: Unauthorised UI in the session");
+                            break;
+                        case 5:
+                            SetStatus("Disconnected: User is not allowed - the remote device was disabled on the host");
+                            break;
+                        case 6:
+                            SetStatus("Disconnected: Certificate is invalid");
+                            break;
+                        case 7:
+                            SetStatus("Disconnected: Shell cannot be started");
+                            break;
+                        case 8:
+                            SetStatus("Disconnected: Shell monitor thread cannot be started");
+                            break;
+                        case 9:
+                            SetStatus("Disconnected: Message window cannot be created");
+                            break;
+                        case 10:
+                            SetStatus("Disconnected: Terminal Services session cannot be started");
+                            break;
+                        case 11:
+                            SetStatus("Disconnected: Plug and Play (PNP) failed");
+                            break;
+                        case 12:
+                            SetStatus("Disconnected: Certificate is not trusted");
+                            break;
+                        case 13:
+                            SetStatus("Disconnected: Product regstration is expired");
+                            break;
+                        case 14:
+                            SetStatus("Disconnected: PC gone to Sleep / Shut Down");
+                            break;
+                        case 15:
+                            SetStatus("Disconnected: User closed the session");
+                            break;
+                    }
+
+                    // Hide RDP as WMC is not Running
+                    panOverlay.Visible = true;
+                    rdpClient.Visible = false;
+                    m_logger.LogInfo("Experience closed");
+
+                    // Initialise ShellDisconnect Response
+                    byte[] response = VChan.DSLR.ShellDisconnectResponse(
+                        GetByteSubArray(incomingBuff, 10, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
+
+                    // Send the ShellDisconnect Response
+                    rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("MCXSESS: Sent Response ShellDisconnect " + dispatchServiceHandle);
+
+                }
+                // ShellIsActive Request
+                else if (dispatchFunctionHandle == 2) {
+
+                    m_logger.LogDebug("MCXSESS: Request ShellIsActive " + dispatchServiceHandle);
+
+                    SetStatus("");
+                    // Show RDP as WMC is Started
+                    panOverlay.Visible = false;
+                    rdpClient.Visible = true;
+
+                    // Initialise ShellIsActive Response
+                    byte[] response = VChan.DSLR.ShellIsActiveResponse(
+                        GetByteSubArray(incomingBuff, 10, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
+
+                    // Send the ShellIsActive Response
+                    rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("MCXSESS: Sent Response ShellIsActive " + dispatchServiceHandle);
+
+                }
+                // Heartbeat Request
+                else if (dispatchFunctionHandle == 1) {
+
+                    m_logger.LogDebug("MCXSESS: Request Heartbeat " + dispatchServiceHandle);
+
+                    // Get Heartbeat Data
+                    int HeartbeatPayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int HeartbeatChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    int HeartbeatPayloadScreensaverFlag = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+
+                    // Initialise Heartbeat Response
+                    byte[] response = VChan.DSLR.HeartbeatResponse(
+                        GetByteSubArray(incomingBuff, 10, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
+
+                    // Send the Heartbeat Response
+                    rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("MCXSESS: Sent Response Heartbeat " + dispatchServiceHandle);
+
+                }
+                // GetQWaveSinkInfo Request
+                else if (dispatchFunctionHandle == 3) {
+
+                    m_logger.LogDebug("MCXSESS: Request GetQWaveSinkInfo " + dispatchServiceHandle);
+
+                    // Get GetQWaveSinkInfo Data
+                    int GetQWaveSinkInfoPayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int GetQWaveSinkInfoChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    int GetQWaveSinkInfoPayloadScreensaverFlag = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+
+                    // Initialise GetQWaveSinkInfo Response
+                    byte[] response = VChan.DSLR.GetQWaveSinkInfoResponse(
+                        GetByteSubArray(incomingBuff, 10, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
+
+                    // Send the GetQWaveSinkInfo Response
+                    rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("MCXSESS: Sent Response GetQWaveSinkInfo " + dispatchServiceHandle);
+
+                }
+                // Unknown Request
+                else {
+
+                    System.Diagnostics.Debug.WriteLine($"Unknown DSMN Request {dispatchFunctionHandle} not implemented");
+
+                    // Initialise Generic Response
+                    byte[] response = VChan.DSLR.GenericResponse(
+                        GetByteSubArray(incomingBuff, 10, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
+
+                    // Send the Generic Response
+                    rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("MCXSESS: Sent Generic Response " + dispatchFunctionHandle);
+
+                }
+
+                #endregion ####################################################
+
+            }
         }
 
         private void HandleDevCapsIncoming(AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
@@ -291,15 +530,6 @@ namespace SoftSled {
                 byte[] vChanIncomingBuff = Encoding.Unicode.GetBytes(e.data);
                 string capChar1 = Encoding.ASCII.GetString(vChanIncomingBuff, vChanIncomingBuff.Length - 2, 1).ToUpper();
                 string capChar2 = Encoding.ASCII.GetString(vChanIncomingBuff, vChanIncomingBuff.Length - 1, 1).ToUpper();
-                string test = Encoding.ASCII.GetString(vChanIncomingBuff, 0, vChanIncomingBuff.Length);
-                //string capChar3 = Encoding.ASCII.GetString(vChanIncomingBuff, vChanIncomingBuff.Length, 1).ToUpper();
-
-                // DEBUG PURPOSES ONLY
-                string byteArray = "";
-                foreach (byte b in vChanIncomingBuff) {
-                    byteArray += b.ToString("X2") + " ";
-                }
-                // DEBUG PURPOSES ONLY
 
                 m_logger.LogDebug("Asked for capability: " + capChar1 + capChar2);
 
@@ -348,7 +578,7 @@ namespace SoftSled {
                 disabledCaps.Add("SY"); // SYN - Is transfer to a device allowed?
                 disabledCaps.Add("AP"); // APP - Is tray applet allowed?
                 disabledCaps.Add("TV"); // TVS - Is a TV skin used?
-                //disabledCaps.Add("SO"); // SOU - Is UI sound supported?
+                disabledCaps.Add("SO"); // SOU - Is UI sound supported?
                 //disabledCaps.Add("VID"); // VID - Is video allowed?
                 disabledCaps.Add("W3"); // W32 - Is Win32 content allowed?
                 disabledCaps.Add("WI"); // WIN - Is window mode allowed?
@@ -393,18 +623,10 @@ namespace SoftSled {
             byte[] dispatchRequestHandleArray = GetByteSubArray(incomingBuff, 10, 4);
 
             
-
-            // DEBUG PURPOSES ONLY
-            string incomingByteArray = "";
-            foreach (byte b in incomingBuff) {
-                incomingByteArray += b.ToString("X2") + " ";
-            }
             // DEBUG PURPOSES ONLY
             Debug.WriteLine("");
             Debug.WriteLine("--------------------");
             Debug.WriteLine($"AVCTRL ITER RECEIVED: {dispatchRequestHandle}");
-            Debug.WriteLine($"AVCTRL ITER ACTUAL:   {avCtrlIter}");
-            Debug.WriteLine($"AVCTRL DATA RECEIVED: {incomingByteArray}");
             Debug.WriteLine($"AVCTRL ITER BYTES RECEIVED: {dispatchRequestHandleArray[0]} {dispatchRequestHandleArray[1]} {dispatchRequestHandleArray[2]} {dispatchRequestHandleArray[3]}");
             Debug.WriteLine($"ServiceHandle: {dispatchServiceHandle}");
             Debug.WriteLine($"FunctionHandle: {dispatchFunctionHandle}");
@@ -453,11 +675,11 @@ namespace SoftSled {
                     }
 
                     // Initialise CreateService Response
-                    byte[] response = VChan.AVCTRL.CreateServiceResponse(
+                    byte[] response = VChan.DSLR.CreateServiceResponse(
                         GetByteSubArray(incomingBuff, 10, 4)
                     );
                     // Encapsulate the Response (Doesn't seem to work without this?)
-                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
 
                     // Send the CreateService Response
                     rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
@@ -519,11 +741,11 @@ namespace SoftSled {
                     currentMedia.Parse();
 
                     // Initialise OpenMedia Response
-                    byte[] response = VChan.AVCTRL.OpenMediaResponse(
+                    byte[] response = VChan.DSLR.OpenMediaResponse(
                         GetByteSubArray(incomingBuff, 10, 4)
                     );
                     // Encapsulate the Response (Doesn't seem to work without this?)
-                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
 
                     // DEBUG PURPOSES ONLY
                     string byteArray = "";
@@ -546,11 +768,11 @@ namespace SoftSled {
                     _mp.Pause();
 
                     // Initialise CloseMedia Response
-                    byte[] response = VChan.AVCTRL.CloseMediaResponse(
+                    byte[] response = VChan.DSLR.CloseMediaResponse(
                         GetByteSubArray(incomingBuff, 10, 4)
                     );
                     // Encapsulate the Response (Doesn't seem to work without this?)
-                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
 
                     // Send the CloseMedia Response
                     rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
@@ -574,12 +796,12 @@ namespace SoftSled {
                     _mp.Play(currentMedia);
 
                     // Initialise Start Response
-                    byte[] response = VChan.AVCTRL.StartResponse(
+                    byte[] response = VChan.DSLR.StartResponse(
                         GetByteSubArray(incomingBuff, 10, 4),
                         StartPayloadRequestedPlayRate
                     );
                     // Encapsulate the Response (Doesn't seem to work without this?)
-                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
 
                     // Send the Start Response
                     rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
@@ -595,16 +817,36 @@ namespace SoftSled {
                     _mp.Pause();
 
                     // Initialise Pause Response
-                    byte[] response = VChan.AVCTRL.PauseResponse(
+                    byte[] response = VChan.DSLR.PauseResponse(
                         GetByteSubArray(incomingBuff, 10, 4)
                     );
                     // Encapsulate the Response (Doesn't seem to work without this?)
-                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
 
                     // Send the Pause Response
                     rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
                     m_logger.LogDebug("AVCTRL: Sent Response Pause " + dispatchRequestHandle);
+
+                }
+                // Stop Request
+                else if (dispatchFunctionHandle == 3) {
+
+                    m_logger.LogDebug("AVCTRL: Request Stop " + dispatchRequestHandle);
+
+                    _mp.Stop();
+
+                    // Initialise Stop Response
+                    byte[] response = VChan.DSLR.StopResponse(
+                        GetByteSubArray(incomingBuff, 10, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
+
+                    // Send the Stop Response
+                    rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+
+                    m_logger.LogDebug("AVCTRL: Sent Response Stop " + dispatchRequestHandle);
 
                 }
                 // GetDuration Request
@@ -615,12 +857,12 @@ namespace SoftSled {
                     long durationLongMili = Convert.ToInt64(currentMedia.Duration / 10);
 
                     // Initialise GetDuration Response
-                    byte[] response = VChan.AVCTRL.GetDurationResponse(
+                    byte[] response = VChan.DSLR.GetDurationResponse(
                         GetByteSubArray(incomingBuff, 10, 4),
                         durationLongMili
                     );
                     // Encapsulate the Response (Doesn't seem to work without this?)
-                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
 
                     // Send the GetDuration Response
                     rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
@@ -635,35 +877,19 @@ namespace SoftSled {
 
                     long positionLongMili = Convert.ToInt64(_mp.Time / 10);
 
-                    Debug.WriteLine($"Position Before: {_mp.Time}");
                     Debug.WriteLine($"Position After:  {positionLongMili}");
 
                     // Initialise GetPosition Response
-                    byte[] response = VChan.AVCTRL.GetPositionResponse(
-                        avCtrlIter,
+                    byte[] response = VChan.DSLR.GetPositionResponse(
+                        GetByteSubArray(incomingBuff, 10, 4),
                         positionLongMili
                     );
                     // Encapsulate the Response (Doesn't seem to work without this?)
-                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
-
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
                     // Send the GetPosition Response
                     rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                    Debug.WriteLine($"AVCTRL ITER SENT: {avCtrlIter}");
-                    Debug.WriteLine($"AVCTRL ITER BYTES SENT: {GetByteSubArray(incomingBuff, 10, 4)[0]} {GetByteSubArray(incomingBuff, 10, 4)[1]} {GetByteSubArray(incomingBuff, 10, 4)[2]} {GetByteSubArray(incomingBuff, 10, 4)[3]}");
-
-                    // DEBUG PURPOSES ONLY
-                    string byteArray = "";
-                    foreach (byte b in response) {
-                        byteArray += b.ToString("X2") + " ";
-                    }
-                    // DEBUG PURPOSES ONLY
-
-                    Debug.WriteLine($"AVCTRL DATA SENT: {byteArray}");
-
-
-                    m_logger.LogDebug("AVCTRL: Sent Response GetPosition " + 0);
-
+                    m_logger.LogDebug("AVCTRL: Sent Response GetPosition " + dispatchRequestHandle);
                 }
                 // RegisterMediaEventCallback Request
                 else if (dispatchFunctionHandle == 8) {
@@ -679,12 +905,12 @@ namespace SoftSled {
                     DMCTRegisterMediaEventCallbackCookie = 14733;
 
                     // Initialise RegisterMediaEventCallback Response
-                    byte[] response = VChan.AVCTRL.RegisterMediaEventCallbackResponse(
+                    byte[] response = VChan.DSLR.RegisterMediaEventCallbackResponse(
                         GetByteSubArray(incomingBuff, 10, 4),
                         DMCTRegisterMediaEventCallbackCookie
                     );
                     // Encapsulate the Response (Doesn't seem to work without this?)
-                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
 
                     // Send the RegisterMediaEventCallback Response
                     rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
@@ -729,12 +955,12 @@ namespace SoftSled {
                             m_logger.LogDebug("AVCTRL: Request GetStringProperty " + GetStringPropertyPayloadPropertyName);
 
                             // Initialise GetStringProperty Response
-                            byte[] response = VChan.AVCTRL.GetStringPropertyResponse(
+                            byte[] response = VChan.DSLR.GetStringPropertyResponse(
                                 GetByteSubArray(incomingBuff, 10, 4),
                                 SoftSledConfigManager.ReadConfig().RdpLoginHost
                             );
                             // Encapsulate the Response (Doesn't seem to work without this?)
-                            byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+                            byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
 
                             // Send the GetStringProperty Response
                             rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
@@ -759,12 +985,12 @@ namespace SoftSled {
                             m_logger.LogDebug("AVCTRL: Request GetDWORDProperty " + GetDWORDPropertyPayloadPropertyName);
 
                             // Initialise GetDWORDProperty Response
-                            byte[] isMutedResponse = VChan.AVCTRL.GetDWORDPropertyResponse(
+                            byte[] isMutedResponse = VChan.DSLR.GetDWORDPropertyResponse(
                                 GetByteSubArray(incomingBuff, 10, 4),
                                 0
                             );
                             // Encapsulate the Response (Doesn't seem to work without this?)
-                            byte[] encapsulatedIsMutedResponse = VChan.AVCTRL.Encapsulate(isMutedResponse);
+                            byte[] encapsulatedIsMutedResponse = VChan.DSLR.Encapsulate(isMutedResponse);
 
                             // Send the GetDWORDProperty Response
                             rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedIsMutedResponse));
@@ -777,12 +1003,12 @@ namespace SoftSled {
                             m_logger.LogDebug("AVCTRL: Request GetDWORDProperty " + GetDWORDPropertyPayloadPropertyName);
 
                             // Initialise GetDWORDProperty Response
-                            byte[] volumeResponse = VChan.AVCTRL.GetDWORDPropertyResponse(
+                            byte[] volumeResponse = VChan.DSLR.GetDWORDPropertyResponse(
                                 GetByteSubArray(incomingBuff, 10, 4),
                                 65535
                             );
                             // Encapsulate the Response (Doesn't seem to work without this?)
-                            byte[] encapsulatedVolumeResponse = VChan.AVCTRL.Encapsulate(volumeResponse);
+                            byte[] encapsulatedVolumeResponse = VChan.DSLR.Encapsulate(volumeResponse);
 
                             // Send the GetDWORDProperty Response
                             rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedVolumeResponse));
@@ -808,11 +1034,11 @@ namespace SoftSled {
                             m_logger.LogDebug("AVCTRL: Request SetDWORDProperty " + SetDWORDPropertyPayloadPropertyName);
 
                             // Initialise SetDWORDProperty Response
-                            byte[] response = VChan.AVCTRL.SetDWORDPropertyResponse(
+                            byte[] response = VChan.DSLR.SetDWORDPropertyResponse(
                                 GetByteSubArray(incomingBuff, 10, 4)
                             );
                             // Encapsulate the Response (Doesn't seem to work without this?)
-                            byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+                            byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
 
                             // Send the SetDWORDProperty Response
                             rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
@@ -848,11 +1074,11 @@ namespace SoftSled {
                     m_logger.LogDebug("AVCTRL: Request RegisterTransmitterService " + dispatchRequestHandle);
 
                     // Initialise RegisterTransmitterService Response
-                    byte[] response = VChan.AVCTRL.RegisterTransmitterServiceResponse(
+                    byte[] response = VChan.DSLR.RegisterTransmitterServiceResponse(
                         GetByteSubArray(incomingBuff, 10, 4)
                     );
                     // Encapsulate the Response (Doesn't seem to work without this?)
-                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
 
                     // Send the RegisterTransmitterService Response
                     rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
@@ -871,11 +1097,11 @@ namespace SoftSled {
                     m_logger.LogDebug("AVCTRL: Request UnregisterTransmitterService " + dispatchRequestHandle);
 
                     // Initialise UnregisterTransmitterService Response
-                    byte[] response = VChan.AVCTRL.UnregisterTransmitterServiceResponse(
+                    byte[] response = VChan.DSLR.UnregisterTransmitterServiceResponse(
                         GetByteSubArray(incomingBuff, 10, 4)
                     );
                     // Encapsulate the Response (Doesn't seem to work without this?)
-                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
 
                     // Send the UnregisterTransmitterService Response
                     rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
@@ -893,11 +1119,11 @@ namespace SoftSled {
                     m_logger.LogDebug("AVCTRL: Request InitiateRegistration " + dispatchRequestHandle);
 
                     // Initialise InitiateRegistration Response
-                    byte[] response = VChan.AVCTRL.InitiateRegistrationResponse(
+                    byte[] response = VChan.DSLR.InitiateRegistrationResponse(
                         GetByteSubArray(incomingBuff, 10, 4)
                     );
                     // Encapsulate the Response (Doesn't seem to work without this?)
-                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+                    byte[] encapsulatedResponse = VChan.DSLR.Encapsulate(response);
 
                     // Send the InitiateRegistration Response
                     rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
@@ -925,8 +1151,6 @@ namespace SoftSled {
                 System.Diagnostics.Debug.WriteLine($"Unknown {dispatchServiceHandle} Request {dispatchFunctionHandle} not implemented");
 
             }
-
-            avCtrlIter++;
         }
 
 
@@ -964,7 +1188,6 @@ namespace SoftSled {
         }
 
         private void button1_Click_1(object sender, EventArgs e) {
-            avCtrlIter = 1;
         }
 
         #endregion ############################################################
@@ -1077,46 +1300,6 @@ namespace SoftSled {
             // Return the created GUID
             return new Guid(result.ToArray());
         }
-
-        public static string GetMediaDuration(string URL) {
-
-            // Start the child process.
-            Process p = new Process();
-            // Redirect the output stream of the child process.
-            p.StartInfo.UseShellExecute = false;
-            p.StartInfo.RedirectStandardOutput = true;
-            p.StartInfo.FileName = "ffprobe.exe";
-            p.StartInfo.Arguments = $"-i {URL} -show_entries format=duration -v quiet -of csv=\"p = 0\"";
-            p.Start();
-            // Do not wait for the child process to exit before
-            // reading to the end of its redirected stream.
-            // p.WaitForExit();
-            // Read the output stream first and then wait.
-            string output = p.StandardOutput.ReadToEnd();
-            p.WaitForExit();
-
-            return output;
-        }
-
-        //public static string GetMediaPosition() {
-
-        //    // Start the child process.
-        //    Process p = new Process();
-        //    // Redirect the output stream of the child process.
-        //    p.StartInfo.UseShellExecute = false;
-        //    p.StartInfo.RedirectStandardOutput = true;
-        //    p.StartInfo.FileName = "ffprobe.exe";
-        //    p.StartInfo.Arguments = $"-i {URL} -show_entries format=duration -v quiet -of csv=\"p = 0\"";
-        //    p.Start();
-        //    // Do not wait for the child process to exit before
-        //    // reading to the end of its redirected stream.
-        //    // p.WaitForExit();
-        //    // Read the output stream first and then wait.
-        //    string output = p.StandardOutput.ReadToEnd();
-        //    p.WaitForExit();
-
-        //    return output;
-        //}
     }
 
     enum ReceiveActionType {
