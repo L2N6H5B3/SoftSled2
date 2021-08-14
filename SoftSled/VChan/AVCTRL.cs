@@ -229,6 +229,44 @@ namespace SoftSled.VChan {
             return response.ToArray();
         }
 
+        public static byte[] PauseResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get Pause Byte Arrays
+            byte[] PauseChildCount = new byte[] { 0, 0 };
+            byte[] PausePayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] PausePropertyPayloadSize = new byte[] { 0, 0, 0, 4 };
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add Pause PayloadSize
+                .Concat(PausePropertyPayloadSize)
+                // Add Pause ChildCount
+                .Concat(PauseChildCount)
+                // Add Pause Payload Result
+                .Concat(PausePayloadS_OK);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
         public static byte[] GetDurationResponse(byte[] dispatchRequestHandle, long durationLong) {
 
             // Get Dispatch Byte Arrays
@@ -302,6 +340,49 @@ namespace SoftSled.VChan {
                 .Concat(dispatchCallingConvention)
                 // Add Dispatch RequestHandle
                 .Concat(dispatchRequestHandle)
+                // Add GetPosition PayloadSize
+                .Concat(GetPositionPropertyPayloadSize)
+                // Add GetPosition ChildCount
+                .Concat(GetPositionChildCount)
+                // Add GetPosition Payload Result
+                .Concat(GetPositionPayloadS_OK)
+                // Add GetPosition Payload Position
+                .Concat(GetPositionPayloadPosition);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] GetPositionResponse(int avCtrlIter, long positionLong) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                4
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get GetPosition Byte Arrays
+            byte[] GetPositionChildCount = new byte[] { 0, 0 };
+            byte[] GetPositionPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] GetPositionPayloadPosition = GetInverse8ByteArrayFromLong(positionLong);
+            byte[] GetPositionPropertyPayloadSize = GetInverse4ByteArrayFromInt(
+                GetPositionPayloadS_OK.Length +
+                GetPositionPayloadPosition.Length
+            );
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(GetInverse4ByteArrayFromInt(avCtrlIter))
                 // Add GetPosition PayloadSize
                 .Concat(GetPositionPropertyPayloadSize)
                 // Add GetPosition ChildCount
@@ -626,6 +707,7 @@ namespace SoftSled.VChan {
 
 
         #region DSMN Functions ################################################
+
 
 
         #endregion ############################################################

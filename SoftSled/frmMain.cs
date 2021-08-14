@@ -199,7 +199,7 @@ namespace SoftSled {
         void RdpClient_OnChannelReceivedData(object sender, AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
             try {
                 if (chkInVchanDebug.Checked && e.chanName != "McxSess")
-                    //m_logger.LogInfo("RDP: Received data on channel " + e.chanName);
+                    m_logger.LogInfo("RDP: Received data on channel " + e.chanName);
 
 
                 if (e.chanName == "devcaps") {
@@ -275,7 +275,7 @@ namespace SoftSled {
             vChanResponse[21] = Convert.ToByte(mcxSessIter);
 
             rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(vChanResponse));
-            //m_logger.LogInfo("RDP: Sent McxSess iteration " + mcxSessIter.ToString());
+            m_logger.LogInfo("RDP: Sent McxSess iteration " + mcxSessIter.ToString());
 
             mcxSessIter++;
         }
@@ -291,65 +291,73 @@ namespace SoftSled {
                 byte[] vChanIncomingBuff = Encoding.Unicode.GetBytes(e.data);
                 string capChar1 = Encoding.ASCII.GetString(vChanIncomingBuff, vChanIncomingBuff.Length - 2, 1).ToUpper();
                 string capChar2 = Encoding.ASCII.GetString(vChanIncomingBuff, vChanIncomingBuff.Length - 1, 1).ToUpper();
-                string capChar3 = Encoding.ASCII.GetString(vChanIncomingBuff, vChanIncomingBuff.Length, 1).ToUpper();
+                string test = Encoding.ASCII.GetString(vChanIncomingBuff, 0, vChanIncomingBuff.Length);
+                //string capChar3 = Encoding.ASCII.GetString(vChanIncomingBuff, vChanIncomingBuff.Length, 1).ToUpper();
 
-                //m_logger.LogDebug("Asked for capability: " + capChar1 + capChar2);
+                // DEBUG PURPOSES ONLY
+                string byteArray = "";
+                foreach (byte b in vChanIncomingBuff) {
+                    byteArray += b.ToString("X2") + " ";
+                }
+                // DEBUG PURPOSES ONLY
+
+                m_logger.LogDebug("Asked for capability: " + capChar1 + capChar2);
 
                 List<String> disabledCaps = new List<string>();
-                disabledCaps.Add("PHO"); // Are advanced photo features allowed?
-                //disabledCaps.Add("EXT"); // Are Extender Settings allowed?
-                disabledCaps.Add("MAR"); // Are over-scan margins needed?
-                disabledCaps.Add("POP"); // Are Pop ups allowed?
-                disabledCaps.Add("ZOM"); // Is video zoom mode allowed?
-                disabledCaps.Add("NLZ"); // Is nonlinear zoom supported?
-                disabledCaps.Add("RSZ"); // Is raw stretched zoom supported?
-                disabledCaps.Add("WID"); // Is wide screen enabled?
-                disabledCaps.Add("H10"); // Is 10 feet help allowed? 
-                disabledCaps.Add("WEB"); // Is 10 feet web content allowed? 
-                disabledCaps.Add("H02"); // Is 2 feet help allowed? 
-                disabledCaps.Add("WE2"); // Is 2 feet web content allowed? 
-                //disabledCaps.Add("AUD"); // Is audio allowed?
-                disabledCaps.Add("AUR"); // Is audio Non WMP?
-                disabledCaps.Add("ARA"); // Is auto restart allowed?
-                disabledCaps.Add("BLB"); // Is black letters box needed?
-                disabledCaps.Add("CCC"); // Is CC rendered by the client?
-                disabledCaps.Add("CRC"); // Is CD burning allowed?
-                disabledCaps.Add("CPY"); // Is CD copying allowed?
-                disabledCaps.Add("CDA"); // Is CD playback allowed?
-                disabledCaps.Add("CLO"); // Is the close button shown?
-                disabledCaps.Add("DRC"); // Is DVD burning allowed?
-                disabledCaps.Add("DVD"); // Is DVD playback allowed?
-                disabledCaps.Add("FPD"); // Is FPD allowed?
-                //disabledCaps.Add("GDI"); // Is GDI renderer used?
-                //disabledCaps.Add("HDV"); // Is HD content allowed?
-                //disabledCaps.Add("HDN"); // Is HD content allowed by the network?
-                //disabledCaps.Add("SDN"); // Is SD content allowed by the network?
-                //disabledCaps.Add("REM"); // Is input treated as if from a remote?
-                disabledCaps.Add("ANI"); // Is intensive animation allowed?
-                disabledCaps.Add("2DA"); // Is 2D animation allowed?
-                disabledCaps.Add("HTM"); // Is HTML supported?
-                disabledCaps.Add("DES"); // Is MCE a Windows shell?
-                disabledCaps.Add("DOC"); // Is my Documents populated?
-                disabledCaps.Add("SCR"); // Is a native screensaver required?
-                disabledCaps.Add("ONS"); // Is online spotlight allowed?
-                //disabledCaps.Add("SUP"); // Is RDP super bit allowed?
-                disabledCaps.Add("BIG"); // Is remote UI renderer big-endian?
-                disabledCaps.Add("RUI"); // Is remote UI rendering supported?
-                disabledCaps.Add("SDM"); // Is a screen data mode workaround needed?
-                disabledCaps.Add("TBA"); // Is a Toolbar allowed?
-                disabledCaps.Add("SYN"); // Is transfer to a device allowed?
-                disabledCaps.Add("APP"); // Is tray applet allowed?
-                disabledCaps.Add("TVS"); // Is a TV skin used?
-                //disabledCaps.Add("SOU"); // Is UI sound supported?
-                //disabledCaps.Add("VID"); // Is video allowed?
-                disabledCaps.Add("W32"); // Is Win32 content allowed?
-                disabledCaps.Add("WIN"); // Is window mode allowed?
-                disabledCaps.Add("VIZ"); // Is WMP visualisation allowed?
-                //disabledCaps.Add("VOL"); // Is volume UI allowed?
-                //disabledCaps.Add("MUT"); // Is mute ui allowed?
+                disabledCaps.Add("PH"); // PHO - Are advanced photo features allowed?
+                //disabledCaps.Add("EX"); // EXT - Are Extender Settings allowed?
+                disabledCaps.Add("MA"); // MAR - Are over-scan margins needed?
+                disabledCaps.Add("PO"); // POP - Are Pop ups allowed?
+                disabledCaps.Add("ZO"); // ZOM - Is video zoom mode allowed?
+                disabledCaps.Add("NL"); // NLZ - Is nonlinear zoom supported?
+                disabledCaps.Add("RS"); // RSZ - Is raw stretched zoom supported?
+                disabledCaps.Add("WI"); // WID - Is wide screen enabled?
+                disabledCaps.Add("H1"); // H10 - Is 10 feet help allowed? 
+                disabledCaps.Add("WE"); // WEB - Is 10 feet web content allowed? 
+                disabledCaps.Add("H0"); // H02 - Is 2 feet help allowed? 
+                disabledCaps.Add("WE"); // WE2 - Is 2 feet web content allowed? 
+                //disabledCaps.Add("AUD"); // AUD - Is audio allowed?
+                disabledCaps.Add("AUR"); // AUR - Is audio Non WMP?
+                disabledCaps.Add("AR"); // ARA - Is auto restart allowed?
+                disabledCaps.Add("BL"); // BLB - Is black letters box needed?
+                disabledCaps.Add("CC"); // CCC - Is CC rendered by the client?
+                disabledCaps.Add("CR"); // CRC - Is CD burning allowed?
+                disabledCaps.Add("CP"); // CPY - Is CD copying allowed?
+                disabledCaps.Add("CD"); // CDA - Is CD playback allowed?
+                disabledCaps.Add("CL"); // CLO - Is the close button shown?
+                disabledCaps.Add("DR"); // DRC - Is DVD burning allowed?
+                disabledCaps.Add("DV"); // DVD - Is DVD playback allowed?
+                disabledCaps.Add("FP"); // FPD - Is FPD allowed?
+                //disabledCaps.Add("GD"); // GDI - Is GDI renderer used?
+                //disabledCaps.Add("HDV"); // HDV - Is HD content allowed?
+                //disabledCaps.Add("HDN"); // HDN - Is HD content allowed by the network?
+                //disabledCaps.Add("SD"); // SDN - Is SD content allowed by the network?
+                //disabledCaps.Add("RE"); // REM - Is input treated as if from a remote?
+                disabledCaps.Add("AN"); // ANI - Is intensive animation allowed?
+                disabledCaps.Add("2D"); // 2DA - Is 2D animation allowed?
+                disabledCaps.Add("HT"); // HTM - Is HTML supported?
+                disabledCaps.Add("DE"); // DES - Is MCE a Windows shell?
+                disabledCaps.Add("DO"); // DOC - Is my Documents populated?
+                disabledCaps.Add("SC"); // SCR - Is a native screensaver required?
+                disabledCaps.Add("ON"); // ONS - Is online spotlight allowed?
+                //disabledCaps.Add("SU"); // SUP - Is RDP super bit allowed?
+                disabledCaps.Add("BI"); // BIG - Is remote UI renderer big-endian?
+                disabledCaps.Add("RU"); // RUI - Is remote UI rendering supported?
+                disabledCaps.Add("SD"); // SDM - Is a screen data mode workaround needed?
+                disabledCaps.Add("TB"); // TBA - Is a Toolbar allowed?
+                disabledCaps.Add("SY"); // SYN - Is transfer to a device allowed?
+                disabledCaps.Add("AP"); // APP - Is tray applet allowed?
+                disabledCaps.Add("TV"); // TVS - Is a TV skin used?
+                //disabledCaps.Add("SO"); // SOU - Is UI sound supported?
+                //disabledCaps.Add("VID"); // VID - Is video allowed?
+                disabledCaps.Add("W3"); // W32 - Is Win32 content allowed?
+                disabledCaps.Add("WI"); // WIN - Is window mode allowed?
+                disabledCaps.Add("VIZ"); // VIZ - Is WMP visualisation allowed?
+                //disabledCaps.Add("VO"); // VOL - Is volume UI allowed?
+                //disabledCaps.Add("MU"); // MUT - Is mute ui allowed?
 
                 bool response = false;
-                if (disabledCaps.Contains(capChar1 + capChar2 + capChar3))
+                if (disabledCaps.Contains(capChar1 + capChar2))
                     vChanResponseBuff = LoadDevCapsVChan("Disabled");
                 else {
                     vChanResponseBuff = LoadDevCapsVChan("Enabled");
@@ -359,11 +367,11 @@ namespace SoftSled {
                 // We need to modify the sequencing integer inside the response.
                 vChanResponseBuff[21] = Convert.ToByte(devCapsIter);
 
-                //m_logger.LogDebug("RDP: " + response.ToString().ToUpper() + " for capability " + capChar1 + capChar2);
+                m_logger.LogDebug("RDP: " + response.ToString().ToUpper() + " for capability " + capChar1 + capChar2);
             }
 
             rdpClient.SendOnVirtualChannel("devcaps", Encoding.Unicode.GetString(vChanResponseBuff));
-            //m_logger.LogDebug("RDP: Sent devcaps citeration " + devCapsIter.ToString());
+            m_logger.LogDebug("RDP: Sent devcaps citeration " + devCapsIter.ToString());
 
 
             devCapsIter++;
@@ -374,7 +382,6 @@ namespace SoftSled {
             // Convert the incoming data to bytes
             byte[] incomingBuff = Encoding.Unicode.GetBytes(data);
 
-
             // Get DSLR Dispatcher Data
             int dispatchPayloadSize = Get4ByteInt(incomingBuff, 0);
             int dispatchChildCount = Get2ByteInt(incomingBuff, 4);
@@ -383,6 +390,24 @@ namespace SoftSled {
             int dispatchServiceHandle = Get4ByteInt(incomingBuff, 14);
             int dispatchFunctionHandle = Get4ByteInt(incomingBuff, 18);
 
+            byte[] dispatchRequestHandleArray = GetByteSubArray(incomingBuff, 10, 4);
+
+            
+
+            // DEBUG PURPOSES ONLY
+            string incomingByteArray = "";
+            foreach (byte b in incomingBuff) {
+                incomingByteArray += b.ToString("X2") + " ";
+            }
+            // DEBUG PURPOSES ONLY
+            Debug.WriteLine("");
+            Debug.WriteLine("--------------------");
+            Debug.WriteLine($"AVCTRL ITER RECEIVED: {dispatchRequestHandle}");
+            Debug.WriteLine($"AVCTRL ITER ACTUAL:   {avCtrlIter}");
+            Debug.WriteLine($"AVCTRL DATA RECEIVED: {incomingByteArray}");
+            Debug.WriteLine($"AVCTRL ITER BYTES RECEIVED: {dispatchRequestHandleArray[0]} {dispatchRequestHandleArray[1]} {dispatchRequestHandleArray[2]} {dispatchRequestHandleArray[3]}");
+            Debug.WriteLine($"ServiceHandle: {dispatchServiceHandle}");
+            Debug.WriteLine($"FunctionHandle: {dispatchFunctionHandle}");
 
             //// DEBUG PURPOSES ONLY
             //string byteArray = "";
@@ -457,10 +482,10 @@ namespace SoftSled {
 
                     m_logger.LogDebug("AVCTRL: Sent Response DeleteService " + dispatchRequestHandle);
                 }
-                // Error Request
+                // Unknown Request
                 else {
-                    m_logger.LogDebug("AVCTRL: Request Error " + dispatchRequestHandle);
 
+                    System.Diagnostics.Debug.WriteLine($"Unknown DSLR Request {dispatchFunctionHandle} not implemented");
 
                 }
 
@@ -487,8 +512,10 @@ namespace SoftSled {
 
                     DMCTOpenMediaURL = OpenMediaPayloadURL;
 
+                    System.Diagnostics.Debug.WriteLine(DMCTOpenMediaURL);
+
                     // Create Media Object
-                    currentMedia = new Media(_libVLC, new Uri(OpenMediaPayloadURL));
+                    currentMedia = new Media(_libVLC, new Uri(DMCTOpenMediaURL));
                     currentMedia.Parse();
 
                     // Initialise OpenMedia Response
@@ -508,7 +535,13 @@ namespace SoftSled {
                     // Send the SetDWORDProperty Response
                     rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                    m_logger.LogDebug("AVCTRL: Sent Response OpenMedia " + OpenMediaPayloadURL);
+                    m_logger.LogDebug("AVCTRL: Sent Response OpenMedia " + DMCTOpenMediaURL);
+
+                }
+                // CloseMedia Request
+                else if (dispatchFunctionHandle == 1) {
+
+                    System.Diagnostics.Debug.WriteLine("CloseMedia Request not implemented");
 
                 }
                 // Start Request
@@ -524,40 +557,27 @@ namespace SoftSled {
 
                     m_logger.LogDebug("AVCTRL: Request Start " + dispatchRequestHandle);
 
-                    //// Start the child process.
-                    //ffplay = new Process();
-                    //// Redirect the output stream of the child process.
-                    //p.StartInfo.UseShellExecute = false;
-                    //p.StartInfo.RedirectStandardOutput = true;
-                    //p.StartInfo.FileName = "ffplay.exe";
-                    //p.StartInfo.Arguments = $"-i {DMCTOpenMediaURL} -show_entries format=duration -v quiet -of csv=\"p = 0\"";
-                    //p.StartInfo.Arguments = $"-i {DMCTOpenMediaURL} -hide_banner -loglevel 8 -stats  2.09 A-V: -0.004 fd=   6 aq=   31KB vq=   84KB sq=    0B f=0/0";
-                    //p.Start();
-
-                    //Process.Start(@"C:\Users\Luke\Downloads\ffmpeg-4.4-full_build\ffmpeg-4.4-full_build\bin\ffplay.exe", DMCTOpenMediaURL);
-
                     _mp.Play(currentMedia);
 
                     // Initialise Start Response
                     byte[] response = VChan.AVCTRL.StartResponse(
                         GetByteSubArray(incomingBuff, 10, 4),
-                        DMCTOpenMediaRequestedPlayRate
+                        StartPayloadRequestedPlayRate
                     );
                     // Encapsulate the Response (Doesn't seem to work without this?)
                     byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
-
-                    // DEBUG PURPOSES ONLY
-                    string byteArray = "";
-                    foreach (byte b in response) {
-                        byteArray += b.ToString("X2") + " ";
-                    }
-                    // DEBUG PURPOSES ONLY
 
                     // Send the SetDWORDProperty Response
                     rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
                     m_logger.LogDebug("AVCTRL: Sent Response Start " + dispatchRequestHandle);
 
+
+                }
+                // Pause Request
+                else if (dispatchFunctionHandle == 3) {
+
+                    System.Diagnostics.Debug.WriteLine("Pause Request not implemented");
 
                 }
                 // GetDuration Request
@@ -588,9 +608,12 @@ namespace SoftSled {
 
                     long positionLongMili = Convert.ToInt64(_mp.Time / 10);
 
+                    Debug.WriteLine($"Position Before: {_mp.Time}");
+                    Debug.WriteLine($"Position After:  {positionLongMili}");
+
                     // Initialise GetPosition Response
                     byte[] response = VChan.AVCTRL.GetPositionResponse(
-                        GetByteSubArray(incomingBuff, 10, 4),
+                        avCtrlIter,
                         positionLongMili
                     );
                     // Encapsulate the Response (Doesn't seem to work without this?)
@@ -599,38 +622,64 @@ namespace SoftSled {
                     // Send the GetPosition Response
                     rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
+                    Debug.WriteLine($"AVCTRL ITER SENT: {avCtrlIter}");
+                    Debug.WriteLine($"AVCTRL ITER BYTES SENT: {GetByteSubArray(incomingBuff, 10, 4)[0]} {GetByteSubArray(incomingBuff, 10, 4)[1]} {GetByteSubArray(incomingBuff, 10, 4)[2]} {GetByteSubArray(incomingBuff, 10, 4)[3]}");
+
+                    // DEBUG PURPOSES ONLY
+                    string byteArray = "";
+                    foreach (byte b in response) {
+                        byteArray += b.ToString("X2") + " ";
+                    }
+                    // DEBUG PURPOSES ONLY
+
+                    Debug.WriteLine($"AVCTRL DATA SENT: {byteArray}");
+
+
                     m_logger.LogDebug("AVCTRL: Sent Response GetPosition " + 0);
 
                 }
                 // RegisterMediaEventCallback Request
                 else if (dispatchFunctionHandle == 8) {
 
-                // Get RegisterMediaEventCallback Data
-                int RegisterMediaEventCallbackPayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
-                int RegisterMediaEventCallbackChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
-                Guid RegisterMediaEventCallbackClassID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
-                Guid RegisterMediaEventCallbackServiceID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
+                    // Get RegisterMediaEventCallback Data
+                    int RegisterMediaEventCallbackPayloadSize = Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                    int RegisterMediaEventCallbackChildCount = Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                    Guid RegisterMediaEventCallbackClassID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                    Guid RegisterMediaEventCallbackServiceID = GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
 
-                m_logger.LogDebug("AVCTRL: Request RegisterMediaEventCallback " + dispatchRequestHandle);
+                    m_logger.LogDebug("AVCTRL: Request RegisterMediaEventCallback " + dispatchRequestHandle);
 
-                DMCTRegisterMediaEventCallbackCookie = 14733;
+                    DMCTRegisterMediaEventCallbackCookie = 14733;
 
-                // Initialise RegisterMediaEventCallback Response
-                byte[] response = VChan.AVCTRL.RegisterMediaEventCallbackResponse(
-                    GetByteSubArray(incomingBuff, 10, 4),
-                    DMCTRegisterMediaEventCallbackCookie
-                );
-                // Encapsulate the Response (Doesn't seem to work without this?)
-                byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
+                    // Initialise RegisterMediaEventCallback Response
+                    byte[] response = VChan.AVCTRL.RegisterMediaEventCallbackResponse(
+                        GetByteSubArray(incomingBuff, 10, 4),
+                        DMCTRegisterMediaEventCallbackCookie
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = VChan.AVCTRL.Encapsulate(response);
 
-                // Send the RegisterMediaEventCallback Response
-                rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
+                    // Send the RegisterMediaEventCallback Response
+                    rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                m_logger.LogDebug("AVCTRL: Sent Response RegisterMediaEventCallback " + dispatchRequestHandle);
+                    m_logger.LogDebug("AVCTRL: Sent Response RegisterMediaEventCallback " + dispatchRequestHandle);
 
-            }
+                }
+                // UnregisterMediaEventCallback Request
+                else if (dispatchFunctionHandle == 9) {
+
+                    System.Diagnostics.Debug.WriteLine("UnregisterMediaEventCallback Request not implemented");
+
+                }
+                // Unknown Request
+                else {
+
+                    System.Diagnostics.Debug.WriteLine($"Unknown DMCT Request {dispatchFunctionHandle} not implemented");
+
+                }
 
                 #endregion ####################################################
+
             }
             // DSPA Service Handle
             else if (dispatchServiceHandle == DSPAServiceHandle) {
@@ -746,8 +795,15 @@ namespace SoftSled {
                             break;
                     }
                 }
+                // Unknown Request
+                else {
+
+                    System.Diagnostics.Debug.WriteLine($"Unknown DSPA Request {dispatchFunctionHandle} not implemented");
+
+                }
 
                 #endregion ####################################################
+
             }
             // DRMRI Service Handle
             else if (dispatchServiceHandle == DRMRIServiceHandle) {
@@ -822,6 +878,12 @@ namespace SoftSled {
                     m_logger.LogDebug("AVCTRL: Sent Response InitiateRegistration " + dispatchRequestHandle);
 
                 }
+                // Unknown Request
+                else {
+
+                    System.Diagnostics.Debug.WriteLine($"Unknown DRMRI Request {dispatchFunctionHandle} not implemented");
+
+                }
 
                 #endregion ####################################################
 
@@ -829,7 +891,15 @@ namespace SoftSled {
             // DSMN Service Handle
             else if (dispatchServiceHandle == DSMNServiceHandle) {
 
+                System.Diagnostics.Debug.WriteLine($"Unknown DSMN Request {dispatchFunctionHandle} not implemented");
+
+            } else {
+
+                System.Diagnostics.Debug.WriteLine($"Unknown {dispatchServiceHandle} Request {dispatchFunctionHandle} not implemented");
+
             }
+
+            avCtrlIter++;
         }
 
 
