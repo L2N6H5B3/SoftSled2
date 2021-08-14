@@ -4,8 +4,8 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 ![Screenshot of the Dev Shell](https://raw.githubusercontent.com/L2N6H5B3/SoftSled2/master/Screenshot.jpg)
 
 ## Current Progress
-* Audio RTSP communication is almost complete, working on a media player buffer and interface.
-* Video RTSP communication is started, need to figure out the AV signalling for video & add media player interface.
+* Audio RTSP communication is almost complete, running into issues with RequestHandle reaching 215 and jumping immediately to 65023.
+* Video RTSP communication is started, RTSP playback not working perhaps because of DRM license failure.
 * Working out RDP devcaps functionality, some new discoveries made..
 
 ## Future Requirements
