@@ -92,6 +92,64 @@ namespace SoftSled.VChan {
 
         #region DSLR Functions ################################################
 
+        public static byte[] CreateServiceRequest(int dispatchRequestHandleInt, byte[] classId, byte[] serviceId, int serviceHandle) {
+
+            byte[] dispatchRequestHandle = GetInverse4ByteArrayFromInt(dispatchRequestHandleInt);
+            byte[] dispatchServiceHandle = new byte[] { 0, 0, 0, 0 };
+            byte[] dispatchFunctionHandle = new byte[] { 0, 0, 0, 0 };
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length +
+                dispatchServiceHandle.Length +
+                dispatchFunctionHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 1 };
+
+            // Get CreateService Byte Arrays
+            byte[] CreateServiceChildCount = new byte[] { 0, 0 };
+            byte[] CreateServicePayloadClassID = classId;
+            byte[] CreateServicePayloadServiceID = serviceId;
+            byte[] CreateServicePayloadServiceHandle = GetInverse4ByteArrayFromInt(serviceHandle);
+            byte[] CreateServicePropertyPayloadSize = GetInverse4ByteArrayFromInt(
+                CreateServicePayloadClassID.Length +
+                CreateServicePayloadServiceID.Length +
+                CreateServicePayloadServiceHandle.Length
+            );
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add Dispatch ServiceHandle
+                .Concat(dispatchServiceHandle)
+                // Add Dispatch FunctionHandle
+                .Concat(dispatchFunctionHandle)
+                // Add CreateServuce PayloadSize
+                .Concat(CreateServicePropertyPayloadSize)
+                // Add CreateService ChildCount
+                .Concat(CreateServiceChildCount)
+                // Add CreateService Payload ClassID
+                .Concat(CreateServicePayloadClassID)
+                // Add CreateService Payload ServiceID
+                .Concat(CreateServicePayloadServiceID)
+                // Add CreateService Payload ServiceHandle
+                .Concat(CreateServicePayloadServiceHandle);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
         public static byte[] CreateServiceResponse(byte[] dispatchRequestHandle) {
 
             // Get Dispatch Byte Arrays
@@ -510,7 +568,71 @@ namespace SoftSled.VChan {
             return response.ToArray();
         }
 
-        public static byte[] RegisterMediaEventCallbackResponse(byte[] dispatchRequestHandle, int cookieInt) {
+        public static byte[] RegisterMediaEventCallbackCreateServiceRequest(int dispatchRequestHandleInt, byte[] classId, byte[] serviceId, int serviceHandle) {
+
+            byte[] dispatchRequestHandle = GetInverse4ByteArrayFromInt(dispatchRequestHandleInt);
+            byte[] dispatchServiceHandle = new byte[] { 0, 0, 0, 0 };
+            byte[] dispatchFunctionHandle = new byte[] { 0, 0, 0, 1 };
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length +
+                dispatchServiceHandle.Length +
+                dispatchFunctionHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 1 };
+
+            // Get RegisterMediaEventCallbackCreateService Byte Arrays
+            byte[] RegisterMediaEventCallbackCreateServiceChildCount = new byte[] { 0, 0 };
+            byte[] RegisterMediaEventCallbackCreateServicePayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] RegisterMediaEventCallbackCreateServicePayloadClassID = classId;
+            byte[] RegisterMediaEventCallbackCreateServicePayloadServiceID = serviceId;
+            byte[] RegisterMediaEventCallbackCreateServicePayloadServiceHandle = GetInverse4ByteArrayFromInt(serviceHandle);
+            byte[] RegisterMediaEventCallbackCreateServicePropertyPayloadSize = GetInverse4ByteArrayFromInt(
+                RegisterMediaEventCallbackCreateServicePayloadS_OK.Length +
+                RegisterMediaEventCallbackCreateServicePayloadClassID.Length +
+                RegisterMediaEventCallbackCreateServicePayloadServiceID.Length +
+                RegisterMediaEventCallbackCreateServicePayloadServiceHandle.Length
+            );
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add Dispatch ServiceHandle
+                .Concat(dispatchServiceHandle)
+                // Add Dispatch FunctionHandle
+                .Concat(dispatchFunctionHandle)
+                // Add RegisterMediaEventCallback PayloadSize
+                .Concat(RegisterMediaEventCallbackCreateServicePropertyPayloadSize)
+                // Add RegisterMediaEventCallback ChildCount
+                .Concat(RegisterMediaEventCallbackCreateServiceChildCount)
+                // Add RegisterMediaEventCallback Payload Result
+                .Concat(RegisterMediaEventCallbackCreateServicePayloadS_OK)
+                // Add RegisterMediaEventCallback Payload ClassID
+                .Concat(RegisterMediaEventCallbackCreateServicePayloadClassID)
+                // Add RegisterMediaEventCallback Payload ClassID
+                .Concat(RegisterMediaEventCallbackCreateServicePayloadServiceID)
+                // Add RegisterMediaEventCallback Payload ClassID
+                .Concat(RegisterMediaEventCallbackCreateServicePayloadServiceHandle);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] RegisterMediaEventCallbackResponse(int dispatchRequestHandleInt, int cookieInt) {
+
+            byte[] dispatchRequestHandle = GetInverse4ByteArrayFromInt(dispatchRequestHandleInt);
 
             // Get Dispatch Byte Arrays
             byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
