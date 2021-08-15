@@ -211,11 +211,12 @@ namespace SoftSled {
 
         }
 
+
         void RdpClient_OnDisconnected(object sender, AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEvent e) {
 
             btnDoExtenderConnect.Enabled = true;
             _mp.Stop();
-
+          
             m_logger.LogInfo("RDP: Disconnected");
             if (isConnecting == true) {
                 SetStatus("Forcibly disconnected from Remote Desktop Host");
