@@ -417,7 +417,7 @@ namespace SoftSled {
         /// <param name="DeviceConfirmAuthenticator">Associated State Variable: A_ARG_TYPE_Authenticator</param>
         public void Exchange(string HostID, string HostCertificate, byte IterationsRequired, string HostConfirmAuthenticator, out string DeviceID, out string DeviceCertificate, out string DeviceConfirmAuthenticator) {
             System.Diagnostics.Debug.WriteLine("here");
-            m_logger.LogInfo("TrustAgreementService_Exchange(\"" + HostID.ToString() + "\",\"" + HostCertificate.ToString() + "\"," + IterationsRequired.ToString() + ",\"" + HostConfirmAuthenticator.ToString() + "\")");
+            System.Diagnostics.Debug.WriteLine("TrustAgreementService_Exchange(\"" + HostID.ToString() + "\",\"" + HostCertificate.ToString() + "\"," + IterationsRequired.ToString() + ",\"" + HostConfirmAuthenticator.ToString() + "\")");
             //ToDo: Add Your implementation here, and remove exception
             //throw (new UPnPCustomException(800, "This method has not been completely implemented..."));
             DeviceID = "";
@@ -432,7 +432,7 @@ namespace SoftSled {
         /// <param name="HostValidateAuthenticator">Associated State Variable: A_ARG_TYPE_Authenticator</param>
         /// <param name="DeviceValidateAuthenticator">Associated State Variable: A_ARG_TYPE_Authenticator</param>
         public void Commit(string HostID, byte Iteration, string HostValidateAuthenticator, out string DeviceValidateAuthenticator) {
-            m_logger.LogInfo("TrustAgreementService_Commit(" + HostID.ToString() + Iteration.ToString() + HostValidateAuthenticator.ToString() + ")");
+            System.Diagnostics.Debug.WriteLine("TrustAgreementService_Commit(" + HostID.ToString() + Iteration.ToString() + HostValidateAuthenticator.ToString() + ")");
             //ToDo: Add Your implementation here, and remove exception
             throw (new UPnPCustomException(800, "This method has not been completely implemented..."));
         }
@@ -444,7 +444,7 @@ namespace SoftSled {
         /// <param name="HostValidateNonce">Associated State Variable: A_ARG_TYPE_Nonce</param>
         /// <param name="DeviceValidateNonce">Associated State Variable: A_ARG_TYPE_Nonce</param>
         public void Validate(string HostID, byte Iteration, string HostValidateNonce, out string DeviceValidateNonce) {
-            m_logger.LogInfo("TrustAgreementService_Validate(" + HostID.ToString() + Iteration.ToString() + HostValidateNonce.ToString() + ")");
+            System.Diagnostics.Debug.WriteLine("TrustAgreementService_Validate(" + HostID.ToString() + Iteration.ToString() + HostValidateNonce.ToString() + ")");
             //ToDo: Add Your implementation here, and remove exception
             throw (new UPnPCustomException(800, "This method has not been completely implemented..."));
         }
@@ -456,7 +456,7 @@ namespace SoftSled {
         /// <param name="HostConfirmNonce">Associated State Variable: A_ARG_TYPE_Nonce</param>
         /// <param name="DeviceConfirmNonce">Associated State Variable: A_ARG_TYPE_Nonce</param>
         public void Confirm(string HostID, byte IterationsRequired, string HostConfirmNonce, out string DeviceConfirmNonce) {
-            m_logger.LogInfo("TrustAgreementService_Confirm(" + HostID.ToString() + IterationsRequired.ToString() + HostConfirmNonce.ToString() + ")");
+            System.Diagnostics.Debug.WriteLine("TrustAgreementService_Confirm(" + HostID.ToString() + IterationsRequired.ToString() + HostConfirmNonce.ToString() + ")");
             //ToDo: Add Your implementation here, and remove exception
             throw (new UPnPCustomException(800, "This method has not been completely implemented..."));
         }

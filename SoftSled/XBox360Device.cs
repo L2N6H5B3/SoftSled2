@@ -83,13 +83,13 @@ namespace SoftSled
         {
             device.StartDevice(3391);
 
-            m_logger.LogInfo("Started Device Broadcasting");
+            System.Diagnostics.Debug.WriteLine("Started Device Broadcasting");
         }
         public void Stop()
         {
             device.StopDevice();
 
-            m_logger.LogInfo("Stopped Device Broadcasting");
+            System.Diagnostics.Debug.WriteLine("Stopped Device Broadcasting");
         }
 
     
