@@ -31,7 +31,6 @@ namespace SoftSled
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(FrmMain));
             this.rdpClient = new AxMSTSCLib.AxMsRdpClient7();
             this.txtLog = new System.Windows.Forms.TextBox();
-            this.button2 = new System.Windows.Forms.Button();
             this.lnkGiveFocus = new System.Windows.Forms.LinkLabel();
             this.linkLabel2 = new System.Windows.Forms.LinkLabel();
             this.btnDoExtenderConnect = new System.Windows.Forms.Button();
@@ -45,8 +44,8 @@ namespace SoftSled
             this.chkInVchanDebug = new System.Windows.Forms.CheckBox();
             this.lnkShowCtrlHideInfo = new System.Windows.Forms.LinkLabel();
             this.label2 = new System.Windows.Forms.Label();
-            this.button1 = new System.Windows.Forms.Button();
             this.videoView1 = new LibVLCSharp.WinForms.VideoView();
+            this.label3 = new System.Windows.Forms.Label();
             ((System.ComponentModel.ISupportInitialize)(this.rdpClient)).BeginInit();
             this.panOverlay.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.videoView1)).BeginInit();
@@ -70,15 +69,6 @@ namespace SoftSled
             this.txtLog.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
             this.txtLog.Size = new System.Drawing.Size(542, 401);
             this.txtLog.TabIndex = 3;
-            // 
-            // button2
-            // 
-            this.button2.Location = new System.Drawing.Point(927, 135);
-            this.button2.Name = "button2";
-            this.button2.Size = new System.Drawing.Size(134, 22);
-            this.button2.TabIndex = 6;
-            this.button2.Text = "Reset devcaps Iteration";
-            this.button2.UseVisualStyleBackColor = true;
             // 
             // lnkGiveFocus
             // 
@@ -217,16 +207,6 @@ namespace SoftSled
             this.label2.TabIndex = 19;
             this.label2.Text = "label2";
             // 
-            // button1
-            // 
-            this.button1.Location = new System.Drawing.Point(1067, 135);
-            this.button1.Name = "button1";
-            this.button1.Size = new System.Drawing.Size(137, 22);
-            this.button1.TabIndex = 20;
-            this.button1.Text = "Reset avctrl Iteration";
-            this.button1.UseVisualStyleBackColor = true;
-            this.button1.Click += new System.EventHandler(this.button1_Click_1);
-            // 
             // videoView1
             // 
             this.videoView1.BackColor = System.Drawing.Color.Black;
@@ -237,13 +217,22 @@ namespace SoftSled
             this.videoView1.TabIndex = 21;
             this.videoView1.Text = "videoView1";
             // 
+            // label3
+            // 
+            this.label3.AutoSize = true;
+            this.label3.Location = new System.Drawing.Point(1412, 144);
+            this.label3.Name = "label3";
+            this.label3.Size = new System.Drawing.Size(57, 13);
+            this.label3.TabIndex = 22;
+            this.label3.Text = "libvlcsharp";
+            // 
             // FrmMain
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(1481, 587);
+            this.ClientSize = new System.Drawing.Size(1436, 587);
+            this.Controls.Add(this.label3);
             this.Controls.Add(this.videoView1);
-            this.Controls.Add(this.button1);
             this.Controls.Add(this.label2);
             this.Controls.Add(this.lnkShowCtrlHideInfo);
             this.Controls.Add(this.chkInVchanDebug);
@@ -255,7 +244,6 @@ namespace SoftSled
             this.Controls.Add(this.btnDoExtenderConnect);
             this.Controls.Add(this.linkLabel2);
             this.Controls.Add(this.lnkGiveFocus);
-            this.Controls.Add(this.button2);
             this.Controls.Add(this.txtLog);
             this.Controls.Add(this.rdpClient);
             this.Name = "FrmMain";
@@ -274,7 +262,6 @@ namespace SoftSled
 
         private AxMSTSCLib.AxMsRdpClient7 rdpClient;
         private System.Windows.Forms.TextBox txtLog;
-        private System.Windows.Forms.Button button2;
         private System.Windows.Forms.LinkLabel lnkGiveFocus;
         private System.Windows.Forms.LinkLabel linkLabel2;
         private System.Windows.Forms.Button btnDoExtenderConnect;
@@ -288,7 +275,7 @@ namespace SoftSled
         private System.Windows.Forms.CheckBox chkInVchanDebug;
         private System.Windows.Forms.LinkLabel lnkShowCtrlHideInfo;
         private System.Windows.Forms.Label label2;
-        private System.Windows.Forms.Button button1;
         private LibVLCSharp.WinForms.VideoView videoView1;
+        private System.Windows.Forms.Label label3;
     }
 }

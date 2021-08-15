@@ -4,8 +4,8 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace SoftSled.VChan {
-    class DSLR {
+namespace SoftSled.Components {
+    class DSLRCommunication {
 
         #region Shared Functions ##############################################
 
@@ -29,7 +29,7 @@ namespace SoftSled.VChan {
             return encapsulated.ToArray();
         }
 
-        public static byte[] GenericResponse(byte[] dispatchRequestHandle) {
+        public static byte[] GenericOKResponse(byte[] dispatchRequestHandle) {
 
             // Get Dispatch Byte Arrays
             byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
@@ -62,6 +62,82 @@ namespace SoftSled.VChan {
                 .Concat(ChildCount)
                 // Add Payload Result
                 .Concat(PayloadS_OK);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] GenericErrorResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get Byte Arrays
+            byte[] ChildCount = new byte[] { 0, 0 };
+            byte[] PayloadDSLR_E_FAIL = new byte[] { 136, 23, 64, 5 };
+            byte[] PropertyPayloadSize = new byte[] { 0, 0, 0, 4 };
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add PayloadSize
+                .Concat(PropertyPayloadSize)
+                // Add ChildCount
+                .Concat(ChildCount)
+                // Add Payload Result
+                .Concat(PayloadDSLR_E_FAIL);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] DSLR_E_INVALIDOPERATIONResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get Byte Arrays
+            byte[] ChildCount = new byte[] { 0, 0 };
+            byte[] PayloadDSLR_E_INVALIDOPERATION = new byte[] { 136, 23, 1, 12 };
+            byte[] PropertyPayloadSize = new byte[] { 0, 0, 0, 4 };
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add PayloadSize
+                .Concat(PropertyPayloadSize)
+                // Add ChildCount
+                .Concat(ChildCount)
+                // Add Payload Result
+                .Concat(PayloadDSLR_E_INVALIDOPERATION);
 
             // Return the created byte array
             return response.ToArray();
@@ -746,12 +822,8 @@ namespace SoftSled.VChan {
             byte[] GetDWORDPropertyChildCount = new byte[] { 0, 0 };
             byte[] GetDWORDPropertyPayloadS_OK = new byte[] { 0, 0, 0, 0 };
             byte[] GetDWORDPropertyPayloadPropertyValue = GetInverse4ByteArrayFromInt(propertyValueInt);
-            byte[] GetDWORDPropertyPayloadLength = GetInverse4ByteArrayFromInt(
-                GetDWORDPropertyPayloadPropertyValue.Length
-            );
             byte[] GetDWORDPropertyPayloadSize = GetInverse4ByteArrayFromInt(
                 GetDWORDPropertyPayloadS_OK.Length +
-                GetDWORDPropertyPayloadLength.Length +
                 GetDWORDPropertyPayloadPropertyValue.Length
             );
 
@@ -773,8 +845,6 @@ namespace SoftSled.VChan {
                 .Concat(GetDWORDPropertyChildCount)
                 // Add GetDWORDProperty Payload Result
                 .Concat(GetDWORDPropertyPayloadS_OK)
-                // Add GetDWORDProperty Payload Length
-                .Concat(GetDWORDPropertyPayloadLength)
                 // Add GetDWORDProperty Payload PropertyValue
                 .Concat(GetDWORDPropertyPayloadPropertyValue);
 
@@ -815,6 +885,94 @@ namespace SoftSled.VChan {
                 .Concat(SetDWORDPropertyChildCount)
                 // Add SetDWORDProperty Payload Result
                 .Concat(SetDWORDPropertyPayloadS_OK);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] DeviceCapabilityTrueGetDWORDPropertyResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get GetDWORDProperty Byte Arrays
+            byte[] GetDWORDPropertyChildCount = new byte[] { 0, 0 };
+            byte[] GetDWORDPropertyPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] GetDWORDPropertyPayloadPropertyValue = new byte[] { 0, 0, 0, 1 };
+            byte[] GetDWORDPropertyPayloadSize = GetInverse4ByteArrayFromInt(
+                GetDWORDPropertyPayloadS_OK.Length +
+                GetDWORDPropertyPayloadPropertyValue.Length
+            );
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add GetDWORDProperty PayloadSize
+                .Concat(GetDWORDPropertyPayloadSize)
+                // Add GetDWORDProperty ChildCount
+                .Concat(GetDWORDPropertyChildCount)
+                // Add GetDWORDProperty Payload Result
+                .Concat(GetDWORDPropertyPayloadS_OK)
+                // Add GetDWORDProperty Payload PropertyValue
+                .Concat(GetDWORDPropertyPayloadPropertyValue);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] DeviceCapabilityFalseGetDWORDPropertyResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get GetDWORDProperty Byte Arrays
+            byte[] GetDWORDPropertyChildCount = new byte[] { 0, 0 };
+            byte[] GetDWORDPropertyPayloadS_OK = new byte[] { 0, 0, 0, 0 };
+            byte[] GetDWORDPropertyPayloadPropertyValue = new byte[] { 0, 0, 0, 0 };
+            byte[] GetDWORDPropertyPayloadSize = GetInverse4ByteArrayFromInt(
+                GetDWORDPropertyPayloadS_OK.Length +
+                GetDWORDPropertyPayloadPropertyValue.Length
+            );
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add GetDWORDProperty PayloadSize
+                .Concat(GetDWORDPropertyPayloadSize)
+                // Add GetDWORDProperty ChildCount
+                .Concat(GetDWORDPropertyChildCount)
+                // Add GetDWORDProperty Payload Result
+                .Concat(GetDWORDPropertyPayloadS_OK)
+                // Add GetDWORDProperty Payload PropertyValue
+                .Concat(GetDWORDPropertyPayloadPropertyValue);
 
             // Return the created byte array
             return response.ToArray();

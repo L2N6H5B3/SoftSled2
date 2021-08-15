@@ -100,8 +100,10 @@
       <SubType>UserControl</SubType>
     </Compile>
     <Compile Include="Components\Logger.cs" />
-    <Compile Include="Components\McxVirtualChannelHandler.cs" />
-    <Compile Include="Components\RTSPClient.cs" />
+    <Compile Include="Components\VirtualChannelMcxSessHandler.cs" />
+    <Compile Include="Components\VirtualChannelDevCapsHandler.cs" />
+    <Compile Include="Components\VirtualChannelAvCtrlHandler.cs" />
+    <Compile Include="Components\Utilities.cs" />
     <Compile Include="Components\SoftSledConfig.cs" />
     <Compile Include="Components\SoftSledConfigManager.cs" />
     <Compile Include="Components\TextBoxLogger.cs" />
@@ -123,52 +125,7 @@
     <Compile Include="NullService.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="RTSP\AACPayload.cs" />
-    <Compile Include="RTSP\AMRPayload.cs" />
-    <Compile Include="RTSP\Authentication.cs" />
-    <Compile Include="RTSP\BitStream.cs" />
-    <Compile Include="RTSP\G711Payload.cs" />
-    <Compile Include="RTSP\H264Payload.cs" />
-    <Compile Include="RTSP\H265Payload.cs" />
-    <Compile Include="RTSP\IRTSPTransport.cs" />
-    <Compile Include="RTSP\Messages\PortCouple.cs" />
-    <Compile Include="RTSP\Messages\RTSPChunk.cs" />
-    <Compile Include="RTSP\Messages\RTSPData.cs" />
-    <Compile Include="RTSP\Messages\RTSPHeaderNames.cs" />
-    <Compile Include="RTSP\Messages\RTSPMessage.cs" />
-    <Compile Include="RTSP\Messages\RTSPRequest.cs" />
-    <Compile Include="RTSP\Messages\RTSPRequestAnnounce.cs" />
-    <Compile Include="RTSP\Messages\RTSPRequestDescribe.cs" />
-    <Compile Include="RTSP\Messages\RTSPRequestGetParameter.cs" />
-    <Compile Include="RTSP\Messages\RTSPRequestOptions.cs" />
-    <Compile Include="RTSP\Messages\RTSPRequestPause.cs" />
-    <Compile Include="RTSP\Messages\RTSPRequestPlay.cs" />
-    <Compile Include="RTSP\Messages\RTSPRequestRecord.cs" />
-    <Compile Include="RTSP\Messages\RTSPRequestSetup.cs" />
-    <Compile Include="RTSP\Messages\RTSPRequestTeardown.cs" />
-    <Compile Include="RTSP\Messages\RTSPResponse.cs" />
-    <Compile Include="RTSP\Messages\RTSPTransport.cs" />
-    <Compile Include="RTSP\RTSPListener.cs" />
-    <Compile Include="RTSP\RTSPMessageEventArgs.cs" />
-    <Compile Include="RTSP\RTSPTCPTransport.cs" />
-    <Compile Include="RTSP\RTSPUtils.cs" />
-    <Compile Include="RTSP\Sdp\Attribut.cs" />
-    <Compile Include="RTSP\Sdp\AttributFmtp.cs" />
-    <Compile Include="RTSP\Sdp\AttributRtpMap.cs" />
-    <Compile Include="RTSP\Sdp\Bandwidth.cs" />
-    <Compile Include="RTSP\Sdp\Connection.cs" />
-    <Compile Include="RTSP\Sdp\ConnectionIP4.cs" />
-    <Compile Include="RTSP\Sdp\ConnectionIP6.cs" />
-    <Compile Include="RTSP\Sdp\EncriptionKey.cs" />
-    <Compile Include="RTSP\Sdp\H264Parameter.cs" />
-    <Compile Include="RTSP\Sdp\H265Parameter.cs" />
-    <Compile Include="RTSP\Sdp\Media.cs" />
-    <Compile Include="RTSP\Sdp\Origin.cs" />
-    <Compile Include="RTSP\Sdp\SdpFile.cs" />
-    <Compile Include="RTSP\Sdp\SdpTimeZone.cs" />
-    <Compile Include="RTSP\Sdp\Timing.cs" />
-    <Compile Include="RTSP\UdpSocket.cs" />
-    <Compile Include="VChan\DSLR.cs" />
+    <Compile Include="Components\DSLRCommunication.cs" />
     <Compile Include="XBox360Device.cs" />
     <EmbeddedResource Include="Form1.resx">
       <SubType>Designer</SubType>
@@ -200,10 +157,6 @@
     <None Include="Certificates\softsledCAkey.pem" />
     <None Include="Certificates\softslednew.cer" />
     <None Include="Certificates\softslednewkey.pem" />
-    <None Include="Documents\CON003_WH06.ppt" />
-    <None Include="Documents\CON063_WH06.ppt" />
-    <None Include="Firmware\2100image.bin" />
-    <None Include="Firmware\2200image.bin" />
     <None Include="KeyExchange\2\devicecert.cer" />
     <None Include="KeyExchange\2\hostcert.cer" />
     <None Include="KeyExchange\Wireshark Captures\Linksys 2200 Setup.cap" />
@@ -214,33 +167,6 @@
     </None>
     <None Include="Tools\IntelDigitalHomeDeviceCodeWizard.zip" />
     <None Include="Tools\IntelToolsForUPnPTechnology_v2.zip" />
-    <None Include="VChan\avctrl\CreateService S_OK">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Include="VChan\avctrl\rtsp">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Include="VChan\avctrl\ismuted">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Include="VChan\avctrl\xsphostaddress">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Include="VChan\avctrl\5">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Include="VChan\avctrl\6">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Include="VChan\avctrl\7">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Include="VChan\avctrl\8">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Include="VChan\avctrl\S_OK">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
     <None Include="VChan\devcaps\Disabled">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
@@ -248,9 +174,6 @@
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
     <None Include="VChan\devcaps\Initial">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Include="VChan\McxSess\Response">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
     <Compile Include="Properties\Settings.Designer.cs">
