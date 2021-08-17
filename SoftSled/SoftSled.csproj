@@ -75,9 +75,6 @@
       <HintPath>..\packages\Microsoft.Bcl.Async.1.0.168\lib\net40\Microsoft.Threading.Tasks.Extensions.Desktop.dll</HintPath>
     </Reference>
     <Reference Include="Microsoft.VisualBasic" />
-    <Reference Include="NAudio, Version=1.8.5.0, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>..\packages\NAudio.1.8.5\lib\net35\NAudio.dll</HintPath>
-    </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core">
       <RequiredTargetFramework>3.5</RequiredTargetFramework>
@@ -96,11 +93,7 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Components\AudioHandler.cs">
-      <SubType>UserControl</SubType>
-    </Compile>
     <Compile Include="Components\Logger.cs" />
-    <Compile Include="Components\VirtualChannelMCECapsHandler.cs" />
     <Compile Include="Components\VirtualChannelMcxSessHandler.cs" />
     <Compile Include="Components\VirtualChannelDevCapsHandler.cs" />
     <Compile Include="Components\VirtualChannelAvCtrlHandler.cs" />
@@ -261,14 +254,6 @@
   <ItemGroup>
     <COMReference Include="AxMSTSCLib">
       <Guid>{8C11EFA1-92C3-11D1-BC1E-00C04FA31489}</Guid>
-      <VersionMajor>1</VersionMajor>
-      <VersionMinor>0</VersionMinor>
-      <Lcid>0</Lcid>
-      <WrapperTool>aximp</WrapperTool>
-      <Isolated>False</Isolated>
-    </COMReference>
-    <COMReference Include="AxWMPLib">
-      <Guid>{6BF52A50-394A-11D3-B153-00C04F79FAA6}</Guid>
       <VersionMajor>1</VersionMajor>
       <VersionMinor>0</VersionMinor>
       <Lcid>0</Lcid>

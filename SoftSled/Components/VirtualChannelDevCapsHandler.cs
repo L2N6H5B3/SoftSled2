@@ -19,7 +19,7 @@ namespace SoftSled.Components {
             "ZO", // ZOM - Is video zoom mode allowed?
             "NL", // NLZ - Is nonlinear zoom supported?
             "RS", // RSZ - Is raw stretched zoom supported?
-            //"WI", // WID - Is wide screen enabled?
+            "WI", // WID - Is wide screen enabled?
             "H1", // H10 - Is 10 feet help allowed? 
             "WE", // WEB - Is 10 feet web content allowed? 
             "H0", // H02 - Is 2 feet help allowed? 
@@ -52,10 +52,10 @@ namespace SoftSled.Components {
             "BI", // BIG - Is remote UI renderer big-endian?
             "RU", // RUI - Is remote UI rendering supported?
             "SD", // SDM - Is a screen data mode workaround needed?
-            //"TB", // TBA - Is a Toolbar allowed?
-            //"SY", // SYN - Is transfer to a device allowed?
+            "TB", // TBA - Is a Toolbar allowed?
+            "SY", // SYN - Is transfer to a device allowed?
             "AP", // APP - Is tray applet allowed?
-            "TV", // TVS - Is a TV skin used?
+            //"TV", // TVS - Is a TV skin used?
             //"SO", // SOU - Is UI sound supported?
             //"VID", // VID - Is video allowed?
             "W3", // W32 - Is Win32 content allowed?

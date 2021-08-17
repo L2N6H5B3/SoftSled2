@@ -2,10 +2,10 @@ using LibVLCSharp.Shared;
 using SoftSled.Components;
 using System;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
-using System.Text;
 using System.Windows.Forms;
 
 namespace SoftSled {
@@ -85,12 +85,14 @@ namespace SoftSled {
 
             IPAddress localhost = null;
             var host = Dns.GetHostEntry(Dns.GetHostName());
-            foreach (var ip in host.AddressList) {
-                if (ip.AddressFamily == AddressFamily.InterNetwork) {
-                    localhost = ip;
-                } else {
-                    //throw new Exception("No network adapters with an IPv4 address in the system!");
-                }
+
+            // Get IPv4 Address
+            var IPv4Address = host.AddressList.FirstOrDefault(xx => xx.AddressFamily == AddressFamily.InterNetwork);
+            // Check if there is an IPv4 Address
+            if (IPv4Address != null) {
+                localhost = IPv4Address;
+            } else {
+                throw new Exception("No network adapters with an IPv4 address in the system!");
             }
 
             if (m_device != null) {
@@ -129,7 +131,6 @@ namespace SoftSled {
             isConnecting = true;
 
         }
-
 
         private void BtnExtenderDisconnect_Click(object sender, EventArgs e) {
             if (m_device != null) {
@@ -181,14 +182,10 @@ namespace SoftSled {
 
             // NOTICE, if you want ehshell.exe to start up in normal Remote Desktop mode, remove the devcaps channel definition bellow. 
             //rdpClient.CreateVirtualChannels("McxSess,MCECaps,avctrl,VCHD");
-
-            // Create Virtual Channels
-            //rdpClient.CreateVirtualChannels("McxSess,devcaps,avctrl,VCHD");
             //rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD");
 
-            //rdpClient.CreateVirtualChannels("McxSess,devcaps,avctrl,splash");
+            // Create Virtual Channels
             rdpClient.CreateVirtualChannels("McxSess,devcaps,avctrl");
-
 
             // Set RDP Initialised
             rdpInitialised = true;
@@ -228,12 +225,14 @@ namespace SoftSled {
             }
 
         }
+
         void RdpClient_OnConnected(object sender, EventArgs e) {
             m_logger.LogInfo("RDP: Connected");
             SetStatus("Remote Desktop Connected! Waiting for Media Center...");
 
             btnDoExtenderConnect.Enabled = false;
             btnExtenderDisconnect.Enabled = true;
+
         }
 
         #endregion ############################################################
@@ -248,7 +247,8 @@ namespace SoftSled {
         private void lnkSendCtrlAltDelete_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
             // This doesn't seem to be working...
             rdpClient.Focus();
-            SendKeys.Send("%^+{END}");
+            SendKeys.SendWait("{BACKSPACE}");
+            //SendKeys.Send("%^+{END}");
         }
 
         private void chkLogDebug_CheckedChanged(object sender, EventArgs e) {

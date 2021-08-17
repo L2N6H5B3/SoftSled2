@@ -2,10 +2,10 @@ using LibVLCSharp.Shared;
 using SoftSled.Components;
 using System;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
-using System.Text;
 using System.Windows.Forms;
 
 namespace SoftSled {
@@ -40,10 +40,11 @@ namespace SoftSled {
             InitialiseLogger();
 
             // Configure Window
-            this.TopMost = true;
+            //this.TopMost = true;
+            this.Bounds = Screen.PrimaryScreen.Bounds;
             this.FormBorderStyle = FormBorderStyle.None;
             this.WindowState = FormWindowState.Maximized;
-            this.rdpClient.Size = this.Size;
+            this.rdpClient.Size = new System.Drawing.Size(Screen.PrimaryScreen.Bounds.Width, Screen.PrimaryScreen.Bounds.Height);
 
             // Create VirtualChannel Handlers
             AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger, rdpClient, _libVLC, _mp);
@@ -89,12 +90,14 @@ namespace SoftSled {
 
             IPAddress localhost = null;
             var host = Dns.GetHostEntry(Dns.GetHostName());
-            foreach (var ip in host.AddressList) {
-                if (ip.AddressFamily == AddressFamily.InterNetwork) {
-                    localhost = ip;
-                } else {
-                    //throw new Exception("No network adapters with an IPv4 address in the system!");
-                }
+
+            // Get IPv4 Address
+            var IPv4Address = host.AddressList.FirstOrDefault(xx => xx.AddressFamily == AddressFamily.InterNetwork);
+            // Check if there is an IPv4 Address
+            if (IPv4Address != null) {
+                localhost = IPv4Address;
+            } else {
+                throw new Exception("No network adapters with an IPv4 address in the system!");
             }
 
             if (m_device != null) {

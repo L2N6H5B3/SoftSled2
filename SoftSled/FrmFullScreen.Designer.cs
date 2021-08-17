@@ -42,7 +42,7 @@ namespace SoftSled
             this.rdpClient.Location = new System.Drawing.Point(0, 0);
             this.rdpClient.Name = "rdpClient";
             this.rdpClient.OcxState = ((System.Windows.Forms.AxHost.State)(resources.GetObject("rdpClient.OcxState")));
-            this.rdpClient.Size = new System.Drawing.Size(800, 480);
+            this.rdpClient.Size = new System.Drawing.Size(1280, 720);
             this.rdpClient.TabIndex = 2;
             this.rdpClient.Visible = false;
             // 
@@ -69,9 +69,10 @@ namespace SoftSled
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+            this.AutoSize = true;
             this.AutoSizeMode = System.Windows.Forms.AutoSizeMode.GrowAndShrink;
             this.BackColor = System.Drawing.Color.Black;
-            this.ClientSize = new System.Drawing.Size(800, 480);
+            this.ClientSize = new System.Drawing.Size(1280, 720);
             this.Controls.Add(this.rdpClient);
             this.Controls.Add(this.videoView1);
             this.Controls.Add(this.txtLog);
