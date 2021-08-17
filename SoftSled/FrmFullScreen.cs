@@ -9,7 +9,7 @@ using System.Text;
 using System.Windows.Forms;
 
 namespace SoftSled {
-    public partial class FrmMain : Form {
+    public partial class FrmFullScreen : Form {
         // Private members
         private Logger m_logger;
         private ExtenderDevice m_device;
@@ -19,11 +19,11 @@ namespace SoftSled {
         private VirtualChannelAvCtrlHandler AvCtrlHandler;
         private VirtualChannelDevCapsHandler DevCapsHandler;
         private VirtualChannelMcxSessHandler McxSessHandler;
-
+        
         public LibVLC _libVLC;
         public MediaPlayer _mp;
 
-        public FrmMain() {
+        public FrmFullScreen() {
             if (!DesignMode) {
                 Core.Initialize();
             }
@@ -36,11 +36,14 @@ namespace SoftSled {
 
         #region Main GUI Commands #############################################
 
-        private void FrmMain_Load(object sender, EventArgs e) {
+        private void FrmFullScreen_Load(object sender, EventArgs e) {
             InitialiseLogger();
 
-            // Configure Buttons
-            btnExtenderDisconnect.Enabled = false;
+            // Configure Window
+            this.TopMost = true;
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.WindowState = FormWindowState.Maximized;
+            this.rdpClient.Size = this.Size;
 
             // Create VirtualChannel Handlers
             AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger, rdpClient, _libVLC, _mp);
@@ -50,38 +53,39 @@ namespace SoftSled {
             // Create VirtualChannel Handlers EventHandlers
             McxSessHandler.StatusChanged += McxSessHandler_StatusChanged;
 
-            m_logger.LogInfo("Open SoftSled (http://github.com/l2n6h5b3/SoftSled2)");
+            m_logger.LogInfo("OpenSoftSled (http://github.com/l2n6h5b3/SoftSled2)");
 
             SoftSledConfig config = SoftSledConfigManager.ReadConfig();
             if (!config.IsPaired) {
                 m_logger.LogInfo("Extender is not paired!");
-                SetStatus("Extender is not paired");
             } else {
                 m_logger.LogInfo("Extender is paired with " + config.RdpLoginHost);
-                SetStatus("Extender ready to connect");
             }
+
+            // Connect Extender
+            ConnectExtender();
         }
 
         private void McxSessHandler_StatusChanged(object sender, StatusChangedArgs e) {
-            // Set Status
-            SetStatus(e.statusText);
 
             // If the Shell is open
             if (e.shellOpen) {
-                panOverlay.Visible = false;
                 rdpClient.Visible = true;
                 // Play Opening Music
                 PlayOpening();
             } else if (e.shellOpen && rdpClient.Visible == true) {
-                panOverlay.Visible = false;
                 rdpClient.Visible = true;
             } else {
-                panOverlay.Visible = true;
                 rdpClient.Visible = false;
+            }
+
+            // If the status is related to WMC Failure
+            if (e.statusInt != null) {
+                Environment.Exit(0);
             }
         }
 
-        private void btnExtenderConnect_Click(object sender, EventArgs e) {
+        private void ConnectExtender() {
 
             IPAddress localhost = null;
             var host = Dns.GetHostEntry(Dns.GetHostName());
@@ -122,10 +126,13 @@ namespace SoftSled {
             rdpClient.AdvancedSettings2.ClearTextPassword = currConfig.RdpLoginPassword;
             // Set RDP Color Depth
             rdpClient.ColorDepth = 32;
+            rdpClient.AdvancedSettings.BitmapPeristence = 1;
+            rdpClient.AdvancedSettings6.AudioRedirectionMode = 0;
+            rdpClient.AdvancedSettings8.AudioQualityMode = 1;
+            rdpClient.AdvancedSettings2.PerformanceFlags = 190;
             // Connect RDP
             rdpClient.Connect();
 
-            SetStatus("Remote Desktop Connecting...");
             isConnecting = true;
 
         }
@@ -183,12 +190,7 @@ namespace SoftSled {
             //rdpClient.CreateVirtualChannels("McxSess,MCECaps,avctrl,VCHD");
 
             // Create Virtual Channels
-            //rdpClient.CreateVirtualChannels("McxSess,devcaps,avctrl,VCHD");
-            //rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD");
-
-            //rdpClient.CreateVirtualChannels("McxSess,devcaps,avctrl,splash");
-            rdpClient.CreateVirtualChannels("McxSess,devcaps,avctrl");
-
+            rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD");
 
             // Set RDP Initialised
             rdpInitialised = true;
@@ -212,61 +214,20 @@ namespace SoftSled {
             }
         }
 
-
         void RdpClient_OnDisconnected(object sender, AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEvent e) {
-
-            btnDoExtenderConnect.Enabled = true;
-            btnExtenderDisconnect.Enabled = false;
 
             // Stop playing Media
             _mp.Stop();
 
             m_logger.LogInfo("RDP: Disconnected");
             if (isConnecting == true) {
-                SetStatus("Forcibly disconnected from Remote Desktop Host");
                 isConnecting = false;
             }
 
         }
+
         void RdpClient_OnConnected(object sender, EventArgs e) {
             m_logger.LogInfo("RDP: Connected");
-            SetStatus("Remote Desktop Connected! Waiting for Media Center...");
-
-            btnDoExtenderConnect.Enabled = false;
-            btnExtenderDisconnect.Enabled = true;
-        }
-
-        #endregion ############################################################
-
-
-        #region Misc Form Events ##############################################
-
-        private void lnkGiveFocus_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
-            rdpClient.Focus();
-        }
-
-        private void lnkSendCtrlAltDelete_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
-            // This doesn't seem to be working...
-            rdpClient.Focus();
-            SendKeys.Send("%^+{END}");
-        }
-
-        private void chkLogDebug_CheckedChanged(object sender, EventArgs e) {
-            m_logger.IsLoggingDebug = chkLogDebug.Checked;
-        }
-
-        private void lnkShowCtrlHideInfo_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
-            rdpClient.Visible = true;
-            panOverlay.Visible = false;
-        }
-
-        delegate void dTextWrite(string message);
-        void SetStatus(string message) {
-            Invoke(new dTextWrite(delegate (string ex) {
-                lbGenStatus.Text = ex;
-                if (!lbGenStatus.Visible)
-                    lbGenStatus.Visible = true;
-            }), message);
         }
 
         private void PlayOpening() {

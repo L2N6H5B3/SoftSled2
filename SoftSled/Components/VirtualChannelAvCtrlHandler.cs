@@ -16,14 +16,15 @@ namespace SoftSled.Components {
         private int DMCTServiceHandle;
         private int DSPAServiceHandle;
         private int DRMRIServiceHandle;
-        private int DMCTRegisterMediaEventCallbackCookie;
+        private int DMCTRegisterMediaEventCallbackCookie = 14724;
         private string DMCTOpenMediaURL;
         private Media currentMedia;
         private int StubRequestHandleIter = 1;
         private int StubServiceHandleIter = 1;
-        private Dictionary<int, StubRequestType> StubRequestHandleDict = new Dictionary<int, StubRequestType>();
+        private Dictionary<int, StubRequestType> StubRequestTypeDict = new Dictionary<int, StubRequestType>();
+        private Dictionary<int, int> StubRequestCookieDict = new Dictionary<int, int>();
         private Dictionary<int, int> ProxyRequestHandleDict = new Dictionary<int, int>();
-
+        private Dictionary<int, int> ProxyServiceHandleDict = new Dictionary<int, int>();
 
         public VirtualChannelAvCtrlHandler(Logger m_logger, AxMsRdpClient7 rdpClient, LibVLC _libVLC, MediaPlayer _mp) {
             this.m_logger = m_logger;
@@ -43,16 +44,14 @@ namespace SoftSled.Components {
             int dispatchChildCount = DataUtilities.Get2ByteInt(incomingBuff, 4);
             int dispatchCallingConvention = DataUtilities.Get4ByteInt(incomingBuff, 6);
             int dispatchRequestHandle = DataUtilities.Get4ByteInt(incomingBuff, 10);
-
-
             byte[] dispatchRequestHandleArray = DataUtilities.GetByteSubArray(incomingBuff, 10, 4);
 
-            //// DEBUG PURPOSES ONLY
-            //string byteArray = "";
-            //foreach (byte b in incomingBuff) {
-            //    byteArray += b.ToString("X2") + " ";
-            //}
-            //// DEBUG PURPOSES ONLY
+            // DEBUG PURPOSES ONLY
+            string byteArray = "";
+            foreach (byte b in incomingBuff) {
+                byteArray += b.ToString("X2") + " ";
+            }
+            // DEBUG PURPOSES ONLY
 
 
             if (dispatchCallingConvention == 1) {
@@ -80,27 +79,30 @@ namespace SoftSled.Components {
                         // Get CreateService Data
                         int createServicePayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
                         int createServiceChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
-                        Guid createServiceClassID = DataUtilities.GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
-                        Guid createServiceServiceID = DataUtilities.GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
+                        Guid createServiceClassID = DataUtilities.GuidFromArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                        Guid createServiceServiceID = DataUtilities.GuidFromArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
                         int createServiceServiceHandle = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16 + 16);
 
-                        m_logger.LogDebug("AVCTRL: Request CreateService " + createServiceServiceHandle);
+                        
 
                         switch (createServiceClassID.ToString().ToLower()) {
                             // DMCT ClassID
                             case "18c7c708-c529-4639-a846-5847f31b1e83":
                                 DMCTServiceHandle = createServiceServiceHandle;
+                                m_logger.LogDebug($"AVCTRL: CreateService DMCT  ({DMCTServiceHandle})");
                                 break;
                             // DSPA ClassID
                             case "077bfd3a-7028-4913-bd14-53963dc37754":
                                 DSPAServiceHandle = createServiceServiceHandle;
+                                m_logger.LogDebug($"AVCTRL: CreateService DSPA ({DSPAServiceHandle})");
                                 break;
                             // DRMRI ClassID
                             case "b707af79-ca99-42d1-8c60-469fe112001e":
                                 DRMRIServiceHandle = createServiceServiceHandle;
+                                m_logger.LogDebug($"AVCTRL: CreateService DRMRI ({DRMRIServiceHandle})");
                                 break;
                             default:
-                                Debug.WriteLine($"AVCTRL: DSLR Service ClassID {createServiceClassID} with ServiceID {createServiceServiceID} not available");
+                                m_logger.LogDebug($"AVCTRL: CreateService ClassID {createServiceClassID} with ServiceID {createServiceServiceID} not available");
                                 break;
                         }
 
@@ -114,30 +116,49 @@ namespace SoftSled.Components {
                         // Send the CreateService Response
                         rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                        m_logger.LogDebug("AVCTRL: Sent Response CreateService " + dispatchRequestHandle);
                     }
                     // DeleteService Request
-                    else if (dispatchFunctionHandle == 2) {
+                    else if (dispatchFunctionHandle == 1) {
 
                         // Get DeleteService Data
                         int deleteServicePayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
                         int deleteServiceChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
-                        Guid deleteServiceClassID = DataUtilities.GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
-                        Guid deleteServiceServiceID = DataUtilities.GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
-                        int deleteServiceServiceHandle = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16 + 16);
+                        int deleteServiceServiceHandle = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
 
-                        m_logger.LogDebug("AVCTRL: Request DeleteService " + deleteServiceServiceHandle);
+                        // If this is the DMCT Service
+                        if (deleteServiceServiceHandle == DMCTServiceHandle) {
+                        m_logger.LogDebug($"MCXSESS: DeleteService DMCT ({DMCTServiceHandle})");
+                            // Clear the DMCT Service
+                            DMCTServiceHandle = 0;
+                        }
+                        // If this is the DSPA Service
+                        else if (deleteServiceServiceHandle == DSPAServiceHandle) {
+                        m_logger.LogDebug($"MCXSESS: DeleteService DSPA ({DSPAServiceHandle})");
+                            // Clear the DSPA Service
+                            DSPAServiceHandle = 0;
+                        }
+                        // If this is the DRMRI Service
+                        else if (deleteServiceServiceHandle == DRMRIServiceHandle) {
+                        m_logger.LogDebug($"MCXSESS: DeleteService DRMRI ({DRMRIServiceHandle})");
+                            // Clear the DRMRI Service
+                            DRMRIServiceHandle = 0;
+                        }
 
+                        // Initialise DeleteService Response
+                        byte[] response = Components.DSLRCommunication.DeleteServiceResponse(
+                            DataUtilities.GetByteSubArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2, 4)
+                        );
+                        // Encapsulate the Response (Doesn't seem to work without this?)
+                        byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
-                        // Send the DeleteService Response
-                        //rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(response));
+                        // Send the CreateService Response
+                        rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                        m_logger.LogDebug("AVCTRL: Sent Response DeleteService " + dispatchRequestHandle);
                     }
                     // Unknown Request
                     else {
 
-                        System.Diagnostics.Debug.WriteLine($"Unknown DSLR Request {dispatchFunctionHandle} not implemented");
+                        m_logger.LogDebug($"Unknown DSLR Request {dispatchFunctionHandle} not implemented");
 
                     }
 
@@ -160,15 +181,15 @@ namespace SoftSled.Components {
                         int OpenMediaPayloadSurfaceID = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4 + OpenMediaPayloadURLLength);
                         int OpenMediaPayloadTimeOut = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4 + OpenMediaPayloadURLLength + 4);
 
-                        m_logger.LogDebug("AVCTRL: Request OpenMedia " + OpenMediaPayloadURL);
+                        m_logger.LogDebug($"AVCTRL: OpenMedia ({OpenMediaPayloadURL})");
 
                         DMCTOpenMediaURL = OpenMediaPayloadURL;
-
-                        System.Diagnostics.Debug.WriteLine(DMCTOpenMediaURL);
 
                         // Create Media Object
                         currentMedia = new Media(_libVLC, new Uri(DMCTOpenMediaURL));
                         currentMedia.Parse();
+                        _mp.NetworkCaching = 1000;
+                        _mp.Media = currentMedia;
 
                         // Initialise OpenMedia Response
                         byte[] response = Components.DSLRCommunication.OpenMediaResponse(
@@ -177,25 +198,16 @@ namespace SoftSled.Components {
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
-                        // DEBUG PURPOSES ONLY
-                        string byteArray = "";
-                        foreach (byte b in response) {
-                            byteArray += b.ToString("X2") + " ";
-                        }
-                        // DEBUG PURPOSES ONLY
-
                         // Send the SetDWORDProperty Response
                         rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
-
-                        m_logger.LogDebug("AVCTRL: Sent Response OpenMedia " + DMCTOpenMediaURL);
 
                     }
                     // CloseMedia Request
                     else if (dispatchFunctionHandle == 1) {
 
-                        m_logger.LogDebug("AVCTRL: Request CloseMedia " + dispatchRequestHandle);
+                        m_logger.LogDebug("AVCTRL: CloseMedia");
 
-                        _mp.Pause();
+                        _mp.Stop();
 
                         // Initialise CloseMedia Response
                         byte[] response = Components.DSLRCommunication.CloseMediaResponse(
@@ -206,8 +218,6 @@ namespace SoftSled.Components {
 
                         // Send the CloseMedia Response
                         rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
-
-                        m_logger.LogDebug("AVCTRL: Sent Response CloseMedia " + dispatchRequestHandle);
 
                     }
                     // Start Request
@@ -221,14 +231,14 @@ namespace SoftSled.Components {
                         int StartPayloadRequestedPlayRate = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 8 + 8);
                         long StartPayloadAvailableBandwidth = DataUtilities.Get8ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 8 + 8 + 4);
 
-                        m_logger.LogDebug("AVCTRL: Request Start " + dispatchRequestHandle);
+                        m_logger.LogDebug("AVCTRL: Start");
 
                         _mp.Play(currentMedia);
 
                         // Initialise Start Response
                         byte[] response = Components.DSLRCommunication.StartResponse(
                             DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
-                            StartPayloadRequestedPlayRate
+                            1
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
@@ -236,13 +246,11 @@ namespace SoftSled.Components {
                         // Send the Start Response
                         rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                        m_logger.LogDebug("AVCTRL: Sent Response Start " + dispatchRequestHandle);
-
                     }
                     // Pause Request
                     else if (dispatchFunctionHandle == 3) {
 
-                        m_logger.LogDebug("AVCTRL: Request Pause " + dispatchRequestHandle);
+                        m_logger.LogDebug("AVCTRL: Pause");
 
                         _mp.Pause();
 
@@ -256,13 +264,11 @@ namespace SoftSled.Components {
                         // Send the Pause Response
                         rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                        m_logger.LogDebug("AVCTRL: Sent Response Pause " + dispatchRequestHandle);
-
                     }
                     // Stop Request
                     else if (dispatchFunctionHandle == 3) {
 
-                        m_logger.LogDebug("AVCTRL: Request Stop " + dispatchRequestHandle);
+                        m_logger.LogDebug("AVCTRL: Stop");
 
                         _mp.Stop();
 
@@ -276,15 +282,13 @@ namespace SoftSled.Components {
                         // Send the Stop Response
                         rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                        m_logger.LogDebug("AVCTRL: Sent Response Stop " + dispatchRequestHandle);
-
                     }
                     // GetDuration Request
                     else if (dispatchFunctionHandle == 5) {
 
-                        m_logger.LogDebug("AVCTRL: Request GetDuration " + dispatchRequestHandle);
-
                         long durationLongMili = Convert.ToInt64(currentMedia.Duration / 10);
+
+                        m_logger.LogDebug($"AVCTRL: GetDuration ({durationLongMili})");
 
                         // Initialise GetDuration Response
                         byte[] response = Components.DSLRCommunication.GetDurationResponse(
@@ -297,17 +301,13 @@ namespace SoftSled.Components {
                         // Send the GetDuration Response
                         rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                        m_logger.LogDebug("AVCTRL: Sent Response GetDuration " + durationLongMili);
-
                     }
                     // GetPosition Request
                     else if (dispatchFunctionHandle == 6) {
 
-                        m_logger.LogDebug("AVCTRL: Request GetPosition " + dispatchRequestHandle);
-
                         long positionLongMili = Convert.ToInt64(_mp.Time / 10);
 
-                        Debug.WriteLine($"Position After:  {positionLongMili}");
+                        m_logger.LogDebug($"AVCTRL: GetPosition ({positionLongMili})");
 
                         // Initialise GetPosition Response
                         byte[] response = Components.DSLRCommunication.GetPositionResponse(
@@ -319,7 +319,6 @@ namespace SoftSled.Components {
                         // Send the GetPosition Response
                         rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                        m_logger.LogDebug("AVCTRL: Sent Response GetPosition " + dispatchRequestHandle);
                     }
                     // RegisterMediaEventCallback Request
                     else if (dispatchFunctionHandle == 8) {
@@ -327,16 +326,17 @@ namespace SoftSled.Components {
                         // Get RegisterMediaEventCallback Data
                         int RegisterMediaEventCallbackPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
                         int RegisterMediaEventCallbackChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
-                        Guid RegisterMediaEventCallbackClassID = DataUtilities.GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
-                        Guid RegisterMediaEventCallbackServiceID = DataUtilities.GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
+                        Guid RegisterMediaEventCallbackClassID = DataUtilities.GuidFromArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                        Guid RegisterMediaEventCallbackServiceID = DataUtilities.GuidFromArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
 
-                        m_logger.LogDebug("AVCTRL: Request RegisterMediaEventCallback " + dispatchRequestHandle);
+                        m_logger.LogDebug("AVCTRL: RegisterMediaEventCallback");
 
-                        // Add Stub RequestHandle Iter to Dictionary
-                        StubRequestHandleDict.Add(StubRequestHandleIter, StubRequestType.RegisterMediaEventCallback);
-
+                        // Add Stub RequestType to Dictionary
+                        StubRequestTypeDict.Add(StubRequestHandleIter, StubRequestType.RegisterMediaEventCallback);
                         // Add Proxy RequestHandle Iter to Stub RequestHandle Match Dictionary
                         ProxyRequestHandleDict.Add(StubRequestHandleIter, dispatchRequestHandle);
+                        // Add Proxy Service Handle to Dictionary
+                        ProxyServiceHandleDict.Add(StubRequestHandleIter, StubServiceHandleIter);
 
                         // Initialise RegisterMediaEventCallback CreateService Request
                         byte[] response = Components.DSLRCommunication.CreateServiceRequest(
@@ -356,19 +356,42 @@ namespace SoftSled.Components {
                         // Send the RegisterMediaEventCallback CreateService Request
                         rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                        m_logger.LogDebug("AVCTRL: Sent Response RegisterMediaEventCallback " + dispatchRequestHandle);
-
                     }
                     // UnregisterMediaEventCallback Request
                     else if (dispatchFunctionHandle == 9) {
 
-                        System.Diagnostics.Debug.WriteLine("UnregisterMediaEventCallback Request not implemented");
+                        // Get UnregisterMediaEventCallback Data
+                        int UnregisterMediaEventCallbackPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                        int UnregisterMediaEventCallbackChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                        int UnregisterMediaEventCallbackPayloadCookie = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+
+                        m_logger.LogDebug("AVCTRL: UnregisterMediaEventCallback");
+
+                        // Add Stub RequestHandle Iter to Dictionary
+                        StubRequestTypeDict.Add(StubRequestHandleIter, StubRequestType.UnregisterMediaEventCallback);
+
+                        // Add Proxy RequestHandle Iter to Stub RequestHandle Match Dictionary
+                        ProxyRequestHandleDict.Add(StubRequestHandleIter, dispatchRequestHandle);
+
+                        // Initialise UnregisterMediaEventCallback DeleteService Request
+                        byte[] response = Components.DSLRCommunication.DeleteServiceRequest(
+                            StubRequestHandleIter,
+                            StubRequestCookieDict[UnregisterMediaEventCallbackPayloadCookie]
+                        );
+                        // Encapsulate the Response (Doesn't seem to work without this?)
+                        byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
+
+                        // Increment Stub RequestHandle Iter
+                        StubRequestHandleIter++;
+
+                        // Send the UnregisterMediaEventCallback CreateService Request
+                        rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
                     }
                     // Unknown Request
                     else {
 
-                        System.Diagnostics.Debug.WriteLine($"Unknown DMCT Request {dispatchFunctionHandle} not implemented");
+                        m_logger.LogDebug($"Unknown DMCT Request {dispatchFunctionHandle} not implemented");
 
                     }
 
@@ -389,12 +412,11 @@ namespace SoftSled.Components {
                         int GetStringPropertyPayloadLength = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
                         string GetStringPropertyPayloadPropertyName = DataUtilities.GetByteArrayString(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4, GetStringPropertyPayloadLength);
 
+                        m_logger.LogDebug($"AVCTRL: GetStringProperty ({GetStringPropertyPayloadPropertyName})");
+
                         switch (GetStringPropertyPayloadPropertyName) {
                             // Property Bag Service
                             case "XspHostAddress":
-
-                                m_logger.LogDebug("AVCTRL: Request GetStringProperty " + GetStringPropertyPayloadPropertyName);
-
                                 // Initialise GetStringProperty Response
                                 byte[] response = Components.DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
@@ -406,8 +428,9 @@ namespace SoftSled.Components {
                                 // Send the GetStringProperty Response
                                 rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                                m_logger.LogDebug("AVCTRL: Sent Response GetStringProperty " + GetStringPropertyPayloadPropertyName);
-
+                                break;
+                            default:
+                                m_logger.LogDebug($"AVCTRL: GetStringProperty ({GetStringPropertyPayloadPropertyName}) not available");
                                 break;
                         }
                     }
@@ -420,11 +443,10 @@ namespace SoftSled.Components {
                         int GetDWORDPropertyPayloadLength = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
                         string GetDWORDPropertyPayloadPropertyName = DataUtilities.GetByteArrayString(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4, GetDWORDPropertyPayloadLength);
 
+                        m_logger.LogDebug($"AVCTRL: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName})");
+
                         switch (GetDWORDPropertyPayloadPropertyName) {
                             case "IsMuted":
-
-                                m_logger.LogDebug("AVCTRL: Request GetDWORDProperty " + GetDWORDPropertyPayloadPropertyName);
-
                                 // Initialise GetDWORDProperty Response
                                 byte[] isMutedResponse = Components.DSLRCommunication.GetDWORDPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
@@ -436,13 +458,8 @@ namespace SoftSled.Components {
                                 // Send the GetDWORDProperty Response
                                 rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedIsMutedResponse));
 
-                                m_logger.LogDebug("AVCTRL: Sent Response GetDWORDProperty " + GetDWORDPropertyPayloadPropertyName);
-
                                 break;
                             case "Volume":
-
-                                m_logger.LogDebug("AVCTRL: Request GetDWORDProperty " + GetDWORDPropertyPayloadPropertyName);
-
                                 // Initialise GetDWORDProperty Response
                                 byte[] volumeResponse = Components.DSLRCommunication.GetDWORDPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
@@ -453,29 +470,26 @@ namespace SoftSled.Components {
 
                                 // Send the GetDWORDProperty Response
                                 rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedVolumeResponse));
-
-                                m_logger.LogDebug("AVCTRL: Sent Response GetDWORDProperty " + GetDWORDPropertyPayloadPropertyName);
-
                                 break;
                             default:
-                                System.Diagnostics.Debug.WriteLine($"AVCTRL: DSPA {dispatchRequestHandle} with Property Name {GetDWORDPropertyPayloadPropertyName} not available");
+                                m_logger.LogDebug($"AVCTRL: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName}) not available");
                                 break;
                         }
                     }
                     // SetDWORDProperty Request
                     else if (dispatchFunctionHandle == 3) {
 
-                        // Get SetDWORDProperty Data
+                        // Set SetDWORDProperty Data
                         int SetDWORDPropertyPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
                         int SetDWORDPropertyChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
                         int SetDWORDPropertyPayloadLength = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
                         string SetDWORDPropertyPayloadPropertyName = DataUtilities.GetByteArrayString(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4, SetDWORDPropertyPayloadLength);
                         int SetDWORDPropertyPayloadPropertyValue = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4 + SetDWORDPropertyPayloadLength);
 
+                        m_logger.LogDebug($"AVCTRL: SetDWORDProperty ({SetDWORDPropertyPayloadPropertyName})");
+
                         switch (SetDWORDPropertyPayloadPropertyName) {
                             case "IsMuted":
-
-                                m_logger.LogDebug("AVCTRL: Request SetDWORDProperty " + SetDWORDPropertyPayloadPropertyName);
 
                                 // Initialise SetDWORDProperty Response
                                 byte[] response = Components.DSLRCommunication.SetDWORDPropertyResponse(
@@ -487,15 +501,16 @@ namespace SoftSled.Components {
                                 // Send the SetDWORDProperty Response
                                 rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                                m_logger.LogDebug("AVCTRL: Sent Response SetDWORDProperty " + SetDWORDPropertyPayloadPropertyName);
-
+                                break;
+                            default:
+                                m_logger.LogDebug($"AVCTRL: SetDWORDProperty ({SetDWORDPropertyPayloadPropertyName}) not available");
                                 break;
                         }
                     }
                     // Unknown Request
                     else {
 
-                        System.Diagnostics.Debug.WriteLine($"Unknown DSPA Request {dispatchFunctionHandle} not implemented");
+                        m_logger.LogDebug($"Unknown DSPA Request {dispatchFunctionHandle} not implemented");
 
                     }
 
@@ -513,9 +528,9 @@ namespace SoftSled.Components {
                         // Get RegisterTransmitterService Data
                         int RegisterTransmitterServicePayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
                         int RegisterTransmitterServiceChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
-                        Guid RegisterTransmitterServiceClassID = DataUtilities.GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                        Guid RegisterTransmitterServiceClassID = DataUtilities.GuidFromArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
 
-                        m_logger.LogDebug("AVCTRL: Request RegisterTransmitterService " + dispatchRequestHandle);
+                        m_logger.LogDebug("AVCTRL: RegisterTransmitterService");
 
                         // Initialise RegisterTransmitterService Response
                         byte[] response = Components.DSLRCommunication.RegisterTransmitterServiceResponse(
@@ -527,8 +542,6 @@ namespace SoftSled.Components {
                         // Send the RegisterTransmitterService Response
                         rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                        m_logger.LogDebug("AVCTRL: Sent Response RegisterTransmitterService " + dispatchRequestHandle);
-
                     }
                     // UnregisterTransmitterService Request
                     else if (dispatchFunctionHandle == 1) {
@@ -536,9 +549,9 @@ namespace SoftSled.Components {
                         // Get UnregisterTransmitterService Data
                         int RegisterTransmitterServicePayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
                         int RegisterTransmitterServiceChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
-                        Guid RegisterTransmitterServiceClassID = DataUtilities.GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                        Guid RegisterTransmitterServiceClassID = DataUtilities.GuidFromArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
 
-                        m_logger.LogDebug("AVCTRL: Request UnregisterTransmitterService " + dispatchRequestHandle);
+                        m_logger.LogDebug("AVCTRL: UnregisterTransmitterService");
 
                         // Initialise UnregisterTransmitterService Response
                         byte[] response = Components.DSLRCommunication.UnregisterTransmitterServiceResponse(
@@ -550,8 +563,6 @@ namespace SoftSled.Components {
                         // Send the UnregisterTransmitterService Response
                         rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                        m_logger.LogDebug("AVCTRL: Sent Response UnregisterTransmitterService " + dispatchRequestHandle);
-
                     }
                     // InitiateRegistration Request
                     else if (dispatchFunctionHandle == 2) {
@@ -560,7 +571,7 @@ namespace SoftSled.Components {
                         int InitiateRegistrationPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
                         int InitiateRegistrationChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
 
-                        m_logger.LogDebug("AVCTRL: Request InitiateRegistration " + dispatchRequestHandle);
+                        m_logger.LogDebug("AVCTRL: InitiateRegistration");
 
                         // Initialise InitiateRegistration Response
                         byte[] response = Components.DSLRCommunication.InitiateRegistrationResponse(
@@ -572,13 +583,11 @@ namespace SoftSled.Components {
                         // Send the InitiateRegistration Response
                         rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                        m_logger.LogDebug("AVCTRL: Sent Response InitiateRegistration " + dispatchRequestHandle);
-
                     }
                     // Unknown Request
                     else {
 
-                        System.Diagnostics.Debug.WriteLine($"Unknown DRMRI Request {dispatchFunctionHandle} not implemented");
+                        m_logger.LogDebug($"Unknown DRMRI Request {dispatchFunctionHandle} not implemented");
 
                     }
 
@@ -586,12 +595,15 @@ namespace SoftSled.Components {
 
                 } else {
 
-                    System.Diagnostics.Debug.WriteLine($"Unknown AVCTRL {dispatchServiceHandle} Request {dispatchFunctionHandle} not implemented");
+                    m_logger.LogDebug($"Unknown AVCTRL {dispatchServiceHandle} Request {dispatchFunctionHandle} not implemented");
 
                 }
             } else if (dispatchCallingConvention == 2) {
 
-                switch (StubRequestHandleDict[dispatchRequestHandle]) {
+                byte[] response = null;
+                byte[] encapsulatedResponse = null;
+
+                switch (StubRequestTypeDict[dispatchRequestHandle]) {
                     // If the RequestHandle matches a RegisterMediaEventCallback Request
                     case StubRequestType.RegisterMediaEventCallback:
 
@@ -600,36 +612,83 @@ namespace SoftSled.Components {
                         int RegisterMediaEventCallbackChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
                         int RegisterMediaEventCallbackPayloadResult = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
 
-                        DMCTRegisterMediaEventCallbackCookie = 14733;
+                        m_logger.LogDebug("AVCTRL: RegisterMediaEventCallbackResponse");
+
+                        if (RegisterMediaEventCallbackPayloadResult != 0) {
+                            // Get Error in Hex Form
+                            string errorByteArray = "";
+                            foreach (byte b in DataUtilities.GetByteSubArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2, 4)) {
+                                errorByteArray += b.ToString("X2") + " ";
+                            }
+                            m_logger.LogDebug("AVCTRL: RegisterMediaEventCallback Request Failed - 0x" + errorByteArray);
+                        }
+
+                        // Get Proxy Service Handle from Dictionary and Add with Cookie
+                        StubRequestCookieDict.Add(DMCTRegisterMediaEventCallbackCookie, ProxyServiceHandleDict[dispatchRequestHandle]);
 
                         // Initialise RegisterMediaEventCallback Response
-                        byte[] response = Components.DSLRCommunication.RegisterMediaEventCallbackResponse(
+                        response = Components.DSLRCommunication.RegisterMediaEventCallbackResponse(
                             ProxyRequestHandleDict[dispatchRequestHandle],
-                            DMCTRegisterMediaEventCallbackCookie
+                            DMCTRegisterMediaEventCallbackCookie,
+                            DataUtilities.GetByteSubArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2, 4)
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
-                        byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
+                        encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the RegisterMediaEventCallback Response
                         rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                        m_logger.LogDebug("AVCTRL: Sent Response RegisterMediaEventCallback " + dispatchRequestHandle);
+                        // Increment Cookie
+                        DMCTRegisterMediaEventCallbackCookie++;
+
+                        break;
+                    // If the RequestHandle matches a RegisterMediaEventCallback Request
+                    case StubRequestType.UnregisterMediaEventCallback:
+
+                        // Get UnregisterMediaEventCallback CreateService Response Data
+                        int UnregisterMediaEventCallbackPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                        int UnregisterMediaEventCallbackChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                        int UnregisterMediaEventCallbackPayloadResult = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+
+                        m_logger.LogDebug("AVCTRL: UnregisterMediaEventCallbackResponse");
+
+                        if (UnregisterMediaEventCallbackPayloadResult != 0) {
+                            // Get Error in Hex Form
+                            string errorByteArray = "";
+                            foreach (byte b in DataUtilities.GetByteSubArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2, 4)) {
+                                errorByteArray += b.ToString("X2") + " ";
+                            }
+                            m_logger.LogDebug("AVCTRL: UnregisterMediaEventCallback Request Failed - 0x" + errorByteArray);
+                        }
+
+                        // Initialise UnregisterMediaEventCallback Response
+                        response = Components.DSLRCommunication.UnregisterMediaEventCallbackResponse(
+                            ProxyRequestHandleDict[dispatchRequestHandle],
+                            DMCTRegisterMediaEventCallbackCookie,
+                            DataUtilities.GetByteSubArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2, 4)
+                        );
+                        // Encapsulate the Response (Doesn't seem to work without this?)
+                        encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
+
+                        // Send the RegisterMediaEventCallback Response
+                        rdpClient.SendOnVirtualChannel("avctrl", Encoding.Unicode.GetString(encapsulatedResponse));
 
                         break;
                     default:
-                        System.Diagnostics.Debug.WriteLine($"Unknown Response RequestHandle {dispatchRequestHandle} - No matching requests made");
+                        m_logger.LogDebug($"Unknown Response RequestHandle {dispatchRequestHandle} - No matching requests made");
                         break;
                 }
 
             } else {
 
-                System.Diagnostics.Debug.WriteLine($"Unknown CallingConvention {dispatchCallingConvention} not implemented");
+                m_logger.LogDebug($"Unknown CallingConvention {dispatchCallingConvention} not implemented");
 
             }
         }
     }
 
     enum StubRequestType {
-        RegisterMediaEventCallback
+        RegisterMediaEventCallback,
+        UnregisterMediaEventCallback
     }
 }

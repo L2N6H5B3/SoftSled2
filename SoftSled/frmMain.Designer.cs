@@ -32,7 +32,6 @@ namespace SoftSled
             this.rdpClient = new AxMSTSCLib.AxMsRdpClient7();
             this.txtLog = new System.Windows.Forms.TextBox();
             this.lnkGiveFocus = new System.Windows.Forms.LinkLabel();
-            this.linkLabel2 = new System.Windows.Forms.LinkLabel();
             this.btnDoExtenderConnect = new System.Windows.Forms.Button();
             this.btnExtenderDisconnect = new System.Windows.Forms.Button();
             this.btnExtenderSetup = new System.Windows.Forms.Button();
@@ -43,7 +42,6 @@ namespace SoftSled
             this.chkLogDebug = new System.Windows.Forms.CheckBox();
             this.chkInVchanDebug = new System.Windows.Forms.CheckBox();
             this.lnkShowCtrlHideInfo = new System.Windows.Forms.LinkLabel();
-            this.label2 = new System.Windows.Forms.Label();
             this.videoView1 = new LibVLCSharp.WinForms.VideoView();
             this.label3 = new System.Windows.Forms.Label();
             ((System.ComponentModel.ISupportInitialize)(this.rdpClient)).BeginInit();
@@ -80,17 +78,6 @@ namespace SoftSled
             this.lnkGiveFocus.TabStop = true;
             this.lnkGiveFocus.Text = "Give RDP Client Focus";
             this.lnkGiveFocus.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.lnkGiveFocus_LinkClicked);
-            // 
-            // linkLabel2
-            // 
-            this.linkLabel2.AutoSize = true;
-            this.linkLabel2.Location = new System.Drawing.Point(924, 570);
-            this.linkLabel2.Name = "linkLabel2";
-            this.linkLabel2.Size = new System.Drawing.Size(52, 13);
-            this.linkLabel2.TabIndex = 9;
-            this.linkLabel2.TabStop = true;
-            this.linkLabel2.Text = "Clear Log";
-            this.linkLabel2.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.linkLabel2_LinkClicked);
             // 
             // btnDoExtenderConnect
             // 
@@ -198,15 +185,6 @@ namespace SoftSled
             this.lnkShowCtrlHideInfo.Text = "Show RDP Control + Hide Status Info";
             this.lnkShowCtrlHideInfo.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.lnkShowCtrlHideInfo_LinkClicked);
             // 
-            // label2
-            // 
-            this.label2.AutoSize = true;
-            this.label2.Location = new System.Drawing.Point(371, 575);
-            this.label2.Name = "label2";
-            this.label2.Size = new System.Drawing.Size(35, 13);
-            this.label2.TabIndex = 19;
-            this.label2.Text = "label2";
-            // 
             // videoView1
             // 
             this.videoView1.BackColor = System.Drawing.Color.Black;
@@ -230,10 +208,9 @@ namespace SoftSled
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(1436, 587);
+            this.ClientSize = new System.Drawing.Size(1477, 587);
             this.Controls.Add(this.label3);
             this.Controls.Add(this.videoView1);
-            this.Controls.Add(this.label2);
             this.Controls.Add(this.lnkShowCtrlHideInfo);
             this.Controls.Add(this.chkInVchanDebug);
             this.Controls.Add(this.chkLogDebug);
@@ -242,7 +219,6 @@ namespace SoftSled
             this.Controls.Add(this.btnExtenderSetup);
             this.Controls.Add(this.btnExtenderDisconnect);
             this.Controls.Add(this.btnDoExtenderConnect);
-            this.Controls.Add(this.linkLabel2);
             this.Controls.Add(this.lnkGiveFocus);
             this.Controls.Add(this.txtLog);
             this.Controls.Add(this.rdpClient);
@@ -263,7 +239,6 @@ namespace SoftSled
         private AxMSTSCLib.AxMsRdpClient7 rdpClient;
         private System.Windows.Forms.TextBox txtLog;
         private System.Windows.Forms.LinkLabel lnkGiveFocus;
-        private System.Windows.Forms.LinkLabel linkLabel2;
         private System.Windows.Forms.Button btnDoExtenderConnect;
         private System.Windows.Forms.Button btnExtenderDisconnect;
         private System.Windows.Forms.Button btnExtenderSetup;
@@ -274,7 +249,6 @@ namespace SoftSled
         private System.Windows.Forms.CheckBox chkLogDebug;
         private System.Windows.Forms.CheckBox chkInVchanDebug;
         private System.Windows.Forms.LinkLabel lnkShowCtrlHideInfo;
-        private System.Windows.Forms.Label label2;
         private LibVLCSharp.WinForms.VideoView videoView1;
         private System.Windows.Forms.Label label3;
     }

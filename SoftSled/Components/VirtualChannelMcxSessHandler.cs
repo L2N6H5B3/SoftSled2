@@ -1,7 +1,5 @@
 ﻿using AxMSTSCLib;
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 
 namespace SoftSled.Components {
@@ -50,16 +48,15 @@ namespace SoftSled.Components {
                     // Get CreateService Data
                     int createServicePayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
                     int createServiceChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
-                    Guid createServiceClassID = DataUtilities.GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
-                    Guid createServiceServiceID = DataUtilities.GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
+                    Guid createServiceClassID = DataUtilities.GuidFromArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+                    Guid createServiceServiceID = DataUtilities.GuidFromArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
                     int createServiceServiceHandle = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16 + 16);
-
-                    m_logger.LogDebug("MCXSESS: Request CreateService " + createServiceServiceHandle);
 
                     switch (createServiceClassID.ToString()) {
                         // DSMN ClassID
                         case "a30dc60e-1e2c-44f2-bfd1-17e51c0cdf19":
                             DSMNServiceHandle = createServiceServiceHandle;
+                            m_logger.LogDebug($"MCXSESS: CreateService DSMN ({DSMNServiceHandle})");
                             // Create new StatusChangedArgs
                             StatusChangedArgs args = new StatusChangedArgs {
                                 // Set the StatusChangedArgs Response Data
@@ -68,6 +65,9 @@ namespace SoftSled.Components {
                             };
                             // Raise Response Event
                             StatusChanged(this, args);
+                            break;
+                        default:
+                            m_logger.LogDebug($"MCXSESS: CreateService ClassID {createServiceClassID} with ServiceID {createServiceServiceID} not available");
                             break;
                     }
 
@@ -81,30 +81,39 @@ namespace SoftSled.Components {
                     // Send the CreateService Response
                     rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                    m_logger.LogDebug("MCXSESS: Sent Response CreateService " + dispatchRequestHandle);
                 }
                 // DeleteService Request
-                else if (dispatchFunctionHandle == 2) {
+                else if (dispatchFunctionHandle == 1) {
 
                     // Get DeleteService Data
                     int deleteServicePayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
                     int deleteServiceChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
-                    Guid deleteServiceClassID = DataUtilities.GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
-                    Guid deleteServiceServiceID = DataUtilities.GetGuid(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
-                    int deleteServiceServiceHandle = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16 + 16);
+                    int deleteServiceServiceHandle = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
 
-                    m_logger.LogDebug("MCXSESS: Request DeleteService " + deleteServiceServiceHandle);
+                    // If this is the DSMN Service
+                    if (deleteServiceServiceHandle == DSMNServiceHandle) {
+                        m_logger.LogDebug($"MCXSESS: DeleteService DSMN ({DSMNServiceHandle})");
+                        // Clear the DSMN Service
+                        DSMNServiceHandle = 0;
+                    } else {
+                        m_logger.LogDebug($"MCXSESS: DeleteService Handle ({deleteServiceServiceHandle}) not found");
+                    }
 
+                    // Initialise DeleteService Response
+                    byte[] response = Components.DSLRCommunication.DeleteServiceResponse(
+                        DataUtilities.GetByteSubArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2, 4)
+                    );
+                    // Encapsulate the Response (Doesn't seem to work without this?)
+                    byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
-                    // Send the DeleteService Response
-                    //rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(response));
+                    // Send the CreateService Response
+                    rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                    m_logger.LogDebug("MCXSESS: Sent Response DeleteService " + dispatchRequestHandle);
                 }
                 // Unknown Request
                 else {
 
-                    System.Diagnostics.Debug.WriteLine($"MCXSESS: Unknown DSLR Request {dispatchFunctionHandle} not implemented");
+                    m_logger.LogDebug($"MCXSESS: Unknown DSLR Request {dispatchFunctionHandle} not implemented");
 
                 }
 
@@ -119,7 +128,7 @@ namespace SoftSled.Components {
                 // ShellDisconnect Request
                 if (dispatchFunctionHandle == 0) {
 
-                    m_logger.LogDebug("MCXSESS: Request ShellDisconnect " + dispatchServiceHandle);
+                    m_logger.LogDebug("MCXSESS: ShellDisconnect");
 
                     // Get ShellDisconnect Data
                     int ShellDisconnectPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
@@ -184,6 +193,7 @@ namespace SoftSled.Components {
                     StatusChangedArgs args = new StatusChangedArgs {
                         // Set the StatusChangedArgs Response Data
                         shellOpen = false,
+                        statusInt = ShellDisconnectPayloadDisconnectReason,
                         statusText = newStatusString
                     };
                     // Raise Response Event
@@ -201,13 +211,11 @@ namespace SoftSled.Components {
                     // Send the ShellDisconnect Response
                     rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                    m_logger.LogDebug("MCXSESS: Sent Response ShellDisconnect " + dispatchServiceHandle);
-
                 }
                 // ShellIsActive Request
                 else if (dispatchFunctionHandle == 2) {
 
-                    m_logger.LogDebug("MCXSESS: Request ShellIsActive " + dispatchServiceHandle);
+                    m_logger.LogDebug("MCXSESS: ShellIsActive");
 
                     // Create new StatusChangedArgs
                     StatusChangedArgs args = new StatusChangedArgs {
@@ -228,13 +236,11 @@ namespace SoftSled.Components {
                     // Send the ShellIsActive Response
                     rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                    m_logger.LogDebug("MCXSESS: Sent Response ShellIsActive " + dispatchServiceHandle);
-
                 }
                 // Heartbeat Request
                 else if (dispatchFunctionHandle == 1) {
 
-                    m_logger.LogDebug("MCXSESS: Request Heartbeat " + dispatchServiceHandle);
+                    m_logger.LogDebug("MCXSESS: Heartbeat");
 
                     // Get Heartbeat Data
                     int HeartbeatPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
@@ -251,13 +257,11 @@ namespace SoftSled.Components {
                     // Send the Heartbeat Response
                     rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                    m_logger.LogDebug("MCXSESS: Sent Response Heartbeat " + dispatchServiceHandle);
-
                 }
                 // GetQWaveSinkInfo Request
                 else if (dispatchFunctionHandle == 3) {
 
-                    m_logger.LogDebug("MCXSESS: Request GetQWaveSinkInfo " + dispatchServiceHandle);
+                    m_logger.LogDebug("MCXSESS: GetQWaveSinkInfo");
 
                     // Get GetQWaveSinkInfo Data
                     int GetQWaveSinkInfoPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
@@ -274,13 +278,11 @@ namespace SoftSled.Components {
                     // Send the GetQWaveSinkInfo Response
                     rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                    m_logger.LogDebug("MCXSESS: Sent Response GetQWaveSinkInfo " + dispatchServiceHandle);
-
                 }
                 // Unknown Request
                 else {
 
-                    System.Diagnostics.Debug.WriteLine($"MCXSESS: Unknown DSMN Request {dispatchFunctionHandle} not implemented");
+                    m_logger.LogDebug("MCXSESS: Unknown");
 
                     // Get Unknown Data
                     int UnknownPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
@@ -300,15 +302,13 @@ namespace SoftSled.Components {
                     // Send the Generic Response
                     rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
 
-                    m_logger.LogDebug("MCXSESS: Sent Generic Response " + dispatchFunctionHandle);
-
                 }
 
                 #endregion ####################################################
 
             } else {
 
-                System.Diagnostics.Debug.WriteLine($"MCXSESS: Unknown {dispatchServiceHandle} Request {dispatchFunctionHandle} not implemented");
+                m_logger.LogDebug($"MCXSESS: Unknown {dispatchServiceHandle} Request {dispatchFunctionHandle} not implemented");
 
             }
         }
@@ -316,6 +316,7 @@ namespace SoftSled.Components {
 
     class StatusChangedArgs : EventArgs {
         public bool shellOpen;
+        public int? statusInt;
         public string statusText;
     }
 }

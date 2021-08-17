@@ -100,10 +100,11 @@
       <SubType>UserControl</SubType>
     </Compile>
     <Compile Include="Components\Logger.cs" />
+    <Compile Include="Components\VirtualChannelMCECapsHandler.cs" />
     <Compile Include="Components\VirtualChannelMcxSessHandler.cs" />
     <Compile Include="Components\VirtualChannelDevCapsHandler.cs" />
     <Compile Include="Components\VirtualChannelAvCtrlHandler.cs" />
-    <Compile Include="Components\Utilities.cs" />
+    <Compile Include="Components\DataUtilities.cs" />
     <Compile Include="Components\SoftSledConfig.cs" />
     <Compile Include="Components\SoftSledConfigManager.cs" />
     <Compile Include="Components\TextBoxLogger.cs" />
@@ -115,6 +116,12 @@
     </Compile>
     <Compile Include="Form1.Designer.cs">
       <DependentUpon>Form1.cs</DependentUpon>
+    </Compile>
+    <Compile Include="FrmFullScreen.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="FrmFullScreen.Designer.cs">
+      <DependentUpon>FrmFullScreen.cs</DependentUpon>
     </Compile>
     <Compile Include="FrmMain.cs">
       <SubType>Form</SubType>
@@ -130,6 +137,10 @@
     <EmbeddedResource Include="Form1.resx">
       <SubType>Designer</SubType>
       <DependentUpon>Form1.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="FrmFullScreen.resx">
+      <DependentUpon>FrmFullScreen.cs</DependentUpon>
+      <SubType>Designer</SubType>
     </EmbeddedResource>
     <EmbeddedResource Include="FrmMain.resx">
       <SubType>Designer</SubType>
@@ -201,6 +212,13 @@
     <Content Include="KeyExchange\2\CertificateAuthorities.txt" />
     <Content Include="KeyExchange\2\FullKeyExchange.txt" />
     <Content Include="KeyExchange\2\TempFile.xml" />
+    <Content Include="Resources\audio\error_a.wav" />
+    <Content Include="Resources\audio\focus_a.wav" />
+    <Content Include="Resources\audio\intro_a.wav">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Resources\audio\miniselect_a.wav" />
+    <Content Include="Resources\icon\wmc.ico" />
     <Content Include="XML\Linksys2200DeviceDescription.xml" />
     <Content Include="XML\msremotedexperience.xml" />
     <Content Include="XML\mstrustagreement.xml" />

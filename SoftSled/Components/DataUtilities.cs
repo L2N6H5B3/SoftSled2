@@ -17,14 +17,14 @@ namespace SoftSled.Components {
 
                 }
             } catch (IndexOutOfRangeException) {
-                System.Diagnostics.Debug.WriteLine($"IndexOutOfRangeException: StartPosition {startPosition} ByteCount {byteCount}");
+                //System.Diagnostics.Debug.WriteLine($"IndexOutOfRangeException: StartPosition {startPosition} ByteCount {byteCount}");
                 // DEBUG PURPOSES ONLY
                 string incomingByteArray = "";
                 foreach (byte b in byteArray) {
                     incomingByteArray += b.ToString("X2") + " ";
                 }
                 // DEBUG PURPOSES ONLY
-                System.Diagnostics.Debug.WriteLine(incomingByteArray);
+                //System.Diagnostics.Debug.WriteLine(incomingByteArray);
             }
             return result;
         }
@@ -33,7 +33,7 @@ namespace SoftSled.Components {
 
             byte[] result = GetByteSubArray(byteArray, startPosition, length);
 
-            return Encoding.ASCII.GetString(result);
+            return Encoding.UTF8.GetString(result);
         }
 
         public static int Get4ByteInt(byte[] byteArray, int startPosition) {
@@ -69,7 +69,7 @@ namespace SoftSled.Components {
             return BitConverter.ToInt16(result, 0);
         }
 
-        public static Guid GetGuid(byte[] byteArray, int startPosition) {
+        public static Guid GuidFromArray(byte[] byteArray, int startPosition) {
 
             int byteCount = 16;
 
@@ -109,6 +109,48 @@ namespace SoftSled.Components {
 
             // Return the created GUID
             return new Guid(result.ToArray());
+        }
+
+        public static byte[] GuidToArray(Guid guid) {
+
+            byte[] byteArray = Encoding.Unicode.GetBytes(guid.ToString());
+
+            byte[] data1 = new byte[4];
+            byte[] data2 = new byte[2];
+            byte[] data3 = new byte[2];
+            byte[] data4 = new byte[8];
+
+            for (int i = 0; i < 16; i++) {
+                if (i < 4) {
+                    data1[i] = byteArray[i];
+                } else if (i < 6) {
+                    data2[i - 4] = byteArray[i];
+                } else if (i < 8) {
+                    data3[i - 6] = byteArray[i];
+                } else {
+                    data4[i - 8] = byteArray[i];
+                }
+            }
+
+            if (BitConverter.IsLittleEndian) {
+                Array.Reverse(data1);
+                Array.Reverse(data2);
+                Array.Reverse(data3);
+            }
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate Array
+            IEnumerable<byte> result = data1
+                // Add Data 2
+                .Concat(data2)
+                // Add Data 3
+                .Concat(data3)
+                // Add Data 4
+                .Concat(data4);
+
+            // Return the created Byte Array
+            return result.ToArray();
         }
     }
 }
