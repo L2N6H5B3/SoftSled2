@@ -75,6 +75,9 @@ namespace SoftSled {
             } else if (e.shellOpen && rdpClient.Visible == true) {
                 panOverlay.Visible = false;
                 rdpClient.Visible = true;
+
+                GetMceCaps();
+
             } else {
                 panOverlay.Visible = true;
                 rdpClient.Visible = false;
@@ -182,10 +185,12 @@ namespace SoftSled {
 
             // NOTICE, if you want ehshell.exe to start up in normal Remote Desktop mode, remove the devcaps channel definition bellow. 
             //rdpClient.CreateVirtualChannels("McxSess,MCECaps,avctrl,VCHD");
-            //rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD");
+            rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD");
+
+            
 
             // Create Virtual Channels
-            rdpClient.CreateVirtualChannels("McxSess,devcaps,avctrl");
+            //rdpClient.CreateVirtualChannels("McxSess,devcaps,avctrl");
 
             // Set RDP Initialised
             rdpInitialised = true;
@@ -232,7 +237,6 @@ namespace SoftSled {
 
             btnDoExtenderConnect.Enabled = false;
             btnExtenderDisconnect.Enabled = true;
-
         }
 
         #endregion ############################################################
@@ -273,6 +277,13 @@ namespace SoftSled {
             string audioFile = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "Resources", "audio", "intro_a.wav");
             System.Media.SoundPlayer player = new System.Media.SoundPlayer(audioFile);
             player.Play();
+        }
+
+        private void GetMceCaps() {
+
+            VirtualChannelMceCapsSender virtualChannelMceCaps = new VirtualChannelMceCapsSender(m_logger, rdpClient);
+
+            rdpClient.SendOnVirtualChannel("MCECaps", );
         }
 
         #endregion ############################################################
