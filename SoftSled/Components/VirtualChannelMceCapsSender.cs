@@ -5,67 +5,14 @@ using System.Diagnostics;
 using System.Text;
 
 namespace SoftSled.Components {
-    class VirtualChannelDevCapsHandler {
+    class VirtualChannelMceCapsSender {
 
         private Logger m_logger;
         private AxMsRdpClient7 rdpClient;
 
         private int DSPAServiceHandle;
-        private List<string> DevCapsDisabledCapabilities = new List<string> {
-            //"PH", // PHO - Are advanced photo features allowed?
-            //"EX", // EXT - Are Extender Settings allowed?
-            "MA", // MAR - Are over-scan margins needed?
-            //"PO", // POP - Are Pop ups allowed?
-            "ZO", // ZOM - Is video zoom mode allowed?
-            "NL", // NLZ - Is nonlinear zoom supported?
-            "RS", // RSZ - Is raw stretched zoom supported?
-            "WI", // WID - Is wide screen enabled?
-            "H1", // H10 - Is 10 feet help allowed? 
-            "WE", // WEB - Is 10 feet web content allowed? 
-            "H0", // H02 - Is 2 feet help allowed? 
-            "WE", // WE2 - Is 2 feet web content allowed? 
-            //"AUD", // AUD - Is audio allowed?
-            "AUR", // AUR - Is audio Non WMP?
-            "AR", // ARA - Is auto restart allowed?
-            "BL", // BLB - Is black letters box needed?
-            "CC", // CCC - Is CC rendered by the client?
-            "CR", // CRC - Is CD burning allowed?
-            "CP", // CPY - Is CD copying allowed?
-            "CD", // CDA - Is CD playback allowed?
-            "CL", // CLO - Is the close button shown?
-            "DR", // DRC - Is DVD burning allowed?
-            "DV", // DVD - Is DVD playback allowed?
-            "FP", // FPD - Is FPD allowed?
-            //"GD", // GDI - Is GDI renderer used?
-            "HDV", // HDV - Is HD content allowed?
-            "HDN", // HDN - Is HD content allowed by the network?
-            "SD", // SDN - Is SD content allowed by the network?
-            "RE", // REM - Is input treated as if from a remote?
-            "AN", // ANI - Is intensive animation allowed?
-            //"2D", // 2DA - Is 2D animation allowed?
-            "HT", // HTM - Is HTML supported?
-            "DE", // DES - Is MCE a Windows shell?
-            "DO", // DOC - Is my Documents populated?
-            "SC", // SCR - Is a native screensaver required?
-            "ON", // ONS - Is online spotlight allowed?
-            "SU", // SUP - Is RDP super blt allowed?
-            "BI", // BIG - Is remote UI renderer big-endian?
-            "RU", // RUI - Is remote UI rendering supported?
-            "SD", // SDM - Is a screen data mode workaround needed?
-            "TB", // TBA - Is a Toolbar allowed?
-            "SY", // SYN - Is transfer to a device allowed?
-            "AP", // APP - Is tray applet allowed?
-            //"TV", // TVS - Is a TV skin used?
-            //"SO", // SOU - Is UI sound supported?
-            //"VID", // VID - Is video allowed?
-            "W3", // W32 - Is Win32 content allowed?
-            "WI", // WIN - Is window mode allowed?
-            //"VIZ", // VIZ - Is WMP visualisation allowed?
-            "VO", // VOL - Is volume UI allowed?
-            "MU" // MUT - Is mute ui allowed?
-        };
 
-        public VirtualChannelDevCapsHandler(Logger m_logger, AxMsRdpClient7 rdpClient) {
+        public VirtualChannelMceCapsSender(Logger m_logger, AxMsRdpClient7 rdpClient) {
             this.m_logger = m_logger;
             this.rdpClient = rdpClient;
         }
