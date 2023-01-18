@@ -43,6 +43,13 @@
 						<controlURL>740a20cc-a078-4d53-ac54-56f4972851e5/_urn:microsoft-com:serviceId:MSTA_control</controlURL>
 						<eventSubURL>740a20cc-a078-4d53-ac54-56f4972851e5/_urn:microsoft-com:serviceId:MSTA_event</eventSubURL>
 					</service>
+					<service>
+						<serviceType>urn:schemas-microsoft-com:service:msremotedexperience:1</serviceType>
+						<serviceId>urn:schemas-microsoft-com:serviceId:MSRX</serviceId>
+						<SCPDURL>740a20cc-a078-4d53-ac54-56f4972851e5/_urn:microsoft-com:serviceId:MSRX_scpd.xml</SCPDURL>
+						<controlURL>740a20cc-a078-4d53-ac54-56f4972851e5/_urn:microsoft-com:serviceId:MSRX_control</controlURL>
+						<eventSubURL>740a20cc-a078-4d53-ac54-56f4972851e5/_urn:microsoft-com:serviceId:MSRX_event</eventSubURL>/>
+					</service>
 				</serviceList>
 			</device>
 		</deviceList>
