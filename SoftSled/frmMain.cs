@@ -218,7 +218,7 @@ namespace SoftSled {
             // Stop playing Media
             _mp.Stop();
 
-            m_logger.LogInfo("RDP: Disconnected");
+            m_logger.LogInfo($"RDP: Disconnected ({e.discReason})");
             if (isConnecting == true) {
                 SetStatus("Forcibly disconnected from Remote Desktop Host");
                 isConnecting = false;
