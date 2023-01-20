@@ -159,10 +159,16 @@
     <None Include="Certificates\softsled.pem">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Include="Certificates\SoftSled2023.cer">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
     <None Include="Certificates\softsledCA.cer" />
     <None Include="Certificates\softsledCAkey.pem" />
     <None Include="Certificates\softslednew.cer" />
     <None Include="Certificates\softslednewkey.pem" />
+    <None Include="Certificates\Xbox360.cer">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
     <None Include="KeyExchange\2\devicecert.cer" />
     <None Include="KeyExchange\2\hostcert.cer" />
     <None Include="KeyExchange\Wireshark Captures\Linksys 2200 Setup.cap" />
