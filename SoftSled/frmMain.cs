@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Text;
 using System.Windows.Forms;
 
 namespace SoftSled {
@@ -202,6 +203,7 @@ namespace SoftSled {
                     McxSessHandler.ProcessData(e.data);
                 } else {
                     MessageBox.Show("unhandled data on channel " + e.chanName);
+                    m_logger.LogDebug($"{e.chanName} Bytes: " + BitConverter.ToString(Encoding.Unicode.GetBytes(e.data)));
                 }
 
             } catch (Exception ee) {
