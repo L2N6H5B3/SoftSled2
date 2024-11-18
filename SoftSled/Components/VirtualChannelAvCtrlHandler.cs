@@ -59,6 +59,7 @@ namespace SoftSled.Components {
                 int dispatchServiceHandle = DataUtilities.Get4ByteInt(incomingBuff, 14);
                 int dispatchFunctionHandle = DataUtilities.Get4ByteInt(incomingBuff, 18);
 
+                Debug.WriteLine("AVCTRL: Bytes: " + BitConverter.ToString(incomingBuff));
 
                 // DEBUG PURPOSES ONLY
                 Debug.WriteLine("");
@@ -108,7 +109,7 @@ namespace SoftSled.Components {
 
                         // Initialise CreateService Response
                         byte[] response = Components.DSLRCommunication.CreateServiceResponse(
-                            DataUtilities.GetByteSubArray(incomingBuff, 10, 4)
+                            dispatchRequestHandleArray
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
@@ -184,6 +185,7 @@ namespace SoftSled.Components {
                         m_logger.LogDebug($"AVCTRL: OpenMedia ({OpenMediaPayloadURL})");
 
                         DMCTOpenMediaURL = OpenMediaPayloadURL;
+                        Debug.WriteLine(DMCTOpenMediaURL);
 
                         // Create Media Object
                         currentMedia = new Media(_libVLC, new Uri(DMCTOpenMediaURL));
@@ -193,7 +195,7 @@ namespace SoftSled.Components {
 
                         // Initialise OpenMedia Response
                         byte[] response = Components.DSLRCommunication.OpenMediaResponse(
-                            DataUtilities.GetByteSubArray(incomingBuff, 10, 4)
+                            dispatchRequestHandleArray
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
@@ -211,7 +213,7 @@ namespace SoftSled.Components {
 
                         // Initialise CloseMedia Response
                         byte[] response = Components.DSLRCommunication.CloseMediaResponse(
-                            DataUtilities.GetByteSubArray(incomingBuff, 10, 4)
+                            dispatchRequestHandleArray
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
@@ -237,7 +239,7 @@ namespace SoftSled.Components {
 
                         // Initialise Start Response
                         byte[] response = Components.DSLRCommunication.StartResponse(
-                            DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
+                            dispatchRequestHandleArray,
                             1
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
@@ -256,7 +258,7 @@ namespace SoftSled.Components {
 
                         // Initialise Pause Response
                         byte[] response = Components.DSLRCommunication.PauseResponse(
-                            DataUtilities.GetByteSubArray(incomingBuff, 10, 4)
+                            dispatchRequestHandleArray
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
@@ -274,7 +276,7 @@ namespace SoftSled.Components {
 
                         // Initialise Stop Response
                         byte[] response = Components.DSLRCommunication.StopResponse(
-                            DataUtilities.GetByteSubArray(incomingBuff, 10, 4)
+                            dispatchRequestHandleArray
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
@@ -292,7 +294,7 @@ namespace SoftSled.Components {
 
                         // Initialise GetDuration Response
                         byte[] response = Components.DSLRCommunication.GetDurationResponse(
-                            DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
+                            dispatchRequestHandleArray,
                             durationLongMili
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
@@ -311,7 +313,7 @@ namespace SoftSled.Components {
 
                         // Initialise GetPosition Response
                         byte[] response = Components.DSLRCommunication.GetPositionResponse(
-                            DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
+                            dispatchRequestHandleArray,
                             positionLongMili
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
@@ -419,7 +421,7 @@ namespace SoftSled.Components {
                             case "XspHostAddress":
                                 // Initialise GetStringProperty Response
                                 byte[] response = Components.DSLRCommunication.GetStringPropertyResponse(
-                                    DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
+                                    dispatchRequestHandleArray,
                                     SoftSledConfigManager.ReadConfig().RdpLoginHost
                                 );
                                 // Encapsulate the Response (Doesn't seem to work without this?)
@@ -449,7 +451,7 @@ namespace SoftSled.Components {
                             case "IsMuted":
                                 // Initialise GetDWORDProperty Response
                                 byte[] isMutedResponse = Components.DSLRCommunication.GetDWORDPropertyResponse(
-                                    DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
+                                    dispatchRequestHandleArray,
                                     0
                                 );
                                 // Encapsulate the Response (Doesn't seem to work without this?)
@@ -462,7 +464,7 @@ namespace SoftSled.Components {
                             case "Volume":
                                 // Initialise GetDWORDProperty Response
                                 byte[] volumeResponse = Components.DSLRCommunication.GetDWORDPropertyResponse(
-                                    DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
+                                    dispatchRequestHandleArray,
                                     1
                                 );
                                 // Encapsulate the Response (Doesn't seem to work without this?)
@@ -493,7 +495,7 @@ namespace SoftSled.Components {
 
                                 // Initialise SetDWORDProperty Response
                                 byte[] response = Components.DSLRCommunication.SetDWORDPropertyResponse(
-                                    DataUtilities.GetByteSubArray(incomingBuff, 10, 4)
+                                    dispatchRequestHandleArray
                                 );
                                 // Encapsulate the Response (Doesn't seem to work without this?)
                                 byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
@@ -534,7 +536,7 @@ namespace SoftSled.Components {
 
                         // Initialise RegisterTransmitterService Response
                         byte[] response = Components.DSLRCommunication.RegisterTransmitterServiceResponse(
-                            DataUtilities.GetByteSubArray(incomingBuff, 10, 4)
+                            dispatchRequestHandleArray
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
@@ -555,7 +557,7 @@ namespace SoftSled.Components {
 
                         // Initialise UnregisterTransmitterService Response
                         byte[] response = Components.DSLRCommunication.UnregisterTransmitterServiceResponse(
-                            DataUtilities.GetByteSubArray(incomingBuff, 10, 4)
+                            dispatchRequestHandleArray
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
@@ -575,7 +577,7 @@ namespace SoftSled.Components {
 
                         // Initialise InitiateRegistration Response
                         byte[] response = Components.DSLRCommunication.InitiateRegistrationResponse(
-                            DataUtilities.GetByteSubArray(incomingBuff, 10, 4)
+                            dispatchRequestHandleArray
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
