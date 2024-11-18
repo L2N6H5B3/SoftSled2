@@ -33,7 +33,7 @@ namespace SoftSled.Components
             {
                 m_ownerForm.Invoke(new dTextWrite(delegate(string ex)
                 {
-                    m_textBox.Text += ex + Environment.NewLine;
+                    m_textBox.Text = ex + Environment.NewLine + m_textBox.Text;
                 }), message);
             }
 
