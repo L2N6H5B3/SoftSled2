@@ -69,6 +69,14 @@ namespace SoftSled.Components {
             return BitConverter.ToInt16(result, 0);
         }
 
+        public static byte[] GetInt4Byte(int integer) {
+            byte[] result = BitConverter.GetBytes(integer);
+            if (BitConverter.IsLittleEndian) {
+                Array.Reverse(result);
+            }
+            return result;
+        }
+
         public static Guid GuidFromArray(byte[] byteArray, int startPosition) {
 
             int byteCount = 16;
