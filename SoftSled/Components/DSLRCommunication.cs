@@ -1000,7 +1000,7 @@ namespace SoftSled.Components {
             // Get GetStringProperty Byte Arrays
             byte[] GetStringPropertyChildCount = new byte[] { 0, 0 };
             byte[] GetStringPropertyPayloadS_OK = new byte[] { 0, 0, 0, 0 };
-            byte[] GetStringPropertyPayloadPropertyValue = Encoding.UTF8.GetBytes(propertyValueString);
+            byte[] GetStringPropertyPayloadPropertyValue = Encoding.UTF8.GetBytes(propertyValueString + '\0');
             byte[] GetStringPropertyPayloadLength = GetInverse4ByteArrayFromInt(
                 GetStringPropertyPayloadPropertyValue.Length
             );
