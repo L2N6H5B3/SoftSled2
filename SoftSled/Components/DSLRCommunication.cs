@@ -939,7 +939,7 @@ namespace SoftSled.Components {
             return response.ToArray();
         }
 
-        public static byte[] UnregisterMediaEventCallbackResponse(int dispatchRequestHandleInt, int cookieInt, byte[] UnregisterMediaEventCallbackPayloadResult) {
+        public static byte[] UnregisterMediaEventCallbackResponse(int dispatchRequestHandleInt, byte[] UnregisterMediaEventCallbackPayloadResult) {
 
             byte[] dispatchRequestHandle = GetInverse4ByteArrayFromInt(dispatchRequestHandleInt);
 
@@ -953,10 +953,8 @@ namespace SoftSled.Components {
 
             // Get UnregisterMediaEventCallback Byte Arrays
             byte[] UnregisterMediaEventCallbackChildCount = new byte[] { 0, 0 };
-            byte[] UnregisterMediaEventCallbackPayloadCookie = GetInverse4ByteArrayFromInt(cookieInt);
             byte[] UnregisterMediaEventCallbackPropertyPayloadSize = GetInverse4ByteArrayFromInt(
-                UnregisterMediaEventCallbackPayloadResult.Length +
-                UnregisterMediaEventCallbackPayloadCookie.Length
+                UnregisterMediaEventCallbackPayloadResult.Length
             );
 
             // Create Base Byte Array
