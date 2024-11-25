@@ -13,7 +13,7 @@ namespace RDPVCManager {
         static IntPtr Channel;
         static ChannelEntryPoints EntryPoints;
         private static ChannelContext[] _channelContexts;
-        private static string _logFilePath = "RDPVCManager.log"; // Log file path
+        //private static string _logFilePath = "RDPVCManager.log"; // Log file path
         private static string pipePrefix = "RDPVCManager_";
         private static string[] channelNames = { "McxSess", "devcaps", "avctrl" };
         static ChannelInitEventDelegate channelInitEventDelegate = new ChannelInitEventDelegate(VirtualChannelInitEventProc);
@@ -186,16 +186,16 @@ namespace RDPVCManager {
 
         // Helper function for logging to file
         private static void LogToFile(string message, bool isError = false) {
-            try {
-                using (StreamWriter writer = new StreamWriter(_logFilePath, true)) {
-                    string logEntry = $"{DateTime.Now} - {(isError ? "Error" : "Info")}: {message}";
-                    writer.WriteLine(logEntry);
-                }
-            } catch (Exception ex) {
-                // Handle potential exceptions during logging (e.g., file access errors)
-                // You might want to write to the console or use a fallback logging mechanism here
-                Console.WriteLine($"Error writing to log file: {ex.Message}");
-            }
+            //try {
+            //    using (StreamWriter writer = new StreamWriter(_logFilePath, true)) {
+            //        string logEntry = $"{DateTime.Now} - {(isError ? "Error" : "Info")}: {message}";
+            //        writer.WriteLine(logEntry);
+            //    }
+            //} catch (Exception ex) {
+            //    // Handle potential exceptions during logging (e.g., file access errors)
+            //    // You might want to write to the console or use a fallback logging mechanism here
+            //    Console.WriteLine($"Error writing to log file: {ex.Message}");
+            //}
         }
     }
 
