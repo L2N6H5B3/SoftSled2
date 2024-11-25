@@ -8,72 +8,72 @@ namespace SoftSled.Components {
     class VirtualChannelDevCapsHandler {
 
         private Logger m_logger;
-        private AxMsRdpClient7 rdpClient;
+        private RDPVCInterface rdpvc;
 
         private int DSPAServiceHandle;
         private List<string> DevCapsEnabledCapabilities = new List<string> {
-            //"2D", // 2DA - Is 2D animation allowed?
-            //"AN", // ANI - Is intensive animation allowed?
-            //"AP", // APP - Is tray applet allowed?
-            //"AR", // ARA - Is auto restart allowed?
-            "AU", // AUD - Is audio allowed?
-            "AU", // AUR - Is audio Non WMP?
-            //"BI", // BIG - Is remote UI renderer big-endian?
-            //"BL", // BLB - Is black letters box needed?
-            //"CC", // CCC - Is CC rendered by the client?
-            //"CD", // CDA - Is CD playback allowed?
-            //"CL", // CLO - Is the close button shown?
-            //"CP", // CPY - Is CD copying allowed?
-            //"CR", // CRC - Is CD burning allowed?
-            //"DE", // DES - Is MCE a Windows shell?
-            //"DO", // DOC - Is my Documents populated?
-            //"DR", // DRC - Is DVD burning allowed?
-            //"DV", // DVD - Is DVD playback allowed?
-            //"EX", // EXT - Are Extender Settings allowed?
-            //"FP", // FPD - Is FPD allowed?
-            "GD", // GDI - Is GDI renderer used?
-            "H0", // H02 - Is 2 feet help allowed? 
-            "H1", // H10 - Is 10 feet help allowed? 
-            "HD", // HDN - Is HD content allowed by the network?
-            "HD", // HDV - Is HD content allowed?
-            "HT", // HTM - Is HTML supported?
-            //"MA", // MAR - Are over-scan margins needed?
-            "MU", // MUT - Is mute ui allowed?
-            "NL", // NLZ - Is nonlinear zoom supported?
-            //"ON", // ONS - Is online spotlight allowed?
-            //"PH", // PHO - Are advanced photo features allowed?
-            "PO", // POP - Are Pop ups allowed?
-            "RE", // REM - Is input treated as if from a remote?
-            "RS", // RSZ - Is raw stretched zoom supported?
-            //"RU", // RUI - Is remote UI rendering supported?
-            //"SC", // SCR - Is a native screensaver required?
-            //"SD", // SDM - Is a screen data mode workaround needed?
-            "SD", // SDN - Is SD content allowed by the network?
-            "SO", // SOU - Is UI sound supported?
-            //"SU", // SUP - Is RDP super blt allowed?
-            //"SY", // SYN - Is transfer to a device allowed?
-            //"TB", // TBA - Is a Toolbar allowed?
-            //"TV", // TVS - Is a TV skin used?
-			"VI", // VID - Is video allowed?
-            "VI", // VIZ - Is WMP visualisation allowed?
-            "VO", // VOL - Is volume UI allowed?
-            "W3", // W32 - Is Win32 content allowed?
-            "WE", // WE2 - Is 2 feet web content allowed? 
-            "WE", // WEB - Is 10 feet web content allowed? 
-            //"WI", // WID - Is wide screen enabled?
-            //"WI", // WIN - Is window mode allowed?
-            "ZO" // ZOM - Is video zoom mode allowed?
+            "2DA", // 2DA - Is 2D animation allowed?
+            "ANI", // ANI - Is intensive animation allowed?
+            //"APP", // APP - Is tray applet allowed?
+            //"ARA", // ARA - Is auto restart allowed?
+            "AUD", // AUD - Is audio allowed?
+            "AUR", // AUR - Is audio Non WMP?
+            //"BIG", // BIG - Is remote UI renderer big-endian?
+            //"BLB", // BLB - Is black letters box needed?
+            //"CCC", // CCC - Is CC rendered by the client?
+            //"CDA", // CDA - Is CD playback allowed?
+            //"CLO", // CLO - Is the close button shown?
+            //"CPY", // CPY - Is CD copying allowed?
+            //"CRC", // CRC - Is CD burning allowed?
+            //"DES", // DES - Is MCE a Windows shell?
+            //"DOC", // DOC - Is my Documents populated?
+            //"DRC", // DRC - Is DVD burning allowed?
+            //"DVD", // DVD - Is DVD playback allowed?
+            //"EXT", // EXT - Are Extender Settings allowed?
+            //"FPD", // FPD - Is FPD allowed?
+            "GDI", // GDI - Is GDI renderer used?
+            "H02", // H02 - Is 2 feet help allowed? 
+            "H10", // H10 - Is 10 feet help allowed? 
+            "HDN", // HDN - Is HD content allowed by the network?
+            "HDV", // HDV - Is HD content allowed?
+            "HTM", // HTM - Is HTML supported?
+            //"MAR", // MAR - Are over-scan margins needed?
+            "MUT", // MUT - Is mute ui allowed?
+            "NLZ", // NLZ - Is nonlinear zoom supported?
+            //"ONS", // ONS - Is online spotlight allowed?
+            //"PHO", // PHO - Are advanced photo features allowed?
+            "POP", // POP - Are Pop ups allowed?
+            "REM", // REM - Is input treated as if from a remote?
+            "RSZ", // RSZ - Is raw stretched zoom supported?
+            //"RUI", // RUI - Is remote UI rendering supported?
+            //"SCR", // SCR - Is a native screensaver required?
+            //"SDM", // SDM - Is a screen data mode workaround needed?
+            "SDN", // SDN - Is SD content allowed by the network?
+            "SOU", // SOU - Is UI sound supported?
+            //"SUP", // SUP - Is RDP super blt allowed?
+            //"SYN", // SYN - Is transfer to a device allowed?
+            //"TBA", // TBA - Is a Toolbar allowed?
+            //"TVS", // TVS - Is a TV skin used?
+			"VID", // VID - Is video allowed?
+            "VIZ", // VIZ - Is WMP visualisation allowed?
+            "VOL", // VOL - Is volume UI allowed?
+            "W32", // W32 - Is Win32 content allowed?
+            "WE2", // WE2 - Is 2 feet web content allowed? 
+            "WEB", // WEB - Is 10 feet web content allowed? 
+            //"WID", // WID - Is wide screen enabled?
+            //"WIN", // WIN - Is window mode allowed?
+            "ZOM" // ZOM - Is video zoom mode allowed?
         };
 
-        public VirtualChannelDevCapsHandler(Logger m_logger, AxMsRdpClient5 rdpClient) {
+        public VirtualChannelDevCapsHandler(Logger m_logger, RDPVCInterface rdpvc) {
             this.m_logger = m_logger;
-            this.rdpClient = rdpClient;
+            this.rdpvc = rdpvc;
         }
 
-        public void ProcessData(string data) {
+        public void ProcessData(byte[] incomingBuff) {
 
             // Convert the incoming data to bytes
-            byte[] incomingBuff = Encoding.Unicode.GetBytes(data);
+            //byte[] incomingBuff = Encoding.Unicode.GetBytes(data);
 
             // Get DSLR Dispatcher Data
             int dispatchPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 0);
@@ -128,7 +128,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the CreateService Response
-                        rdpClient.SendOnVirtualChannel("devcaps", Encoding.Unicode.GetString(encapsulatedResponse));
+                        rdpvc.SendOnVirtualChannel("devcaps", encapsulatedResponse);
 
                     }
                     // DeleteService Request
@@ -156,7 +156,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the CreateService Response
-                        rdpClient.SendOnVirtualChannel("devcaps", Encoding.Unicode.GetString(encapsulatedResponse));
+                        rdpvc.SendOnVirtualChannel("devcaps", encapsulatedResponse);
 
                     }
                     // Unknown Request
@@ -189,14 +189,14 @@ namespace SoftSled.Components {
 
                         switch (GetStringPropertyPayloadPropertyName.Replace("\0", "")) {
                             // Property Bag Service
-                            case "NA":
+                            case "NAM":
                                 // Initialise GetStringProperty Response
                                 response = Components.DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
                                     "McxClient"
                                 );
                                 break;
-                            case "PR":
+                            case "PRT":
                                 // Initialise GetStringProperty Response
                                 response = Components.DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
@@ -208,14 +208,14 @@ rtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;MICROSOFT.COM_PN=WMVHIGH_L
 http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL;DLNA.ORG_PN=MPEG4_P2_TS_ASP_MPEG1_L3;DLNA.ORG_PN=MPEG4_P2_TS_ASP_AC3;DLNA.ORG_PN=MPEG4_P2_TS_ASP_AC3;DLNA.ORG_PN=AVC_MP4_MP_SD_MPEG1_L3;DLNA.ORG_PN=AVC_TS_MP_HD_MPEG1_L3;DLNA.ORG_PN=AVC_MP4_MP_HD_AC3;DLNA.ORG_PN=AVC_MP4_MP_SD_AC3;DLNA.ORG_PN=AVC_TS_MP_HD_AC3"
                                 );
                                 break;
-                            case "XT":
+                            case "XTY":
                                 // Initialise GetStringProperty Response
                                 response = Components.DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
                                     "McxClient"
                                 );
                                 break;
-                            case "PB":
+                            case "PBV":
                                 // Initialise GetStringProperty Response
                                 response = Components.DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
@@ -231,7 +231,7 @@ http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPE
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the GetStringProperty Response
-                        rdpClient.SendOnVirtualChannel("devcaps", Encoding.Unicode.GetString(encapsulatedResponse));
+                        rdpvc.SendOnVirtualChannel("devcaps", encapsulatedResponse);
 
                     }
                     // GetDWORDProperty Request
@@ -257,7 +257,7 @@ http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPE
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the GetDWORDProperty Response
-                        rdpClient.SendOnVirtualChannel("devcaps", Encoding.Unicode.GetString(encapsulatedResponse));
+                        rdpvc.SendOnVirtualChannel("devcaps", encapsulatedResponse);
 
                     } else {
 

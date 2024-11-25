@@ -94,6 +94,10 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Components\Logger.cs" />
+    <Compile Include="Components\NamedPipeClient.cs" />
+    <Compile Include="Components\NamedPipeServer.cs" />
+    <Compile Include="Components\PipeStreamWrapperBase.cs" />
+    <Compile Include="Components\RDPVCInterface.cs" />
     <Compile Include="Components\VirtualChannelMcxSessHandler.cs" />
     <Compile Include="Components\VirtualChannelDevCapsHandler.cs" />
     <Compile Include="Components\VirtualChannelAvCtrlHandler.cs" />
@@ -262,6 +266,14 @@
   <ItemGroup>
     <COMReference Include="AxMSTSCLib">
       <Guid>{8C11EFA1-92C3-11D1-BC1E-00C04FA31489}</Guid>
+      <VersionMajor>1</VersionMajor>
+      <VersionMinor>0</VersionMinor>
+      <Lcid>0</Lcid>
+      <WrapperTool>aximp</WrapperTool>
+      <Isolated>False</Isolated>
+    </COMReference>
+    <COMReference Include="AxWMPLib">
+      <Guid>{6BF52A50-394A-11D3-B153-00C04F79FAA6}</Guid>
       <VersionMajor>1</VersionMajor>
       <VersionMinor>0</VersionMinor>
       <Lcid>0</Lcid>

@@ -17,7 +17,9 @@ RegisterMediaEventCallback CreateService Request
 	60-63 CreateService Request Payload ServiceHandle (4 bytes).
 
 0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63
-00 00 00 08 00 01 00 00 00 01 00 00 00 01 00 00 00 28 00 00 00 00 00 00 F7 05 73 E7 F5 6E 40 72 99 FF DC F4 FD FF FA 72 6D 72 A6 15 CA 26 44 20 95 AC 4E 46 95 99 10 15 00 00 00 01 "RegisterMediaEventCallback CreateService Response
+00 00 00 08 00 01 00 00 00 01 00 00 00 01 00 00 00 28 00 00 00 00 00 00 F7 05 73 E7 F5 6E 40 72 99 FF DC F4 FD FF FA 72 6D 72 A6 15 CA 26 44 20 95 AC 4E 46 95 99 10 15 00 00 00 01 "
+
+RegisterMediaEventCallback CreateService Response
 0-3 Payload Size (4 bytes).
 4-5 ChildCount (2 bytes).
 6-9 Dispatcher Response CallingConvention (Request Type) (4 bytes).

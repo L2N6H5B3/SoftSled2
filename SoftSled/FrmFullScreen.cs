@@ -47,9 +47,9 @@ namespace SoftSled {
             this.rdpClient.Size = new System.Drawing.Size(Screen.PrimaryScreen.Bounds.Width, Screen.PrimaryScreen.Bounds.Height);
 
             // Create VirtualChannel Handlers
-            AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger, rdpClient, _libVLC, _mp);
-            DevCapsHandler = new VirtualChannelDevCapsHandler(m_logger, rdpClient);
-            McxSessHandler = new VirtualChannelMcxSessHandler(m_logger, rdpClient);
+            //AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger, rdpClient, _libVLC, _mp);
+            //DevCapsHandler = new VirtualChannelDevCapsHandler(m_logger, rdpClient);
+            //McxSessHandler = new VirtualChannelMcxSessHandler(m_logger, rdpClient);
 
             // Create VirtualChannel Handlers EventHandlers
             McxSessHandler.StatusChanged += McxSessHandler_StatusChanged;
@@ -202,15 +202,15 @@ namespace SoftSled {
         void RdpClient_OnChannelReceivedData(object sender, AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
             try {
 
-                if (e.chanName == "avctrl") {
-                    AvCtrlHandler.ProcessData(e.data);
-                } else if (e.chanName == "devcaps") {
-                    DevCapsHandler.ProcessData(e.data);
-                } else if (e.chanName == "McxSess") {
-                    McxSessHandler.ProcessData(e.data);
-                } else {
-                    MessageBox.Show("unhandled data on channel " + e.chanName);
-                }
+                //if (e.chanName == "avctrl") {
+                //    AvCtrlHandler.ProcessData(e.data);
+                //} else if (e.chanName == "devcaps") {
+                //    DevCapsHandler.ProcessData(e.data);
+                //} else if (e.chanName == "McxSess") {
+                //    McxSessHandler.ProcessData(e.data);
+                //} else {
+                //    MessageBox.Show("unhandled data on channel " + e.chanName);
+                //}
 
             } catch (Exception ee) {
                 MessageBox.Show(ee.Message + " " + ee.StackTrace);

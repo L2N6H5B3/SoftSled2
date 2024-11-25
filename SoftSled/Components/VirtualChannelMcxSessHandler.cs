@@ -6,21 +6,21 @@ namespace SoftSled.Components {
     class VirtualChannelMcxSessHandler {
 
         private Logger m_logger;
-        private AxMsRdpClient7 rdpClient;
+        private RDPVCInterface rdpvc;
 
         public event EventHandler<StatusChangedArgs> StatusChanged;
 
         private int DSMNServiceHandle;
 
-        public VirtualChannelMcxSessHandler(Logger m_logger, AxMsRdpClient7 rdpClient) {
+        public VirtualChannelMcxSessHandler(Logger m_logger, RDPVCInterface rdpvc) {
             this.m_logger = m_logger;
-            this.rdpClient = rdpClient;
+            this.rdpvc = rdpvc;
         }
 
-        public void ProcessData(string data) {
+        public void ProcessData(byte[] incomingBuff) {
 
             // Convert the incoming data to bytes
-            byte[] incomingBuff = Encoding.Unicode.GetBytes(data);
+            //byte[] incomingBuff = Encoding.Unicode.GetBytes(data);
 
             // Get DSLR Dispatcher Data
             int dispatchPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 0);
@@ -82,7 +82,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the CreateService Response
-                        rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
+                        rdpvc.SendOnVirtualChannel("McxSess", encapsulatedResponse);
 
                     }
                     // DeleteService Request
@@ -110,7 +110,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the CreateService Response
-                        rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
+                        rdpvc.SendOnVirtualChannel("McxSess", encapsulatedResponse);
 
                     }
                     // Unknown Request
@@ -212,7 +212,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the ShellDisconnect Response
-                        rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
+                        rdpvc.SendOnVirtualChannel("McxSess", encapsulatedResponse);
 
                     }
                     // ShellIsActive Request
@@ -237,7 +237,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the ShellIsActive Response
-                        rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
+                        rdpvc.SendOnVirtualChannel("McxSess", encapsulatedResponse);
 
                     }
                     // Heartbeat Request
@@ -258,7 +258,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the Heartbeat Response
-                        rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
+                        rdpvc.SendOnVirtualChannel("McxSess", encapsulatedResponse);
 
                     }
                     // GetQWaveSinkInfo Request
@@ -279,7 +279,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the GetQWaveSinkInfo Response
-                        rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
+                        rdpvc.SendOnVirtualChannel("McxSess", encapsulatedResponse);
 
                     }
                     // Unknown Request
@@ -303,7 +303,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the Generic Response
-                        rdpClient.SendOnVirtualChannel("McxSess", Encoding.Unicode.GetString(encapsulatedResponse));
+                        rdpvc.SendOnVirtualChannel("McxSess", encapsulatedResponse);
 
                     }
 

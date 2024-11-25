@@ -40,13 +40,17 @@ namespace SoftSled {
         private void FrmMain_Load(object sender, EventArgs e) {
             InitialiseLogger();
 
+
+            RDPVCInterface rdpVCInterface = new RDPVCInterface(m_logger);
+            rdpVCInterface.DataReceived += RdpVCInterface_DataReceived;
+
             // Configure Buttons
             btnExtenderDisconnect.Enabled = false;
 
             // Create VirtualChannel Handlers
-            AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger, rdpClient, _libVLC, _mp);
-            DevCapsHandler = new VirtualChannelDevCapsHandler(m_logger, rdpClient);
-            McxSessHandler = new VirtualChannelMcxSessHandler(m_logger, rdpClient);
+            AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger, rdpVCInterface, _libVLC, _mp, axWindowsMediaPlayer1);
+            DevCapsHandler = new VirtualChannelDevCapsHandler(m_logger, rdpVCInterface);
+            McxSessHandler = new VirtualChannelMcxSessHandler(m_logger, rdpVCInterface);
 
             // Create VirtualChannel Handlers EventHandlers
             McxSessHandler.StatusChanged += McxSessHandler_StatusChanged;
@@ -63,23 +67,42 @@ namespace SoftSled {
             }
         }
 
-        private void McxSessHandler_StatusChanged(object sender, StatusChangedArgs e) {
-            // Set Status
-            SetStatus(e.statusText);
+        private void RdpVCInterface_DataReceived(object sender, DataReceived e) {
+            try {
+                //var res = rdpClient.GetVirtualChannelOptions("McxSess");
+                if (e.channelName == "McxSess") {
+                    McxSessHandler.ProcessData(e.data);
+                } else if (e.channelName == "devcaps") {
+                    DevCapsHandler.ProcessData(e.data);
+                } else if (e.channelName == "avctrl") {
+                    AvCtrlHandler.ProcessData(e.data);
+                } else {
+                    MessageBox.Show("Unhandled data on channel " + e.channelName);
+                    m_logger.LogDebug($"{e.channelName} Bytes: " + BitConverter.ToString(e.data));
+                }
 
-            // If the Shell is open
-            if (e.shellOpen) {
-                panOverlay.Visible = false;
-                rdpClient.Visible = true;
-                // Play Opening Music
-                PlayOpening();
-            } else if (e.shellOpen && rdpClient.Visible == true) {
-                panOverlay.Visible = false;
-                rdpClient.Visible = true;
-            } else {
-                panOverlay.Visible = true;
-                rdpClient.Visible = false;
+            } catch (Exception ee) {
+                MessageBox.Show(ee.Message + " " + ee.StackTrace);
             }
+        }
+
+        private void McxSessHandler_StatusChanged(object sender, StatusChangedArgs e) {
+            //// Set Status
+            //SetStatus(e.statusText);
+
+            //// If the Shell is open
+            //if (e.shellOpen) {
+            //    panOverlay.Visible = false;
+            //    rdpClient.Visible = true;
+            //    // Play Opening Music
+            //    PlayOpening();
+            //} else if (e.shellOpen && rdpClient.Visible == true) {
+            //    panOverlay.Visible = false;
+            //    rdpClient.Visible = true;
+            //} else {
+            //    panOverlay.Visible = true;
+            //    rdpClient.Visible = false;
+            //}
         }
 
         private void btnExtenderConnect_Click(object sender, EventArgs e) {
@@ -116,6 +139,8 @@ namespace SoftSled {
                 // Initialise RDP
                 InitialiseRdpClient();
             }
+
+            rdpClient.AdvancedSettings5.PluginDlls = @"C:\RDPVCManager\RDPVCManager.dll";
 
             // Set RDP Server Address
             rdpClient.Server = currConfig.RdpLoginHost;
@@ -170,7 +195,7 @@ namespace SoftSled {
             // Add EventHandlers
             rdpClient.OnConnected += new EventHandler(RdpClient_OnConnected);
             rdpClient.OnDisconnected += new AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEventHandler(RdpClient_OnDisconnected);
-            rdpClient.OnChannelReceivedData += new AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEventHandler(RdpClient_OnChannelReceivedData);
+            //rdpClient.OnChannelReceivedData += new AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEventHandler(RdpClient_OnChannelReceivedData);
 
             // Set Port
             rdpClient.AdvancedSettings3.RDPPort = 3390;
@@ -187,30 +212,31 @@ namespace SoftSled {
             //rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD");
 
             // Create Virtual Channels
-            rdpClient.CreateVirtualChannels("McxSess,devcaps,avctrl");
+            //rdpClient.CreateVirtualChannels("McxSess,devcaps,avctrl");
+            //rdpClient.CreateVirtualChannels("McxSess");
 
             // Set RDP Initialised
             rdpInitialised = true;
         }
 
-        void RdpClient_OnChannelReceivedData(object sender, AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
-            try {
+        //void RdpClient_OnChannelReceivedData(object sender, AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
+        //    try {
+        //        //var res = rdpClient.GetVirtualChannelOptions("McxSess");
+        //        if (e.chanName == "avctrl") {
+        //            AvCtrlHandler.ProcessData(e.data);
+        //        } else if (e.chanName == "devcaps") {
+        //            DevCapsHandler.ProcessData(e.data);
+        //        } else if (e.chanName == "McxSess") {
+        //            McxSessHandler.ProcessData(e.data);
+        //        } else {
+        //            MessageBox.Show("unhandled data on channel " + e.chanName);
+        //            m_logger.LogDebug($"{e.chanName} Bytes: " + BitConverter.ToString(Encoding.Unicode.GetBytes(e.data)));
+        //        }
 
-                if (e.chanName == "avctrl") {
-                    AvCtrlHandler.ProcessData(e.data);
-                } else if (e.chanName == "devcaps") {
-                    DevCapsHandler.ProcessData(e.data);
-                } else if (e.chanName == "McxSess") {
-                    McxSessHandler.ProcessData(e.data);
-                } else {
-                    MessageBox.Show("unhandled data on channel " + e.chanName);
-                    m_logger.LogDebug($"{e.chanName} Bytes: " + BitConverter.ToString(Encoding.Unicode.GetBytes(e.data)));
-                }
-
-            } catch (Exception ee) {
-                MessageBox.Show(ee.Message + " " + ee.StackTrace);
-            }
-        }
+        //    } catch (Exception ee) {
+        //        MessageBox.Show(ee.Message + " " + ee.StackTrace);
+        //    }
+        //}
 
 
         void RdpClient_OnDisconnected(object sender, AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEvent e) {
@@ -280,5 +306,8 @@ namespace SoftSled {
 
         #endregion ############################################################
 
+        private void axWindowsMediaPlayer1_Enter(object sender, EventArgs e) {
+
+        }
     }
 }
