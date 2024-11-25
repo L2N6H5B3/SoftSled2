@@ -1,22 +1,19 @@
 ﻿using System;
-using System.Drawing;
 using System.Runtime.InteropServices;
-using Microsoft.Win32;
-using System.Text;
-using System.Threading;
 
 namespace Win32 {
     namespace WtsApi32 {
         public delegate ChannelReturnCodes VirtualChannelInitDelegate(ref IntPtr initHandle, ChannelDef[] channels, int channelCount, int versionRequested, [MarshalAs(UnmanagedType.FunctionPtr)] ChannelInitEventDelegate channelInitEventProc);
         public delegate ChannelReturnCodes VirtualChannelOpenDelegate(IntPtr initHandle, ref int openHandle, [MarshalAs(UnmanagedType.LPStr)] string channelName, [MarshalAs(UnmanagedType.FunctionPtr)] ChannelOpenEventDelegate channelOpenEventProc);
         public delegate ChannelReturnCodes VirtualChannelCloseDelegate(int openHandle);
-        public delegate ChannelReturnCodes VirtualChannelWriteDelegate(int openHandle, byte[] data, uint dataLength, byte[] userData);
+        public delegate ChannelReturnCodes VirtualChannelWriteDelegate(int openHandle, byte[] data, int dataLength, byte[] userData);
 
         public delegate void ChannelInitEventDelegate(IntPtr initHandle, ChannelEvents Event, [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 3)] byte[] data, int dataLength);
-        public delegate void ChannelOpenEventDelegate(int openHandle, ChannelEvents Event, [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 3)] byte[] data, int dataLength, uint totalLength, ChannelFlags dataFlags);
+        public delegate void ChannelOpenEventDelegate(int openHandle, ChannelEvents Event, [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 3)] byte[] data, int dataLength, int totalLength, ChannelFlags dataFlags);
 
         [StructLayout(LayoutKind.Sequential)]
-        public struct ChannelEntryPoints {
+        public struct ChannelEntryPoints
+        {
             public int Size;
             public int ProtocolVersion;
             [MarshalAs(UnmanagedType.FunctionPtr)]
@@ -30,25 +27,28 @@ namespace Win32 {
         }
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
-        public struct ChannelDef {
+        public struct ChannelDef
+        {
             [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 8)]
             public string name;
             public ChannelOptions options;
         }
 
-        public enum ChannelEvents {
+        public enum ChannelEvents
+        {
             Initialized = 0,
             Connected = 1,
             V1Connected = 2,
             Disconnected = 3,
             Terminated = 4,
-            DataRecived = 10,
+            DataReceived = 10,
             WriteComplete = 11,
             WriteCanceled = 12
         }
 
         [Flags]
-        public enum ChannelFlags {
+        public enum ChannelFlags
+        {
             First = 0x01,
             Last = 0x02,
             Only = First | Last,
@@ -60,7 +60,8 @@ namespace Win32 {
         }
 
         [Flags]
-        public enum ChannelOptions : uint {
+        public enum ChannelOptions : uint
+        {
             Initialized = 0x80000000,
             EncryptRDP = 0x40000000,
             EncryptSC = 0x20000000,
@@ -73,7 +74,8 @@ namespace Win32 {
             ShowProtocol = 0x00200000
         }
 
-        public enum ChannelReturnCodes {
+        public enum ChannelReturnCodes
+        {
             Ok = 0,
             AlreadyInitialized = 1,
             NotInitialized = 2,
