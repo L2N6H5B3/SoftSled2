@@ -17,6 +17,10 @@ namespace SoftSled {
         private bool isConnecting = false;
         private bool rdpInitialised = false;
 
+        private bool useExternalVCManager = true;
+
+        private RDPVCInterface rdpVCInterface;
+
         private VirtualChannelAvCtrlHandler AvCtrlHandler;
         private VirtualChannelDevCapsHandler DevCapsHandler;
         private VirtualChannelMcxSessHandler McxSessHandler;
@@ -40,17 +44,21 @@ namespace SoftSled {
         private void FrmMain_Load(object sender, EventArgs e) {
             InitialiseLogger();
 
-
-            RDPVCInterface rdpVCInterface = new RDPVCInterface(m_logger);
-            rdpVCInterface.DataReceived += RdpVCInterface_DataReceived;
+            if (useExternalVCManager) {
+                rdpVCInterface = new RDPVCInterface(m_logger);
+                rdpVCInterface.DataReceived += RdpVCInterface_DataReceived;
+            }
 
             // Configure Buttons
             btnExtenderDisconnect.Enabled = false;
 
             // Create VirtualChannel Handlers
-            AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger, rdpVCInterface, _libVLC, _mp, axWindowsMediaPlayer1);
-            DevCapsHandler = new VirtualChannelDevCapsHandler(m_logger, rdpVCInterface);
-            McxSessHandler = new VirtualChannelMcxSessHandler(m_logger, rdpVCInterface);
+            McxSessHandler = new VirtualChannelMcxSessHandler(m_logger);
+            DevCapsHandler = new VirtualChannelDevCapsHandler(m_logger);
+            AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger, _libVLC, _mp, axWindowsMediaPlayer1);
+            McxSessHandler.VirtualChannelSend += On_VirtualChannelSend;
+            DevCapsHandler.VirtualChannelSend += On_VirtualChannelSend;
+            AvCtrlHandler.VirtualChannelSend += On_VirtualChannelSend;
 
             // Create VirtualChannel Handlers EventHandlers
             McxSessHandler.StatusChanged += McxSessHandler_StatusChanged;
@@ -64,6 +72,14 @@ namespace SoftSled {
             } else {
                 m_logger.LogInfo("Extender is paired with " + config.RdpLoginHost);
                 SetStatus("Extender ready to connect");
+            }
+        }
+
+        private void On_VirtualChannelSend(object sender, VirtualChannelSendArgs e) {
+            if (useExternalVCManager) {
+                rdpVCInterface.SendOnVirtualChannel(e.channelName, e.data);
+            } else {
+                rdpClient.SendOnVirtualChannel(e.channelName, Encoding.Unicode.GetString(e.data));
             }
         }
 
@@ -87,22 +103,24 @@ namespace SoftSled {
         }
 
         private void McxSessHandler_StatusChanged(object sender, StatusChangedArgs e) {
-            //// Set Status
-            //SetStatus(e.statusText);
+            if (!useExternalVCManager) {
+                // Set Status
+                SetStatus(e.statusText);
 
-            //// If the Shell is open
-            //if (e.shellOpen) {
-            //    panOverlay.Visible = false;
-            //    rdpClient.Visible = true;
-            //    // Play Opening Music
-            //    PlayOpening();
-            //} else if (e.shellOpen && rdpClient.Visible == true) {
-            //    panOverlay.Visible = false;
-            //    rdpClient.Visible = true;
-            //} else {
-            //    panOverlay.Visible = true;
-            //    rdpClient.Visible = false;
-            //}
+                // If the Shell is open
+                if (e.shellOpen) {
+                    panOverlay.Visible = false;
+                    rdpClient.Visible = true;
+                    // Play Opening Music
+                    PlayOpening();
+                } else if (e.shellOpen && rdpClient.Visible == true) {
+                    panOverlay.Visible = false;
+                    rdpClient.Visible = true;
+                } else {
+                    panOverlay.Visible = true;
+                    rdpClient.Visible = false;
+                }
+            }
         }
 
         private void btnExtenderConnect_Click(object sender, EventArgs e) {
@@ -139,8 +157,6 @@ namespace SoftSled {
                 // Initialise RDP
                 InitialiseRdpClient();
             }
-
-            rdpClient.AdvancedSettings5.PluginDlls = @"C:\RDPVCManager\RDPVCManager.dll";
 
             // Set RDP Server Address
             rdpClient.Server = currConfig.RdpLoginHost;
@@ -195,10 +211,11 @@ namespace SoftSled {
             // Add EventHandlers
             rdpClient.OnConnected += new EventHandler(RdpClient_OnConnected);
             rdpClient.OnDisconnected += new AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEventHandler(RdpClient_OnDisconnected);
-            //rdpClient.OnChannelReceivedData += new AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEventHandler(RdpClient_OnChannelReceivedData);
+            rdpClient.OnChannelReceivedData += new AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEventHandler(RdpClient_OnChannelReceivedData);
 
             // Set Port
             rdpClient.AdvancedSettings3.RDPPort = 3390;
+            //rdpClient.AdvancedSettings3.PluginDlls = "RDPVCManager.dll";
 
             // McxSess - Used by McrMgr for Extender Session Control
             // MCECaps - not known where used
@@ -211,32 +228,34 @@ namespace SoftSled {
             //rdpClient.CreateVirtualChannels("McxSess,MCECaps,avctrl,VCHD");
             //rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD");
 
-            // Create Virtual Channels
-            //rdpClient.CreateVirtualChannels("McxSess,devcaps,avctrl");
-            //rdpClient.CreateVirtualChannels("McxSess");
+            if (!useExternalVCManager) {
+                // Create Virtual Channels
+                rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD,splash");
+                //rdpClient.CreateVirtualChannels("McxSess");
+            }
 
             // Set RDP Initialised
             rdpInitialised = true;
         }
 
-        //void RdpClient_OnChannelReceivedData(object sender, AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
-        //    try {
-        //        //var res = rdpClient.GetVirtualChannelOptions("McxSess");
-        //        if (e.chanName == "avctrl") {
-        //            AvCtrlHandler.ProcessData(e.data);
-        //        } else if (e.chanName == "devcaps") {
-        //            DevCapsHandler.ProcessData(e.data);
-        //        } else if (e.chanName == "McxSess") {
-        //            McxSessHandler.ProcessData(e.data);
-        //        } else {
-        //            MessageBox.Show("unhandled data on channel " + e.chanName);
-        //            m_logger.LogDebug($"{e.chanName} Bytes: " + BitConverter.ToString(Encoding.Unicode.GetBytes(e.data)));
-        //        }
+        void RdpClient_OnChannelReceivedData(object sender, AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
+            try {
+                //var res = rdpClient.GetVirtualChannelOptions("McxSess");
+                if (e.chanName == "avctrl") {
+                    AvCtrlHandler.ProcessData(Encoding.Unicode.GetBytes(e.data));
+                } else if (e.chanName == "devcaps") {
+                    DevCapsHandler.ProcessData(Encoding.Unicode.GetBytes(e.data));
+                } else if (e.chanName == "McxSess") {
+                    McxSessHandler.ProcessData(Encoding.Unicode.GetBytes(e.data));
+                } else {
+                    MessageBox.Show("unhandled data on channel " + e.chanName);
+                    m_logger.LogDebug($"{e.chanName} Bytes: " + BitConverter.ToString(Encoding.Unicode.GetBytes(e.data)));
+                }
 
-        //    } catch (Exception ee) {
-        //        MessageBox.Show(ee.Message + " " + ee.StackTrace);
-        //    }
-        //}
+            } catch (Exception ee) {
+                MessageBox.Show(ee.Message + " " + ee.StackTrace);
+            }
+        }
 
 
         void RdpClient_OnDisconnected(object sender, AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEvent e) {

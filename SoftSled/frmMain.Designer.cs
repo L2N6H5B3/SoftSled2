@@ -29,7 +29,7 @@ namespace SoftSled
         private void InitializeComponent()
         {
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(FrmMain));
-            this.rdpClient = new AxMSTSCLib.AxMsRdpClient5();
+            this.rdpClient = new AxMSTSCLib.AxMsRdpClient7();
             this.txtLog = new System.Windows.Forms.TextBox();
             this.lnkGiveFocus = new System.Windows.Forms.LinkLabel();
             this.btnDoExtenderConnect = new System.Windows.Forms.Button();
@@ -266,7 +266,7 @@ namespace SoftSled
 
         #endregion
 
-        private AxMSTSCLib.AxMsRdpClient5 rdpClient;
+        private AxMSTSCLib.AxMsRdpClient7 rdpClient;
         private System.Windows.Forms.TextBox txtLog;
         private System.Windows.Forms.LinkLabel lnkGiveFocus;
         private System.Windows.Forms.Button btnDoExtenderConnect;

@@ -2,18 +2,20 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text;
 
 namespace SoftSled.Components {
     class VirtualChannelDevCapsHandler {
 
         private Logger m_logger;
-        private RDPVCInterface rdpvc;
+
+        public event EventHandler<VirtualChannelSendArgs> VirtualChannelSend;
 
         private int DSPAServiceHandle;
         private List<string> DevCapsEnabledCapabilities = new List<string> {
             "2DA", // 2DA - Is 2D animation allowed?
-            "ANI", // ANI - Is intensive animation allowed?
+            //"ANI", // ANI - Is intensive animation allowed?
             //"APP", // APP - Is tray applet allowed?
             //"ARA", // ARA - Is auto restart allowed?
             "AUD", // AUD - Is audio allowed?
@@ -40,19 +42,19 @@ namespace SoftSled.Components {
             //"MAR", // MAR - Are over-scan margins needed?
             "MUT", // MUT - Is mute ui allowed?
             "NLZ", // NLZ - Is nonlinear zoom supported?
-            //"ONS", // ONS - Is online spotlight allowed?
-            //"PHO", // PHO - Are advanced photo features allowed?
+            "ONS", // ONS - Is online spotlight allowed?
+            "PHO", // PHO - Are advanced photo features allowed?
             "POP", // POP - Are Pop ups allowed?
             "REM", // REM - Is input treated as if from a remote?
             "RSZ", // RSZ - Is raw stretched zoom supported?
             //"RUI", // RUI - Is remote UI rendering supported?
-            //"SCR", // SCR - Is a native screensaver required?
+            "SCR", // SCR - Is a native screensaver required?
             //"SDM", // SDM - Is a screen data mode workaround needed?
             "SDN", // SDN - Is SD content allowed by the network?
             "SOU", // SOU - Is UI sound supported?
             //"SUP", // SUP - Is RDP super blt allowed?
             //"SYN", // SYN - Is transfer to a device allowed?
-            //"TBA", // TBA - Is a Toolbar allowed?
+            "TBA", // TBA - Is a Toolbar allowed?
             //"TVS", // TVS - Is a TV skin used?
 			"VID", // VID - Is video allowed?
             "VIZ", // VIZ - Is WMP visualisation allowed?
@@ -60,14 +62,13 @@ namespace SoftSled.Components {
             "W32", // W32 - Is Win32 content allowed?
             "WE2", // WE2 - Is 2 feet web content allowed? 
             "WEB", // WEB - Is 10 feet web content allowed? 
-            //"WID", // WID - Is wide screen enabled?
+            "WID", // WID - Is wide screen enabled?
             //"WIN", // WIN - Is window mode allowed?
             "ZOM" // ZOM - Is video zoom mode allowed?
         };
 
-        public VirtualChannelDevCapsHandler(Logger m_logger, RDPVCInterface rdpvc) {
+        public VirtualChannelDevCapsHandler(Logger m_logger) {
             this.m_logger = m_logger;
-            this.rdpvc = rdpvc;
         }
 
         public void ProcessData(byte[] incomingBuff) {
@@ -128,7 +129,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the CreateService Response
-                        rdpvc.SendOnVirtualChannel("devcaps", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("devcaps", encapsulatedResponse));
 
                     }
                     // DeleteService Request
@@ -156,7 +157,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the CreateService Response
-                        rdpvc.SendOnVirtualChannel("devcaps", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("devcaps", encapsulatedResponse));
 
                     }
                     // Unknown Request
@@ -196,7 +197,26 @@ namespace SoftSled.Components {
                                     "McxClient"
                                 );
                                 break;
+                            case "NA":
+                                // Initialise GetStringProperty Response
+                                response = Components.DSLRCommunication.GetStringPropertyResponse(
+                                    DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
+                                    "McxClient"
+                                );
+                                break;
                             case "PRT":
+                                // Initialise GetStringProperty Response
+                                response = Components.DSLRCommunication.GetStringPropertyResponse(
+                                    DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
+                                    @"rtsp-rtp-udp:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL;DLNA.ORG_PN=WMAPRO;MICROSOFT.COM_PN=WMALSL
+rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3
+http-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM
+rtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_AVI_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3;MICROSOFT.COM_PN=MPEG4_P2_AVI_ASP_L5_AC3
+rtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;MICROSOFT.COM_PN=WMVHIGH_LSL;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED
+http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL;DLNA.ORG_PN=MPEG4_P2_TS_ASP_MPEG1_L3;DLNA.ORG_PN=MPEG4_P2_TS_ASP_AC3;DLNA.ORG_PN=MPEG4_P2_TS_ASP_AC3;DLNA.ORG_PN=AVC_MP4_MP_SD_MPEG1_L3;DLNA.ORG_PN=AVC_TS_MP_HD_MPEG1_L3;DLNA.ORG_PN=AVC_MP4_MP_HD_AC3;DLNA.ORG_PN=AVC_MP4_MP_SD_AC3;DLNA.ORG_PN=AVC_TS_MP_HD_AC3"
+                                );
+                                break;
+                            case "PR":
                                 // Initialise GetStringProperty Response
                                 response = Components.DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
@@ -215,7 +235,21 @@ http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPE
                                     "McxClient"
                                 );
                                 break;
+                            case "XT":
+                                // Initialise GetStringProperty Response
+                                response = Components.DSLRCommunication.GetStringPropertyResponse(
+                                    DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
+                                    "McxClient"
+                                );
+                                break;
                             case "PBV":
+                                // Initialise GetStringProperty Response
+                                response = Components.DSLRCommunication.GetStringPropertyResponse(
+                                    DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
+                                    "1"
+                                );
+                                break;
+                            case "PB":
                                 // Initialise GetStringProperty Response
                                 response = Components.DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
@@ -231,7 +265,7 @@ http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPE
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the GetStringProperty Response
-                        rdpvc.SendOnVirtualChannel("devcaps", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("devcaps", encapsulatedResponse));
 
                     }
                     // GetDWORDProperty Request
@@ -246,8 +280,9 @@ http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPE
                         m_logger.LogDebug($"DEVCAPS: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName.Replace("\0", "")})");
 
                         byte[] response;
-
-                        if (DevCapsEnabledCapabilities.Contains(GetDWORDPropertyPayloadPropertyName.Replace("\0", ""))) {
+                        // Get the DevCaps Entry
+                        var devCapsEntry = DevCapsEnabledCapabilities.FirstOrDefault(xx => xx.StartsWith(GetDWORDPropertyPayloadPropertyName.Replace("\0", "")));
+                        if (devCapsEntry != null) {
                             response = Components.DSLRCommunication.DeviceCapabilityTrueGetDWORDPropertyResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
                         } else {
                             response = Components.DSLRCommunication.DeviceCapabilityFalseGetDWORDPropertyResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
@@ -257,7 +292,7 @@ http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPE
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the GetDWORDProperty Response
-                        rdpvc.SendOnVirtualChannel("devcaps", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("devcaps", encapsulatedResponse));
 
                     } else {
 
@@ -276,6 +311,10 @@ http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPE
             } else if (dispatchCallingConvention == 2) {
 
                 m_logger.LogDebug($"DEVCAPS: Response {dispatchRequestHandle} not implemented");
+
+            } else {
+
+                m_logger.LogDebug($"DEVCAPS: Unknown CallingConvention {dispatchCallingConvention} not implemented");
 
             }
         }

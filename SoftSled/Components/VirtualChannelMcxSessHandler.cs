@@ -6,15 +6,14 @@ namespace SoftSled.Components {
     class VirtualChannelMcxSessHandler {
 
         private Logger m_logger;
-        private RDPVCInterface rdpvc;
 
+        public event EventHandler<VirtualChannelSendArgs> VirtualChannelSend;
         public event EventHandler<StatusChangedArgs> StatusChanged;
 
         private int DSMNServiceHandle;
 
-        public VirtualChannelMcxSessHandler(Logger m_logger, RDPVCInterface rdpvc) {
+        public VirtualChannelMcxSessHandler(Logger m_logger) {
             this.m_logger = m_logger;
-            this.rdpvc = rdpvc;
         }
 
         public void ProcessData(byte[] incomingBuff) {
@@ -82,7 +81,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the CreateService Response
-                        rdpvc.SendOnVirtualChannel("McxSess", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("McxSess", encapsulatedResponse));
 
                     }
                     // DeleteService Request
@@ -110,7 +109,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the CreateService Response
-                        rdpvc.SendOnVirtualChannel("McxSess", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("McxSess", encapsulatedResponse));
 
                     }
                     // Unknown Request
@@ -212,7 +211,28 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the ShellDisconnect Response
-                        rdpvc.SendOnVirtualChannel("McxSess", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("McxSess", encapsulatedResponse));
+
+                    }
+                    // Heartbeat Request
+                    else if (dispatchFunctionHandle == 1) {
+
+                        //m_logger.LogDebug("MCXSESS: Heartbeat");
+
+                        // Get Heartbeat Data
+                        int HeartbeatPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
+                        int HeartbeatChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
+                        int HeartbeatPayloadScreensaverFlag = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
+
+                        // Initialise Heartbeat Response
+                        byte[] response = Components.DSLRCommunication.HeartbeatResponse(
+                            DataUtilities.GetByteSubArray(incomingBuff, 10, 4)
+                        );
+                        // Encapsulate the Response (Doesn't seem to work without this?)
+                        byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
+
+                        // Send the Heartbeat Response
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("McxSess", encapsulatedResponse));
 
                     }
                     // ShellIsActive Request
@@ -237,30 +257,10 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the ShellIsActive Response
-                        rdpvc.SendOnVirtualChannel("McxSess", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("McxSess", encapsulatedResponse));
 
                     }
-                    // Heartbeat Request
-                    else if (dispatchFunctionHandle == 1) {
 
-                        m_logger.LogDebug("MCXSESS: Heartbeat");
-
-                        // Get Heartbeat Data
-                        int HeartbeatPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
-                        int HeartbeatChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
-                        int HeartbeatPayloadScreensaverFlag = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
-
-                        // Initialise Heartbeat Response
-                        byte[] response = Components.DSLRCommunication.HeartbeatResponse(
-                            DataUtilities.GetByteSubArray(incomingBuff, 10, 4)
-                        );
-                        // Encapsulate the Response (Doesn't seem to work without this?)
-                        byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
-
-                        // Send the Heartbeat Response
-                        rdpvc.SendOnVirtualChannel("McxSess", encapsulatedResponse);
-
-                    }
                     // GetQWaveSinkInfo Request
                     else if (dispatchFunctionHandle == 3) {
 
@@ -269,7 +269,6 @@ namespace SoftSled.Components {
                         // Get GetQWaveSinkInfo Data
                         int GetQWaveSinkInfoPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
                         int GetQWaveSinkInfoChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
-                        int GetQWaveSinkInfoPayloadScreensaverFlag = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
 
                         // Initialise GetQWaveSinkInfo Response
                         byte[] response = Components.DSLRCommunication.GetQWaveSinkInfoResponse(
@@ -279,13 +278,13 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the GetQWaveSinkInfo Response
-                        rdpvc.SendOnVirtualChannel("McxSess", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("McxSess", encapsulatedResponse));
 
                     }
                     // Unknown Request
                     else {
 
-                        m_logger.LogDebug("MCXSESS: Unknown");
+                        m_logger.LogDebug($"MCXSESS: Unknown Function ({dispatchFunctionHandle})");
 
                         // Get Unknown Data
                         int UnknownPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
@@ -303,7 +302,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the Generic Response
-                        rdpvc.SendOnVirtualChannel("McxSess", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("McxSess", encapsulatedResponse));
 
                     }
 
@@ -314,9 +313,15 @@ namespace SoftSled.Components {
                     m_logger.LogDebug($"MCXSESS: Unknown {dispatchServiceHandle} Request {dispatchFunctionHandle} not implemented");
 
                 }
-            } else if (dispatchCallingConvention == 2) {
+            }
+            //else if (dispatchCallingConvention == 2) {
 
-                m_logger.LogDebug($"MCXSESS: Unknown {dispatchRequestHandle} Request not implemented");
+            //    m_logger.LogDebug($"MCXSESS: Unknown CallingConvention '{dispatchCallingConvention}' with Function '{dispatchRequestHandle}' not implemented");
+
+            //} 
+            else {
+
+                m_logger.LogDebug($"MCXSESS: Unknown CallingConvention '{dispatchCallingConvention}' with Function '{dispatchRequestHandle}' not implemented");
 
             }
         }
@@ -328,3 +333,4 @@ namespace SoftSled.Components {
         public string statusText;
     }
 }
+

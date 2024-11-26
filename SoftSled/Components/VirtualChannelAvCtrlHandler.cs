@@ -9,7 +9,9 @@ namespace SoftSled.Components {
     class VirtualChannelAvCtrlHandler {
 
         private Logger m_logger;
-        private RDPVCInterface rdpvc;
+
+        public event EventHandler<VirtualChannelSendArgs> VirtualChannelSend;
+
         private LibVLC _libVLC;
         private MediaPlayer _mp;
         private AxWMPLib.AxWindowsMediaPlayer wmp;
@@ -20,6 +22,7 @@ namespace SoftSled.Components {
         private int DMCTRegisterMediaEventCallbackCookie = 14724;
         private string DMCTOpenMediaURL;
         private Media currentMedia;
+        private int PreviousVolume = -1;
         private int StubRequestHandleIter = 1;
         private int StubServiceHandleIter = 1;
         private Dictionary<int, StubRequestType> StubRequestTypeDict = new Dictionary<int, StubRequestType>();
@@ -27,9 +30,8 @@ namespace SoftSled.Components {
         private Dictionary<int, int> ProxyRequestHandleDict = new Dictionary<int, int>();
         private Dictionary<int, int> ProxyServiceHandleDict = new Dictionary<int, int>();
 
-        public VirtualChannelAvCtrlHandler(Logger m_logger, RDPVCInterface rdpvc, LibVLC _libVLC, MediaPlayer _mp, AxWMPLib.AxWindowsMediaPlayer wmp) {
+        public VirtualChannelAvCtrlHandler(Logger m_logger, LibVLC _libVLC, MediaPlayer _mp, AxWMPLib.AxWindowsMediaPlayer wmp) {
             this.m_logger = m_logger;
-            this.rdpvc = rdpvc;
             this._libVLC = _libVLC;
             this._mp = _mp;
             this.wmp = wmp;
@@ -117,7 +119,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the CreateService Response
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // DeleteService Request
@@ -155,7 +157,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the CreateService Response
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // Unknown Request
@@ -191,12 +193,12 @@ namespace SoftSled.Components {
 
 
                         //wmp.URL = ;
-                        wmp.newMedia(DMCTOpenMediaURL);
+                        //wmp.newMedia(DMCTOpenMediaURL);
                         //wmp.openPlayer(DMCTOpenMediaURL);
 
                         // Create Media Object
-                        //currentMedia = new Media(_libVLC, new Uri(DMCTOpenMediaURL));
-                        //currentMedia.Parse();
+                        currentMedia = new Media(_libVLC, new Uri(DMCTOpenMediaURL));
+                        currentMedia.Parse();
                         //_mp.NetworkCaching = 1000;
                         //_mp.Media = currentMedia;
 
@@ -208,7 +210,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the SetDWORDProperty Response
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // CloseMedia Request
@@ -226,7 +228,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the CloseMedia Response
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // Start Request
@@ -242,7 +244,7 @@ namespace SoftSled.Components {
 
                         m_logger.LogDebug("AVCTRL: Start");
 
-                        //_mp.Play(currentMedia);
+                        _mp.Play(currentMedia);
 
                         // Initialise Start Response
                         byte[] response = Components.DSLRCommunication.StartResponse(
@@ -253,7 +255,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the Start Response
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // Pause Request
@@ -271,7 +273,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the Pause Response
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // Stop Request
@@ -289,14 +291,14 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the Stop Response
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // GetDuration Request
                     else if (dispatchFunctionHandle == 5) {
 
-                        //long durationLongMili = Convert.ToInt64(currentMedia.Duration / 10);
-                        long durationLongMili = Convert.ToInt64(60 / 10);
+                        long durationLongMili = Convert.ToInt64(currentMedia.Duration / 10);
+                        //long durationLongMili = Convert.ToInt64(60 / 10);
 
                         m_logger.LogDebug($"AVCTRL: GetDuration ({durationLongMili})");
 
@@ -309,14 +311,14 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the GetDuration Response
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // GetPosition Request
                     else if (dispatchFunctionHandle == 6) {
 
-                        //long positionLongMili = Convert.ToInt64(_mp.Time / 10);
-                        long positionLongMili = Convert.ToInt64(5 / 10);
+                        long positionLongMili = Convert.ToInt64(_mp.Time / 10);
+                        //long positionLongMili = Convert.ToInt64(5 / 10);
 
                         m_logger.LogDebug($"AVCTRL: GetPosition ({positionLongMili})");
 
@@ -328,7 +330,7 @@ namespace SoftSled.Components {
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
                         // Send the GetPosition Response
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // RegisterMediaEventCallback Request
@@ -365,7 +367,7 @@ namespace SoftSled.Components {
                         StubServiceHandleIter++;
 
                         // Send the RegisterMediaEventCallback CreateService Request
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // UnregisterMediaEventCallback Request
@@ -396,7 +398,7 @@ namespace SoftSled.Components {
                         StubRequestHandleIter++;
 
                         // Send the UnregisterMediaEventCallback CreateService Request
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // Unknown Request
@@ -437,7 +439,7 @@ namespace SoftSled.Components {
                                 byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                                 // Send the GetStringProperty Response
-                                rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                                VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                                 break;
                             default:
@@ -458,29 +460,56 @@ namespace SoftSled.Components {
 
                         switch (GetDWORDPropertyPayloadPropertyName) {
                             case "IsMuted":
+                                bool isMuted = SystemAudio.WindowsSystemAudio.GetMute();
                                 // Initialise GetDWORDProperty Response
                                 byte[] isMutedResponse = Components.DSLRCommunication.GetDWORDPropertyResponse(
                                     dispatchRequestHandleArray,
-                                    0
+                                    isMuted ? 1 : 0 
                                 );
                                 // Encapsulate the Response (Doesn't seem to work without this?)
                                 byte[] encapsulatedIsMutedResponse = Components.DSLRCommunication.Encapsulate(isMutedResponse);
 
                                 // Send the GetDWORDProperty Response
-                                rdpvc.SendOnVirtualChannel("avctrl", encapsulatedIsMutedResponse);
+                                VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedIsMutedResponse));
 
                                 break;
                             case "Volume":
+                                // Get the System Volume
+                                decimal currentVolume = SystemAudio.WindowsSystemAudio.GetVolume();
+                                int sendVolume = 0;
+
+                                m_logger.LogDebug($"AVCTRL: CurrentVolume ({currentVolume})");
+
+                                // If the Volume is greater than 0
+                                if (currentVolume > 0) {
+                                    m_logger.LogDebug($"AVCTRL: CurrentVolume Div ({(currentVolume / 100)})");
+                                    sendVolume = (int)Math.Floor((65535 / (currentVolume / 100)) / 100);
+                                }
+                               
+                                m_logger.LogDebug($"AVCTRL: SendVolume ({sendVolume})");
+
                                 // Initialise GetDWORDProperty Response
                                 byte[] volumeResponse = Components.DSLRCommunication.GetDWORDPropertyResponse(
                                     dispatchRequestHandleArray,
-                                    1
+                                    sendVolume
                                 );
                                 // Encapsulate the Response (Doesn't seem to work without this?)
                                 byte[] encapsulatedVolumeResponse = Components.DSLRCommunication.Encapsulate(volumeResponse);
 
                                 // Send the GetDWORDProperty Response
-                                rdpvc.SendOnVirtualChannel("avctrl", encapsulatedVolumeResponse);
+                                VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedVolumeResponse));
+                                break;
+                            case "WmvTrickModesSupported":
+                                // Initialise GetDWORDProperty Response
+                                byte[] trickModeResponse = Components.DSLRCommunication.GetDWORDPropertyResponse(
+                                    dispatchRequestHandleArray,
+                                    0
+                                );
+                                // Encapsulate the Response (Doesn't seem to work without this?)
+                                byte[] encapsulatedTrickModeResponse = Components.DSLRCommunication.Encapsulate(trickModeResponse);
+
+                                // Send the GetDWORDProperty Response
+                                VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedTrickModeResponse));
                                 break;
                             default:
                                 m_logger.LogDebug($"AVCTRL: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName}) not available");
@@ -502,6 +531,12 @@ namespace SoftSled.Components {
                         switch (SetDWORDPropertyPayloadPropertyName) {
                             case "IsMuted":
 
+                                if (SetDWORDPropertyPayloadPropertyValue == 1) {
+                                    SystemAudio.WindowsSystemAudio.SetMute(true);
+                                } else {
+                                    SystemAudio.WindowsSystemAudio.SetMute(false);
+                                }
+
                                 // Initialise SetDWORDProperty Response
                                 byte[] response = Components.DSLRCommunication.SetDWORDPropertyResponse(
                                     dispatchRequestHandleArray
@@ -510,8 +545,25 @@ namespace SoftSled.Components {
                                 byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                                 // Send the SetDWORDProperty Response
-                                rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                                VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
+                                break;
+                            case "Volume":
+
+                                int setVolume = (int)Math.Floor((SetDWORDPropertyPayloadPropertyValue / 65535.00) * 100);
+
+                                m_logger.LogDebug($"AVCTRL: SetVolume ({setVolume})");
+                                SystemAudio.WindowsSystemAudio.SetVolume(setVolume);
+
+                                // Initialise SetDWORDProperty Response
+                                byte[] volumeResponse = Components.DSLRCommunication.SetDWORDPropertyResponse(
+                                    dispatchRequestHandleArray
+                                );
+                                // Encapsulate the Response (Doesn't seem to work without this?)
+                                byte[] encapsulatedVolumeResponse = Components.DSLRCommunication.Encapsulate(volumeResponse);
+
+                                // Send the SetDWORDProperty Response
+                                VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedVolumeResponse));
                                 break;
                             default:
                                 m_logger.LogDebug($"AVCTRL: SetDWORDProperty ({SetDWORDPropertyPayloadPropertyName}) not available");
@@ -551,7 +603,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the RegisterTransmitterService Response
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // UnregisterTransmitterService Request
@@ -572,7 +624,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the UnregisterTransmitterService Response
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // InitiateRegistration Request
@@ -592,7 +644,7 @@ namespace SoftSled.Components {
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the InitiateRegistration Response
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // Unknown Request
@@ -647,7 +699,7 @@ namespace SoftSled.Components {
                         encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the RegisterMediaEventCallback Response
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                         // Increment Cookie
                         DMCTRegisterMediaEventCallbackCookie++;
@@ -681,7 +733,7 @@ namespace SoftSled.Components {
                         encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
 
                         // Send the RegisterMediaEventCallback Response
-                        rdpvc.SendOnVirtualChannel("avctrl", encapsulatedResponse);
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                         break;
                     default:
@@ -691,7 +743,7 @@ namespace SoftSled.Components {
 
             } else {
 
-                m_logger.LogDebug($"Unknown CallingConvention {dispatchCallingConvention} not implemented");
+                m_logger.LogDebug($"AVCTRL: Unknown CallingConvention {dispatchCallingConvention} not implemented");
 
             }
         }

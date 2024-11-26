@@ -105,6 +105,8 @@
     <Compile Include="Components\SoftSledConfig.cs" />
     <Compile Include="Components\SoftSledConfigManager.cs" />
     <Compile Include="Components\TextBoxLogger.cs" />
+    <Compile Include="Components\VirtualChannelSendArgs.cs" />
+    <Compile Include="Components\WindowsSystemAudio.cs" />
     <Compile Include="ContentHandler.cs" />
     <Compile Include="Crypto.cs" />
     <Compile Include="ExtenderDevice.cs" />
