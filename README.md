@@ -5,7 +5,7 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 
 ## Current Progress
 * Audio RTSP communication is close to complete, RTSP playback working (running into issues with RequestHandle reaching 215 and jumping immediately to 65023) - resolved via custom Virtual Channel DLL, this manually processes the data received over the Virtual Channels eliminating the truncation causing the problem.
-* Video RTSP communication is mostly done, RTSP playback not working (perhaps because of DRM license failure?)
+* Video RTSP communication is mostly done, RTSP playback working for WMV Videos but not Recorded TV (perhaps because of codecs / Protocol String / DRM license failure?)
 * Interface sounds (through RDP or local) currently being worked out
 
 ## Finished Elements
