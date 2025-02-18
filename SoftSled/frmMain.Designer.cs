@@ -210,6 +210,7 @@ namespace SoftSled
             this.videoView1.Size = new System.Drawing.Size(345, 178);
             this.videoView1.TabIndex = 21;
             this.videoView1.Text = "videoView1";
+            this.videoView1.Visible = false;
             // 
             // label3
             // 
@@ -224,7 +225,7 @@ namespace SoftSled
             // axWindowsMediaPlayer1
             // 
             this.axWindowsMediaPlayer1.Enabled = true;
-            this.axWindowsMediaPlayer1.Location = new System.Drawing.Point(102, 493);
+            this.axWindowsMediaPlayer1.Location = new System.Drawing.Point(19, 519);
             this.axWindowsMediaPlayer1.Name = "axWindowsMediaPlayer1";
             this.axWindowsMediaPlayer1.OcxState = ((System.Windows.Forms.AxHost.State)(resources.GetObject("axWindowsMediaPlayer1.OcxState")));
             this.axWindowsMediaPlayer1.Size = new System.Drawing.Size(310, 178);

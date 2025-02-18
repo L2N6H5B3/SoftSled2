@@ -292,6 +292,7 @@ namespace SoftSled.Components {
 
                         if (UnknownPayloadSize > 0) {
                             byte[] UnknownPayloadData = DataUtilities.GetByteSubArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2, UnknownPayloadSize);
+                            //m_logger.LogDebug("MCXSESS: " + BitConverter.ToString(UnknownPayloadData));
                         }
 
                         // Initialise Generic Response

@@ -22,6 +22,7 @@ namespace SoftSled.Components {
         private int DMCTRegisterMediaEventCallbackCookie = 14724;
         private string DMCTOpenMediaURL;
         private Media currentMedia;
+        private WMPLib.IWMPMedia iWMPMedia;
         private int PreviousVolume = -1;
         private int StubRequestHandleIter = 1;
         private int StubServiceHandleIter = 1;
@@ -63,15 +64,15 @@ namespace SoftSled.Components {
                 int dispatchServiceHandle = DataUtilities.Get4ByteInt(incomingBuff, 14);
                 int dispatchFunctionHandle = DataUtilities.Get4ByteInt(incomingBuff, 18);
 
-                Debug.WriteLine("AVCTRL: Bytes: " + BitConverter.ToString(incomingBuff));
+                //Debug.WriteLine("AVCTRL: Bytes: " + BitConverter.ToString(incomingBuff));
 
-                // DEBUG PURPOSES ONLY
-                Debug.WriteLine("");
-                Debug.WriteLine("--------------------");
-                Debug.WriteLine($"AVCTRL ITER RECEIVED: {dispatchRequestHandle}");
-                Debug.WriteLine($"AVCTRL ITER BYTES RECEIVED: {dispatchRequestHandleArray[0]} {dispatchRequestHandleArray[1]} {dispatchRequestHandleArray[2]} {dispatchRequestHandleArray[3]}");
-                Debug.WriteLine($"ServiceHandle: {dispatchServiceHandle}");
-                Debug.WriteLine($"FunctionHandle: {dispatchFunctionHandle}");
+                //// DEBUG PURPOSES ONLY
+                //Debug.WriteLine("");
+                //Debug.WriteLine("--------------------");
+                //Debug.WriteLine($"AVCTRL ITER RECEIVED: {dispatchRequestHandle}");
+                //Debug.WriteLine($"AVCTRL ITER BYTES RECEIVED: {dispatchRequestHandleArray[0]} {dispatchRequestHandleArray[1]} {dispatchRequestHandleArray[2]} {dispatchRequestHandleArray[3]}");
+                //Debug.WriteLine($"ServiceHandle: {dispatchServiceHandle}");
+                //Debug.WriteLine($"FunctionHandle: {dispatchFunctionHandle}");
 
                 // Service Handle = Dispenser
                 if (dispatchServiceHandle == 0) {
@@ -192,15 +193,23 @@ namespace SoftSled.Components {
                         Debug.WriteLine(DMCTOpenMediaURL);
 
 
-                        //wmp.URL = ;
-                        //wmp.newMedia(DMCTOpenMediaURL);
+
+
+
+                        iWMPMedia = wmp.newMedia(DMCTOpenMediaURL);
+                        wmp.currentMedia = iWMPMedia;
+
+                        //wmp.launchURL(DMCTOpenMediaURL);
                         //wmp.openPlayer(DMCTOpenMediaURL);
 
-                        // Create Media Object
-                        currentMedia = new Media(_libVLC, new Uri(DMCTOpenMediaURL));
-                        currentMedia.Parse();
+                        //// Create Media Object
+                        //currentMedia = new Media(_libVLC, new Uri(DMCTOpenMediaURL));
+                        //currentMedia.Parse();
+
                         //_mp.NetworkCaching = 1000;
                         //_mp.Media = currentMedia;
+
+
 
                         // Initialise OpenMedia Response
                         byte[] response = Components.DSLRCommunication.OpenMediaResponse(
@@ -218,7 +227,8 @@ namespace SoftSled.Components {
 
                         m_logger.LogDebug("AVCTRL: CloseMedia");
 
-                        _mp.Stop();
+                        //_mp.Stop();
+                        wmp.Ctlcontrols.stop();
 
                         // Initialise CloseMedia Response
                         byte[] response = Components.DSLRCommunication.CloseMediaResponse(
@@ -244,7 +254,8 @@ namespace SoftSled.Components {
 
                         m_logger.LogDebug("AVCTRL: Start");
 
-                        _mp.Play(currentMedia);
+                        //_mp.Play(currentMedia);
+                        wmp.Ctlcontrols.play();
 
                         // Initialise Start Response
                         byte[] response = Components.DSLRCommunication.StartResponse(
@@ -263,7 +274,8 @@ namespace SoftSled.Components {
 
                         m_logger.LogDebug("AVCTRL: Pause");
 
-                        _mp.Pause();
+                        //_mp.Pause();
+                        wmp.Ctlcontrols.pause();
 
                         // Initialise Pause Response
                         byte[] response = Components.DSLRCommunication.PauseResponse(
@@ -281,7 +293,8 @@ namespace SoftSled.Components {
 
                         m_logger.LogDebug("AVCTRL: Stop");
 
-                        _mp.Stop();
+                        //_mp.Stop();
+                        wmp.Ctlcontrols.stop();
 
                         // Initialise Stop Response
                         byte[] response = Components.DSLRCommunication.StopResponse(
@@ -297,7 +310,10 @@ namespace SoftSled.Components {
                     // GetDuration Request
                     else if (dispatchFunctionHandle == 5) {
 
-                        long durationLongMili = Convert.ToInt64(currentMedia.Duration / 10);
+                        double duration = iWMPMedia.duration;
+
+                        long durationLongMili = Convert.ToInt64(duration * 100);
+                        //long durationLongMili = Convert.ToInt64(currentMedia.Duration / 10);
                         //long durationLongMili = Convert.ToInt64(60 / 10);
 
                         m_logger.LogDebug($"AVCTRL: GetDuration ({durationLongMili})");
@@ -317,7 +333,10 @@ namespace SoftSled.Components {
                     // GetPosition Request
                     else if (dispatchFunctionHandle == 6) {
 
-                        long positionLongMili = Convert.ToInt64(_mp.Time / 10);
+                        double currentPosition = wmp.Ctlcontrols.currentPosition;
+
+                        long positionLongMili = Convert.ToInt64(currentPosition * 100);
+                        //long positionLongMili = Convert.ToInt64(_mp.Time / 10);
                         //long positionLongMili = Convert.ToInt64(5 / 10);
 
                         m_logger.LogDebug($"AVCTRL: GetPosition ({positionLongMili})");
@@ -532,9 +551,9 @@ namespace SoftSled.Components {
                             case "IsMuted":
 
                                 if (SetDWORDPropertyPayloadPropertyValue == 1) {
-                                    SystemAudio.WindowsSystemAudio.SetMute(true);
+                                    //SystemAudio.WindowsSystemAudio.SetMute(true);
                                 } else {
-                                    SystemAudio.WindowsSystemAudio.SetMute(false);
+                                    //SystemAudio.WindowsSystemAudio.SetMute(false);
                                 }
 
                                 // Initialise SetDWORDProperty Response
@@ -553,7 +572,7 @@ namespace SoftSled.Components {
                                 int setVolume = (int)Math.Floor((SetDWORDPropertyPayloadPropertyValue / 65535.00) * 100);
 
                                 m_logger.LogDebug($"AVCTRL: SetVolume ({setVolume})");
-                                SystemAudio.WindowsSystemAudio.SetVolume(setVolume);
+                                //SystemAudio.WindowsSystemAudio.SetVolume(setVolume);
 
                                 // Initialise SetDWORDProperty Response
                                 byte[] volumeResponse = Components.DSLRCommunication.SetDWORDPropertyResponse(

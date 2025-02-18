@@ -222,7 +222,7 @@ namespace SoftSled {
             // devcaps - Used by EhShell to determine Extender capabilities
             // avctrl - Used for AV Signalling
             // VCHD - something to do with av signalling
-            // splash - could be used by XB360 Extenders (or remote rendering)
+            // splash - appears to be used with both the RUI and BIG DevCaps options, but only when both capabilities are enabled (Big-Endian Remote Rendering). Likely no use for this project.
 
             // NOTICE, if you want ehshell.exe to start up in normal Remote Desktop mode, remove the devcaps channel definition bellow. 
             //rdpClient.CreateVirtualChannels("McxSess,MCECaps,avctrl,VCHD");

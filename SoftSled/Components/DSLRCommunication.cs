@@ -11,7 +11,7 @@ namespace SoftSled.Components {
         public static byte[] Encapsulate(byte[] byteArray) {
 
             byte[] segment1 = GetByteArrayFromInt(byteArray.Length);
-            byte[] segment2 = new byte[] { 19, 0, 0, 0 };
+            byte[] segment2 = new byte[] { 0, 0, 0, 0 };
 
             // Create Base Byte Array
             byte[] baseArray = new byte[0];
@@ -998,7 +998,7 @@ namespace SoftSled.Components {
             // Get GetStringProperty Byte Arrays
             byte[] GetStringPropertyChildCount = new byte[] { 0, 0 };
             byte[] GetStringPropertyPayloadS_OK = new byte[] { 0, 0, 0, 0 };
-            byte[] GetStringPropertyPayloadPropertyValue = Encoding.UTF8.GetBytes(propertyValueString + '\0');
+            byte[] GetStringPropertyPayloadPropertyValue = Encoding.UTF8.GetBytes(propertyValueString+'\0');
             byte[] GetStringPropertyPayloadLength = GetInverse4ByteArrayFromInt(
                 GetStringPropertyPayloadPropertyValue.Length
             );
@@ -1026,6 +1026,56 @@ namespace SoftSled.Components {
                 .Concat(GetStringPropertyChildCount)
                 // Add GetStringProperty Payload Result
                 .Concat(GetStringPropertyPayloadS_OK)
+                // Add GetStringProperty Payload Length
+                .Concat(GetStringPropertyPayloadLength)
+                // Add GetStringProperty Payload PropertyValue
+                .Concat(GetStringPropertyPayloadPropertyValue);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
+        public static byte[] GetStringPropertyFalseResponse(byte[] dispatchRequestHandle) {
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 2 };
+
+            // Get GetStringProperty Byte Arrays
+            byte[] GetStringPropertyChildCount = new byte[] { 0, 0 };
+            byte[] GetStringPropertyPayloadS_FALSE = new byte[] { 0, 0, 0, 1 };
+            byte[] GetStringPropertyPayloadPropertyValue = Encoding.UTF8.GetBytes("\0");
+            byte[] GetStringPropertyPayloadLength = GetInverse4ByteArrayFromInt(
+                GetStringPropertyPayloadPropertyValue.Length
+            );
+            byte[] GetStringPropertyPayloadSize = GetInverse4ByteArrayFromInt(
+                GetStringPropertyPayloadS_FALSE.Length +
+                GetStringPropertyPayloadLength.Length +
+                GetStringPropertyPayloadPropertyValue.Length
+            );
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add GetStringProperty PayloadSize
+                .Concat(GetStringPropertyPayloadSize)
+                // Add GetStringProperty ChildCount
+                .Concat(GetStringPropertyChildCount)
+                // Add GetStringProperty Payload Result
+                .Concat(GetStringPropertyPayloadS_FALSE)
                 // Add GetStringProperty Payload Length
                 .Concat(GetStringPropertyPayloadLength)
                 // Add GetStringProperty Payload PropertyValue

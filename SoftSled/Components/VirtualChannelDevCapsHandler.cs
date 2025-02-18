@@ -14,7 +14,7 @@ namespace SoftSled.Components {
 
         private int DSPAServiceHandle;
         private List<string> DevCapsEnabledCapabilities = new List<string> {
-            "2DA", // 2DA - Is 2D animation allowed?
+            //"2DA", // 2DA - Is 2D animation allowed?
             //"ANI", // ANI - Is intensive animation allowed?
             //"APP", // APP - Is tray applet allowed?
             //"ARA", // ARA - Is auto restart allowed?
@@ -31,40 +31,40 @@ namespace SoftSled.Components {
             //"DOC", // DOC - Is my Documents populated?
             //"DRC", // DRC - Is DVD burning allowed?
             //"DVD", // DVD - Is DVD playback allowed?
-            //"EXT", // EXT - Are Extender Settings allowed?
+            "EXT", // EXT - Are Extender Settings allowed?
             //"FPD", // FPD - Is FPD allowed?
             "GDI", // GDI - Is GDI renderer used?
             "H02", // H02 - Is 2 feet help allowed? 
             "H10", // H10 - Is 10 feet help allowed? 
             "HDN", // HDN - Is HD content allowed by the network?
             "HDV", // HDV - Is HD content allowed?
-            "HTM", // HTM - Is HTML supported?
+            //"HTM", // HTM - Is HTML supported?
             //"MAR", // MAR - Are over-scan margins needed?
             "MUT", // MUT - Is mute ui allowed?
-            "NLZ", // NLZ - Is nonlinear zoom supported?
-            "ONS", // ONS - Is online spotlight allowed?
+            //"NLZ", // NLZ - Is nonlinear zoom supported?
+            //"ONS", // ONS - Is online spotlight allowed?
             "PHO", // PHO - Are advanced photo features allowed?
             "POP", // POP - Are Pop ups allowed?
             "REM", // REM - Is input treated as if from a remote?
-            "RSZ", // RSZ - Is raw stretched zoom supported?
+            //"RSZ", // RSZ - Is raw stretched zoom supported?
             //"RUI", // RUI - Is remote UI rendering supported?
             "SCR", // SCR - Is a native screensaver required?
-            //"SDM", // SDM - Is a screen data mode workaround needed?
+            //"SDM", // SDM - Is a screen data mode workaround needed? (Not Supported on Win7+)
             "SDN", // SDN - Is SD content allowed by the network?
-            "SOU", // SOU - Is UI sound supported?
+            //"SOU", // SOU - Is UI sound supported?
             //"SUP", // SUP - Is RDP super blt allowed?
             //"SYN", // SYN - Is transfer to a device allowed?
             "TBA", // TBA - Is a Toolbar allowed?
             //"TVS", // TVS - Is a TV skin used?
 			"VID", // VID - Is video allowed?
-            "VIZ", // VIZ - Is WMP visualisation allowed?
-            "VOL", // VOL - Is volume UI allowed?
-            "W32", // W32 - Is Win32 content allowed?
+            //"VIZ", // VIZ - Is WMP visualisation allowed?
+            //"VOL", // VOL - Is volume UI allowed?
+            //"W32", // W32 - Is Win32 content allowed?
             "WE2", // WE2 - Is 2 feet web content allowed? 
             "WEB", // WEB - Is 10 feet web content allowed? 
             "WID", // WID - Is wide screen enabled?
             //"WIN", // WIN - Is window mode allowed?
-            "ZOM" // ZOM - Is video zoom mode allowed?
+            //"ZOM" // ZOM - Is video zoom mode allowed?
         };
 
         public VirtualChannelDevCapsHandler(Logger m_logger) {
@@ -205,30 +205,28 @@ namespace SoftSled.Components {
                                 );
                                 break;
                             case "PRT":
+                                m_logger.LogDebug($"DEVCAPS: PRT String");
                                 // Initialise GetStringProperty Response
                                 response = Components.DSLRCommunication.GetStringPropertyResponse(
-                                    DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
-                                    @"rtsp-rtp-udp:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL;DLNA.ORG_PN=WMAPRO;MICROSOFT.COM_PN=WMALSL
-rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3
-http-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM
-rtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_AVI_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3;MICROSOFT.COM_PN=MPEG4_P2_AVI_ASP_L5_AC3
-rtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;MICROSOFT.COM_PN=WMVHIGH_LSL;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED
-http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL;DLNA.ORG_PN=MPEG4_P2_TS_ASP_MPEG1_L3;DLNA.ORG_PN=MPEG4_P2_TS_ASP_AC3;DLNA.ORG_PN=MPEG4_P2_TS_ASP_AC3;DLNA.ORG_PN=AVC_MP4_MP_SD_MPEG1_L3;DLNA.ORG_PN=AVC_TS_MP_HD_MPEG1_L3;DLNA.ORG_PN=AVC_MP4_MP_HD_AC3;DLNA.ORG_PN=AVC_MP4_MP_SD_AC3;DLNA.ORG_PN=AVC_TS_MP_HD_AC3"
-                                );
+                                   DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
+                                   @"rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3"
+                               );
+                                //response = Components.DSLRCommunication.GetStringPropertyNullResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
                                 break;
                             case "PR":
                                 // Initialise GetStringProperty Response
                                 response = Components.DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
-                                    @"rtsp-rtp-udp:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL;DLNA.ORG_PN=WMAPRO;MICROSOFT.COM_PN=WMALSL
-rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3
-http-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM
-rtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_AVI_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3;MICROSOFT.COM_PN=MPEG4_P2_AVI_ASP_L5_AC3
-rtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;MICROSOFT.COM_PN=WMVHIGH_LSL;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED
-http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL;DLNA.ORG_PN=MPEG4_P2_TS_ASP_MPEG1_L3;DLNA.ORG_PN=MPEG4_P2_TS_ASP_AC3;DLNA.ORG_PN=MPEG4_P2_TS_ASP_AC3;DLNA.ORG_PN=AVC_MP4_MP_SD_MPEG1_L3;DLNA.ORG_PN=AVC_TS_MP_HD_MPEG1_L3;DLNA.ORG_PN=AVC_MP4_MP_HD_AC3;DLNA.ORG_PN=AVC_MP4_MP_SD_AC3;DLNA.ORG_PN=AVC_TS_MP_HD_AC3"
+                                    @"rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3
+                                http-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM
+                                rtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_AVI_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3;MICROSOFT.COM_PN=MPEG4_P2_AVI_ASP_L5_AC3
+                                rtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;MICROSOFT.COM_PN=WMVHIGH_LSL;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED
+                                http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL;DLNA.ORG_PN=MPEG4_P2_TS_ASP_MPEG1_L3;DLNA.ORG_PN=MPEG4_P2_TS_ASP_AC3;DLNA.ORG_PN=MPEG4_P2_TS_ASP_AC3;DLNA.ORG_PN=AVC_MP4_MP_SD_MPEG1_L3;DLNA.ORG_PN=AVC_TS_MP_HD_MPEG1_L3;DLNA.ORG_PN=AVC_MP4_MP_HD_AC3;DLNA.ORG_PN=AVC_MP4_MP_SD_AC3;DLNA.ORG_PN=AVC_TS_MP_HD_AC3"
                                 );
+                                //response = Components.DSLRCommunication.GetStringPropertyNullResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
                                 break;
                             case "XTY":
+                                m_logger.LogDebug($"DEVCAPS: XTY String");
                                 // Initialise GetStringProperty Response
                                 response = Components.DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
@@ -236,6 +234,7 @@ http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPE
                                 );
                                 break;
                             case "XT":
+                                m_logger.LogDebug($"DEVCAPS: XTY String");
                                 // Initialise GetStringProperty Response
                                 response = Components.DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
@@ -277,7 +276,7 @@ http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPE
                         int GetDWORDPropertyPayloadLength = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
                         string GetDWORDPropertyPayloadPropertyName = DataUtilities.GetByteArrayString(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4, GetDWORDPropertyPayloadLength);
 
-                        m_logger.LogDebug($"DEVCAPS: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName.Replace("\0", "")})");
+                        //m_logger.LogDebug($"DEVCAPS: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName.Replace("\0", "")})");
 
                         byte[] response;
                         // Get the DevCaps Entry

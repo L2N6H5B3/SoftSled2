@@ -226,11 +226,9 @@
     </Content>
     <Content Include="Resources\audio\miniselect_a.wav" />
     <Content Include="Resources\icon\wmc.ico" />
-    <Content Include="XML\Linksys2200DeviceDescription.xml" />
     <Content Include="XML\msremotedexperience.xml" />
     <Content Include="XML\mstrustagreement.xml" />
     <Content Include="XML\MyDeviceDescription.xml" />
-    <Content Include="XML\Xbox360DeviceDescription.xml" />
   </ItemGroup>
   <ItemGroup>
     <BootstrapperPackage Include="Microsoft.Net.Client.3.5">
