@@ -120,6 +120,23 @@ namespace SoftSled {
                     panOverlay.Visible = true;
                     rdpClient.Visible = false;
                 }
+            } else {
+                // Set Status
+                SetStatus(e.statusText);
+
+                // If the Shell is open
+                if (e.shellOpen) {
+                    SetPanOverlayVisible(false);
+                    SetRdpClientVisible(true);
+                    // Play Opening Music
+                    PlayOpening();
+                } else if (e.shellOpen && rdpClient.Visible == true) {
+                    SetPanOverlayVisible(false);
+                    SetRdpClientVisible(true);
+                } else {
+                    SetPanOverlayVisible(true);
+                    SetRdpClientVisible(false);
+                }
             }
         }
 
@@ -215,7 +232,7 @@ namespace SoftSled {
 
             // Set Port
             rdpClient.AdvancedSettings3.RDPPort = 3390;
-            //rdpClient.AdvancedSettings3.PluginDlls = "RDPVCManager.dll";
+            rdpClient.AdvancedSettings7.PluginDlls = "RDPVCManager.dll";
 
             // McxSess - Used by McrMgr for Extender Session Control
             // MCECaps - not known where used
@@ -315,6 +332,27 @@ namespace SoftSled {
                 if (!lbGenStatus.Visible)
                     lbGenStatus.Visible = true;
             }), message);
+        }
+
+        delegate void dPanOverlay(bool show);
+        void SetPanOverlay(string message) {
+            Invoke(new dPanOverlay(delegate (bool ex) {
+                panOverlay.Visible = ex;
+            }), message);
+        }
+
+        delegate void dPanOverlayVisible(bool show);
+        void SetPanOverlayVisible(bool show) {
+            Invoke(new dPanOverlayVisible(delegate (bool ex) {
+                panOverlay.Visible = ex;
+            }), show);
+        }
+
+        delegate void dRdpClientVisible(bool show);
+        void SetRdpClientVisible(bool show) {
+            Invoke(new dRdpClientVisible(delegate (bool ex) {
+                rdpClient.Visible = ex;
+            }), show);
         }
 
         private void PlayOpening() {

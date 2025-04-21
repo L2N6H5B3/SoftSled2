@@ -276,15 +276,17 @@ namespace SoftSled.Components {
                         int GetDWORDPropertyPayloadLength = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
                         string GetDWORDPropertyPayloadPropertyName = DataUtilities.GetByteArrayString(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4, GetDWORDPropertyPayloadLength);
 
-                        //m_logger.LogDebug($"DEVCAPS: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName.Replace("\0", "")})");
 
                         byte[] response;
                         // Get the DevCaps Entry
                         var devCapsEntry = DevCapsEnabledCapabilities.FirstOrDefault(xx => xx.StartsWith(GetDWORDPropertyPayloadPropertyName.Replace("\0", "")));
                         if (devCapsEntry != null) {
                             response = Components.DSLRCommunication.DeviceCapabilityTrueGetDWORDPropertyResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
+                            m_logger.LogDebug($"DEVCAPS: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName.Replace("\0", "")}) True");
+                            
                         } else {
                             response = Components.DSLRCommunication.DeviceCapabilityFalseGetDWORDPropertyResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
+                            m_logger.LogDebug($"DEVCAPS: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName.Replace("\0", "")}) False");
                         }
 
                         // Encapsulate the Response (Doesn't seem to work without this?)
