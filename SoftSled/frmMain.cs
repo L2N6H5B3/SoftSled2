@@ -233,6 +233,8 @@ namespace SoftSled {
             // Set Port
             rdpClient.AdvancedSettings3.RDPPort = 3390;
             rdpClient.AdvancedSettings7.PluginDlls = "RDPVCManager.dll";
+            rdpClient.AdvancedSettings7.RedirectClipboard = false;
+            rdpClient.AdvancedSettings7.RedirectPrinters = false;
 
             // McxSess - Used by McrMgr for Extender Session Control
             // MCECaps - not known where used
