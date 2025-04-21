@@ -94,7 +94,6 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Components\Logger.cs" />
-    <Compile Include="Components\VirtualChannelMceCapsSender.cs" />
     <Compile Include="Components\VirtualChannelMcxSessHandler.cs" />
     <Compile Include="Components\VirtualChannelDevCapsHandler.cs" />
     <Compile Include="Components\VirtualChannelAvCtrlHandler.cs" />

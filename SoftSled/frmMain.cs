@@ -76,7 +76,7 @@ namespace SoftSled {
                 panOverlay.Visible = false;
                 rdpClient.Visible = true;
 
-                GetMceCaps();
+                //GetMceCaps();
 
             } else {
                 panOverlay.Visible = true;
@@ -279,12 +279,12 @@ namespace SoftSled {
             player.Play();
         }
 
-        private void GetMceCaps() {
+        //private void GetMceCaps() {
 
-            VirtualChannelMceCapsSender virtualChannelMceCaps = new VirtualChannelMceCapsSender(m_logger, rdpClient);
+        //    VirtualChannelMceCapsSender virtualChannelMceCaps = new VirtualChannelMceCapsSender(m_logger, rdpClient);
 
-            rdpClient.SendOnVirtualChannel("MCECaps", );
-        }
+        //    //rdpClient.SendOnVirtualChannel("MCECaps", );
+        //}
 
         #endregion ############################################################
 
