@@ -15,7 +15,8 @@ namespace RDPVCManager {
         private static ChannelContext[] _channelContexts;
         //private static string _logFilePath = "RDPVCManager.log"; // Log file path
         private static string pipePrefix = "RDPVCManager_";
-        private static string[] channelNames = { "McxSess", "devcaps", "avctrl" };
+        //private static string[] channelNames = { "McxSess", "devcaps", "avctrl" };
+        private static string[] channelNames = { "McxSess", "devcaps", "avctrl", "mcecaps", "VCHD", "splash" };
         static ChannelInitEventDelegate channelInitEventDelegate = new ChannelInitEventDelegate(VirtualChannelInitEventProc);
         static ChannelOpenEventDelegate channelOpenEventDelegate = new ChannelOpenEventDelegate(VirtualChannelOpenEvent);
 

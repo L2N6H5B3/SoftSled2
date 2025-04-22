@@ -14,7 +14,7 @@ namespace SoftSled.Components {
 
         private int DSPAServiceHandle;
         private List<string> DevCapsEnabledCapabilities = new List<string> {
-            //"2DA", // 2DA - Is 2D animation allowed?
+            "2DA", // 2DA - Is 2D animation allowed?
             //"ANI", // ANI - Is intensive animation allowed?
             //"APP", // APP - Is tray applet allowed?
             //"ARA", // ARA - Is auto restart allowed?
@@ -38,7 +38,7 @@ namespace SoftSled.Components {
             "H10", // H10 - Is 10 feet help allowed? 
             "HDN", // HDN - Is HD content allowed by the network?
             "HDV", // HDV - Is HD content allowed?
-            //"HTM", // HTM - Is HTML supported?
+            "HTM", // HTM - Is HTML supported?
             //"MAR", // MAR - Are over-scan margins needed?
             "MUT", // MUT - Is mute ui allowed?
             //"NLZ", // NLZ - Is nonlinear zoom supported?
@@ -51,15 +51,15 @@ namespace SoftSled.Components {
             "SCR", // SCR - Is a native screensaver required?
             //"SDM", // SDM - Is a screen data mode workaround needed? (Not Supported on Win7+)
             "SDN", // SDN - Is SD content allowed by the network?
-            //"SOU", // SOU - Is UI sound supported?
+            "SOU", // SOU - Is UI sound supported?
             //"SUP", // SUP - Is RDP super blt allowed?
             //"SYN", // SYN - Is transfer to a device allowed?
             "TBA", // TBA - Is a Toolbar allowed?
             //"TVS", // TVS - Is a TV skin used?
 			"VID", // VID - Is video allowed?
             //"VIZ", // VIZ - Is WMP visualisation allowed?
-            //"VOL", // VOL - Is volume UI allowed?
-            //"W32", // W32 - Is Win32 content allowed?
+            "VOL", // VOL - Is volume UI allowed?
+            "W32", // W32 - Is Win32 content allowed?
             "WE2", // WE2 - Is 2 feet web content allowed? 
             "WEB", // WEB - Is 10 feet web content allowed? 
             "WID", // WID - Is wide screen enabled?

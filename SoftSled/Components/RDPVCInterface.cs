@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO.Pipes;
 
 namespace SoftSled.Components {
@@ -6,7 +7,10 @@ namespace SoftSled.Components {
 
         private Logger m_logger;
         public event EventHandler<DataReceived> DataReceived;
+        //private static string[] channelNames = { "McxSess", "devcaps", "avctrl" };
+        private static string[] channelNames = { "McxSess", "devcaps", "avctrl", "mcecaps", "VCHD", "splash" };
         private static string pipePrefix = "RDPVCManager_";
+        private static Dictionary<string, NamedPipeServer> pipeServers = new Dictionary<string, NamedPipeServer>();
         NamedPipeServer mcxsessPipeServer { get; set; }
         NamedPipeServer devcapsPipeServer { get; set; }
         NamedPipeServer avctrlPipeServer { get; set; }
@@ -14,17 +18,20 @@ namespace SoftSled.Components {
         public RDPVCInterface(Logger m_logger) {
             this.m_logger = m_logger;
 
-            mcxsessPipeServer = new NamedPipeServer($"{pipePrefix}McxSess","McxSess");
-            mcxsessPipeServer.OnReceivedMessage += new EventHandler<DataReceived>(Server_OnReceivedMessage);
-            mcxsessPipeServer.Start();
+            foreach (string channelName in channelNames) {
+                NamedPipeServer pipeServer = new NamedPipeServer($"{pipePrefix}{channelName}", channelName);
+                pipeServer.OnReceivedMessage += new EventHandler<DataReceived>(Server_OnReceivedMessage);
+                pipeServer.Start();
+                pipeServers.Add(channelName, pipeServer);
+            }
 
-            devcapsPipeServer = new NamedPipeServer($"{pipePrefix}devcaps", "devcaps");
-            devcapsPipeServer.OnReceivedMessage += new EventHandler<DataReceived>(Server_OnReceivedMessage);
-            devcapsPipeServer.Start();
+            //devcapsPipeServer = new NamedPipeServer($"{pipePrefix}devcaps", "devcaps");
+            //devcapsPipeServer.OnReceivedMessage += new EventHandler<DataReceived>(Server_OnReceivedMessage);
+            //devcapsPipeServer.Start();
 
-            avctrlPipeServer = new NamedPipeServer($"{pipePrefix}avctrl", "avctrl");
-            avctrlPipeServer.OnReceivedMessage += new EventHandler<DataReceived>(Server_OnReceivedMessage);
-            avctrlPipeServer.Start();
+            //avctrlPipeServer = new NamedPipeServer($"{pipePrefix}avctrl", "avctrl");
+            //avctrlPipeServer.OnReceivedMessage += new EventHandler<DataReceived>(Server_OnReceivedMessage);
+            //avctrlPipeServer.Start();
 
             //// Create a thread to handle the named pipe for this channel
             //Thread pipeThread = new Thread(() => PipeThreadProc("McxSess"));
@@ -38,21 +45,28 @@ namespace SoftSled.Components {
         }
 
         public bool SendOnVirtualChannel(string channelName, byte [] data) {
-            switch (channelName) {
-                case "McxSess":
-                    // Write the data to the Virtual Channel Pipe
-                    mcxsessPipeServer.Write(data);
-                    break;
-                case "devcaps":
-                    // Write the data to the Virtual Channel Pipe
-                    devcapsPipeServer.Write(data);
-                    break;
-                case "avctrl":
-                    // Write the data to the Virtual Channel Pipe
-                    avctrlPipeServer.Write(data);
-                    break;
+            NamedPipeServer pipeServer = pipeServers[channelName];
+            if (pipeServer != null) {
+                // Write the data to the Virtual Channel Pipe
+                pipeServer.Write(data);
+                return true;
+            } else {
+                return false;
             }
-            return true;
+            //switch (channelName) {
+            //    case "McxSess":
+            //        // Write the data to the Virtual Channel Pipe
+            //        mcxsessPipeServer.Write(data);
+            //        break;
+            //    case "devcaps":
+            //        // Write the data to the Virtual Channel Pipe
+            //        devcapsPipeServer.Write(data);
+            //        break;
+            //    case "avctrl":
+            //        // Write the data to the Virtual Channel Pipe
+            //        avctrlPipeServer.Write(data);
+            //        break;
+            //}
         }
     }
 }

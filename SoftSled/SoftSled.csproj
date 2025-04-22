@@ -59,7 +59,7 @@
     <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x86'">
-	<DebugSymbols>true</DebugSymbols>
+    <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>false</Optimize>
     <OutputPath>bin\x86\Debug\</OutputPath>
@@ -139,6 +139,7 @@
     <Compile Include="FrmMain.Designer.cs">
       <DependentUpon>FrmMain.cs</DependentUpon>
     </Compile>
+    <Compile Include="IObjectSafety.cs" />
     <Compile Include="NullService.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
@@ -230,6 +231,9 @@
     <Content Include="KeyExchange\2\CertificateAuthorities.txt" />
     <Content Include="KeyExchange\2\FullKeyExchange.txt" />
     <Content Include="KeyExchange\2\TempFile.xml" />
+    <Content Include="RDPVCManager.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="Resources\audio\error_a.wav" />
     <Content Include="Resources\audio\focus_a.wav" />
     <Content Include="Resources\audio\intro_a.wav">

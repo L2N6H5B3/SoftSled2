@@ -228,7 +228,7 @@ namespace SoftSled {
             // Add EventHandlers
             rdpClient.OnConnected += new EventHandler(RdpClient_OnConnected);
             rdpClient.OnDisconnected += new AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEventHandler(RdpClient_OnDisconnected);
-            rdpClient.OnChannelReceivedData += new AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEventHandler(RdpClient_OnChannelReceivedData);
+            //rdpClient.OnChannelReceivedData += new AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEventHandler(RdpClient_OnChannelReceivedData);
 
             // Set Port
             rdpClient.AdvancedSettings3.RDPPort = 3390;
@@ -257,24 +257,24 @@ namespace SoftSled {
             rdpInitialised = true;
         }
 
-        void RdpClient_OnChannelReceivedData(object sender, AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
-            try {
-                //var res = rdpClient.GetVirtualChannelOptions("McxSess");
-                if (e.chanName == "avctrl") {
-                    AvCtrlHandler.ProcessData(Encoding.Unicode.GetBytes(e.data));
-                } else if (e.chanName == "devcaps") {
-                    DevCapsHandler.ProcessData(Encoding.Unicode.GetBytes(e.data));
-                } else if (e.chanName == "McxSess") {
-                    McxSessHandler.ProcessData(Encoding.Unicode.GetBytes(e.data));
-                } else {
-                    MessageBox.Show("unhandled data on channel " + e.chanName);
-                    m_logger.LogDebug($"{e.chanName} Bytes: " + BitConverter.ToString(Encoding.Unicode.GetBytes(e.data)));
-                }
+        //void RdpClient_OnChannelReceivedData(object sender, AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
+        //    try {
+        //        //var res = rdpClient.GetVirtualChannelOptions("McxSess");
+        //        if (e.chanName == "avctrl") {
+        //            AvCtrlHandler.ProcessData(Encoding.Unicode.GetBytes(e.data));
+        //        } else if (e.chanName == "devcaps") {
+        //            DevCapsHandler.ProcessData(Encoding.Unicode.GetBytes(e.data));
+        //        } else if (e.chanName == "McxSess") {
+        //            McxSessHandler.ProcessData(Encoding.Unicode.GetBytes(e.data));
+        //        } else {
+        //            MessageBox.Show("unhandled data on channel " + e.chanName);
+        //            m_logger.LogDebug($"{e.chanName} Bytes: " + BitConverter.ToString(Encoding.Unicode.GetBytes(e.data)));
+        //        }
 
-            } catch (Exception ee) {
-                MessageBox.Show(ee.Message + " " + ee.StackTrace);
-            }
-        }
+        //    } catch (Exception ee) {
+        //        MessageBox.Show(ee.Message + " " + ee.StackTrace);
+        //    }
+        //}
 
 
         void RdpClient_OnDisconnected(object sender, AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEvent e) {
@@ -303,6 +303,60 @@ namespace SoftSled {
         }
 
         #endregion ############################################################
+
+        
+        //#region IObjectSafety Implementation
+
+        //// This method is called by the ActiveX control to ask what safety options the host supports
+        //// and which are currently enabled for the interface identified by riid.
+        //public int GetInterfaceSafetyOptions(ref Guid riid, out int pdwSupportedOptions, out int pdwEnabledOptions) {
+        //    // We are telling the control that we support safety for untrusted callers (scripting)
+        //    // and untrusted data (initialization).
+        //    pdwSupportedOptions = ObjectSafetyConstants.INTERFACESAFE_FOR_UNTRUSTED_CALLER |
+        //                          ObjectSafetyConstants.INTERFACESAFE_FOR_UNTRUSTED_DATA;
+
+        //    // *** CRITICAL SECURITY DECISION ***
+        //    // Here we enable the safety options. By enabling these, you are asserting that
+        //    // your application handles the potential risks associated with scripting the control
+        //    // or initializing it with data from potentially untrusted sources.
+        //    // Enabling both provides the highest level of "trust" to the control, potentially
+        //    // suppressing more warnings, but also carries the highest risk if not handled carefully.
+        //    // Start cautiously if unsure, perhaps enabling only one.
+        //    pdwEnabledOptions = ObjectSafetyConstants.INTERFACESAFE_FOR_UNTRUSTED_CALLER |
+        //                        ObjectSafetyConstants.INTERFACESAFE_FOR_UNTRUSTED_DATA;
+
+        //    // You could optionally check the 'riid' parameter here if you wanted to provide
+        //    // different safety options for different interfaces the control might query.
+        //    // For many controls, providing the same options for all queried interfaces is sufficient.
+
+        //    return ObjectSafetyConstants.S_OK; // Indicate success
+        //}
+
+        //// This method is called by the ActiveX control to *request* that the host enable
+        //// certain safety options specified in dwEnabledOptions, based on the mask dwOptionSetMask.
+        //public int SetInterfaceSafetyOptions(ref Guid riid, int dwOptionSetMask, int dwEnabledOptions) {
+        //    // A simple implementation often just returns S_OK, effectively allowing the control
+        //    // to set options as long as they were declared as supported in GetInterfaceSafetyOptions.
+        //    // You could add logic here to selectively deny certain requests if needed.
+
+        //    // Optional: Check if the requested options are within the supported set.
+        //    int currentSupported, currentEnabled;
+        //    GetInterfaceSafetyOptions(ref riid, out currentSupported, out currentEnabled); // Get our supported options
+
+        //    if (((dwEnabledOptions & dwOptionSetMask) | ~dwOptionSetMask) == currentSupported) {
+        //        // Requested options are valid within the mask and supported options
+        //        return ObjectSafetyConstants.S_OK; // Indicate success
+        //    } else {
+        //        // Requested options not supported
+        //        // return ObjectSafetyConstants.E_FAIL; // Indicate failure (optional)
+        //        // Often, just returning S_OK is enough if GetInterfaceSafetyOptions sets the desired state.
+        //        return ObjectSafetyConstants.S_OK;
+        //    }
+        //    // Simpler Approach: Many examples just return S_OK here.
+        //    // return ObjectSafetyConstants.S_OK;
+        //}
+
+        //#endregion
 
 
         #region Misc Form Events ##############################################
