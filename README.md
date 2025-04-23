@@ -1,7 +1,7 @@
 # SoftSled2
 A revival of the old SoftSled Project, an open source Windows Media Center Extender
 
-![Screenshot of the Dev Shell](https://raw.githubusercontent.com/L2N6H5B3/SoftSled2/master/Screenshot_230425.jpg)
+![Screenshot of the Dev Shell](https://raw.githubusercontent.com/L2N6H5B3/SoftSled2/master/Screenshot_230425.png)
 
 ## Current Progress
 * Audio RTSP communication is close to complete, RTSP playback working via the AxWMP control.
