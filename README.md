@@ -9,6 +9,16 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 * OnMediaEvent requests are working via the AxWMP control, though this will need to be revisited if the WMP control will not be used moving into the future.
 * Interface sounds (through RDP or local) currently being worked out
 
+## Current Questions
+* The Protocol String is never queried by the Media Center Host via the devcaps Virtual Channel.  Unsure why, as this should likely be queried and used to form the RTSP server endpoint provided to the client to play.
+* Could the Protocol String request be affected by the name (XTY) string that is given by the Extender device when requested?
+* Could the Protocols already be worked out via the UPnP comms that happens prior to connection to the Media Center Host?
+* Is the lack of a working DRMRI or WMDRM-ND service causing the non WMV playback to fail?
+* Could codecs on the Media Center Host (or the lack thereof) be causing the issues with playback failure?
+* Do non-Sample Music tracks play as normal?
+* When sending the DSLR CreateService request for the DRMRI DRM Transmitter service, why does it return a NOINTERFACE (0x80004002) error when given the correct ClassID and ServiceID GUIDs?
+* There is slightly different behaviour for MP4 or AVI videos when compared to WTV files and the message that appears - why?
+
 ## Finished Elements
 * Initial Device Configuration
 * Device Services Remoting (DSLR)
