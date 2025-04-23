@@ -4,8 +4,9 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 ![Screenshot of the Dev Shell](https://raw.githubusercontent.com/L2N6H5B3/SoftSled2/master/Screenshot.jpg)
 
 ## Current Progress
-* Audio RTSP communication is close to complete, RTSP playback working (running into issues with RequestHandle reaching 215 and jumping immediately to 65023) - resolved via custom Virtual Channel DLL, this manually processes the data received over the Virtual Channels eliminating the truncation causing the problem.
-* Video RTSP communication is mostly done, RTSP playback working for WMV Videos but not Recorded TV (perhaps because of codecs / Protocol String / DRM license failure?)
+* Audio RTSP communication is close to complete, RTSP playback working via the AxWMP control.
+* Video RTSP communication is mostly done, RTSP playback working via the AxWMP control for WMV Videos but not MP4, AVI, or WTV (Recorded TV).  Unsure why as some RTSP clients just state "Internal Server Error", perhaps because of codecs / Protocol String / DRM license failure?
+* OnMediaEvent requests are working via the AxWMP control, though this will need to be revisited if the WMP control will not be used moving into the future.
 * Interface sounds (through RDP or local) currently being worked out
 
 ## Finished Elements
@@ -18,7 +19,7 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 * Full-Screen Interface
 
 ## Future Requirements
-* Implement Video Overlay
+* Implement Video Overlay (Not possible to Chroma-key the RDP window in WinForms or WPF... Need to think of another option.)
 * Create Extender Certificate
 * Implement media controls (play/pause/previous/next) media from client
 * Create RC6 remote control forwarder
