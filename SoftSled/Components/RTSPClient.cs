@@ -9,6 +9,10 @@ using System.Security.Cryptography;
 namespace SoftSled.Components.RTSP {
     class RTSPClient {
 
+        private string UserAgent = "User-Agent: MCExtender/1.50.X.090522.00"; // Assume Xbox 360?
+        //private string UserAgent = "User-Agent: MCExtender/1.0.0.0"; // Linksys Extender (Doesn't support H.264?)
+
+
         // Events that applications can receive
         public event Received_SPS_PPS_Delegate Received_SPS_PPS;
         public event Received_VPS_SPS_PPS_Delegate Received_VPS_SPS_PPS;
@@ -72,12 +76,55 @@ namespace SoftSled.Components.RTSP {
         Rtsp.G711Payload g711Payload = new Rtsp.G711Payload();
         Rtsp.AMRPayload amrPayload = new Rtsp.AMRPayload();
         Rtsp.AACPayload aacPayload = null;
-
+        M2TsHandling.Pipe.RtpPipeHandler pipeHandler = null;
+        NalUnitHandling.Pipe.NalUnitPipeHandler nalHandler = null;
         List<Rtsp.Messages.RtspRequestSetup> setup_messages = new List<Rtsp.Messages.RtspRequestSetup>(); // setup messages still to send
 
         // Constructor
         public RTSPClient() {
+            // Example arguments: Just demux and discard output (for testing connection)
+            //string ffmpegArgs = "-hide_banner -loglevel error -f mpegts -i pipe:0 -f null -";
+            //string ffplayArgs = "-loglevel debug -f mpegts -i pipe:0";
+            //string ffplayArgs = "-loglevel debug -probesize 5M -analyzeduration 10M -f mpegts -i pipe:0";
+            //string ffplayArgs = "-loglevel debug -f asf -i pipe:0";
+            //string ffplayArgs = "-loglevel debug -video_size 1920x1080 -f h264 -i pipe:0";
+            string ffplayArgs = "-loglevel debug -f h264 -i pipe:0";
+            //string ffplayArgs = "-loglevel debug -probesize 5M -analyzeduration 10M -f h264 -i pipe:0";
+            //string ffplayArgs = "-loglevel debug -f h264 -i pipe:0 -video_size 720x480";
+            //Example arguments: Output raw BGRA video to stdout (requires reading stdout)
+            // string ffmpegArgs = "-hide_banner -loglevel error -f mpegts -i pipe:0 -vf format=pix_fmts=bgra -f rawvideo pipe:1";
+            // Example arguments: Copy streams to a file
+            // string ffmpegArgs = "-hide_banner -loglevel error -f mpegts -i pipe:0 -c copy output.ts";
 
+            //string ffmpegPath = @"C:\Users\Luke\source\repos\SoftSled2\SoftSled\bin\x86\Debug\ffmpeg.exe"; // CHANGE THIS
+            //// Args tell ffmpeg to expect H.264 with size from pipe, decode it, and discard output. Log verbosely.
+            //string ffmpegArgs = $" - loglevel debug -f h264 -i pipe:0 -f null -";
+
+            string ffplayPath = @"C:\Users\Luke\source\repos\SoftSled2\SoftSled\bin\x86\Debug\ffplay.exe"; // CHANGE THIS
+            //int mpegTsPayloadType = 113; // Or the actual type from SDP
+
+
+            //nalHandler = new NalUnitHandling.Pipe.NalUnitPipeHandler(ffmpegPath, ffmpegArgs);
+            nalHandler = new NalUnitHandling.Pipe.NalUnitPipeHandler(ffplayPath, ffplayArgs);
+
+            nalHandler.FfplayErrorDataReceived += (sender, logLine) => {
+                Console.WriteLine($"FFPLAY LOG: {logLine}");
+            };
+
+            if (!nalHandler.Start()) { /* Handle error */ return; }
+
+            //pipeHandler = new M2TsHandling.Pipe.RtpPipeHandler(mpegTsPayloadType, ffplayPath, ffplayArgs);
+
+            //// Optional: Subscribe to error output
+            //pipeHandler.ProcessErrorDataReceived += (sender, errorLine) => {
+            //    Console.WriteLine($"FFMPEG LOG: {errorLine}");
+            //};
+
+            //if (!pipeHandler.Start()) {
+            //    Console.WriteLine("Failed to start ffmpeg process.");
+            //    // Handle error
+            //    return;
+            //}
         }
 
 
@@ -168,7 +215,7 @@ namespace SoftSled.Components.RTSP {
             //options_message.RtspUri = new Uri(this.url);
             //options_message.AddHeader("Accept-Language: en-us, *;q=0.1");
             //options_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-            //options_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+            //options_message.AddHeader(UserAgent);
             //rtsp_client.SendMessage(options_message);
 
             // Send DESCRIBE
@@ -176,8 +223,9 @@ namespace SoftSled.Components.RTSP {
             describe_message.RtspUri = new Uri(url);
             describe_message.AddHeader("Accept: application/sdp");
             describe_message.AddHeader("Accept-Language: en-us, *;q=0.1");
-            describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-            describe_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+            //describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+            describe_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
+            describe_message.AddHeader(UserAgent);
             if (auth_type != null) {
                 AddAuthorization(describe_message, username, password, auth_type, realm, nonce, url);
             }
@@ -199,8 +247,9 @@ namespace SoftSled.Components.RTSP {
                 pause_message.RtspUri = new Uri(url);
                 pause_message.Session = session;
                 pause_message.AddHeader("Accept-Language: en-us, *;q=0.1");
-                pause_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-                pause_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+                //pause_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                pause_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
+                pause_message.AddHeader(UserAgent);
                 if (auth_type != null) {
                     AddAuthorization(pause_message, username, password, auth_type, realm, nonce, url);
                 }
@@ -215,8 +264,9 @@ namespace SoftSled.Components.RTSP {
                 play_message.RtspUri = new Uri(url);
                 play_message.Session = session;
                 play_message.AddHeader("Accept-Language: en-us, *;q=0.1");
-                play_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-                play_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+                //play_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                play_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
+                play_message.AddHeader(UserAgent);
                 if (auth_type != null) {
                     AddAuthorization(play_message, username, password, auth_type, realm, nonce, url);
                 }
@@ -225,13 +275,17 @@ namespace SoftSled.Components.RTSP {
         }
 
         public void Stop() {
+
+            nalHandler.Stop();
+
             if (rtsp_client != null) {
                 // Send TEARDOWN
                 Rtsp.Messages.RtspRequest teardown_message = new Rtsp.Messages.RtspRequestTeardown();
                 teardown_message.RtspUri = new Uri(url);
                 teardown_message.Session = session;
                 teardown_message.AddHeader("Accept-Language: en-us, *;q=0.1");
-                teardown_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                //teardown_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                teardown_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
                 teardown_message.AddHeader("User-Agent: MCExtender/1.0.0.0");
                 if (auth_type != null) {
                     AddAuthorization(teardown_message, username, password, auth_type, realm, nonce, url);
@@ -390,32 +444,40 @@ namespace SoftSled.Components.RTSP {
                     rtp_payload_start += 4 + (int)rtp_extension_size;  // extension header and extension payload
                 }
 
-                System.Diagnostics.Debug.WriteLine("RTP Data"
-                                   + " V=" + rtp_version
-                                   + " P=" + rtp_padding
-                                   + " X=" + rtp_extension
-                                   + " CC=" + rtp_csrc_count
-                                   + " M=" + rtp_marker
-                                   + " PT=" + rtp_payload_type
-                                   + " Seq=" + rtp_sequence_number
-                                   + " Time (MS)=" + rtp_timestamp / 90 // convert from 90kHZ clock to ms
-                                   + " SSRC=" + rtp_ssrc
-                                   + " Size=" + e.Message.Data.Length);
+                //System.Diagnostics.Debug.WriteLine("RTP Data"
+                //                   + " V=" + rtp_version
+                //                   + " P=" + rtp_padding
+                //                   + " X=" + rtp_extension
+                //                   + " CC=" + rtp_csrc_count
+                //                   + " M=" + rtp_marker
+                //                   + " PT=" + rtp_payload_type
+                //                   + " Seq=" + rtp_sequence_number
+                //                   + " Time (MS)=" + rtp_timestamp / 90 // convert from 90kHZ clock to ms
+                //                   + " SSRC=" + rtp_ssrc
+                //                   + " Size=" + e.Message.Data.Length);
 
 
-                // Check the payload type in the RTP packet matches the Payload Type value from the SDP
-                if (data_received.Channel == video_data_channel && rtp_payload_type != video_payload) {
-                    System.Diagnostics.Debug.WriteLine("Ignoring this Video RTP payload");
-                    return; // ignore this data
-                }
+                //// Check the payload type in the RTP packet matches the Payload Type value from the SDP
+                //if (data_received.Channel == video_data_channel && rtp_payload_type != video_payload) {
+                //    //byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
+                //    //System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
+
+                //    // Process the packet asynchronously
+                //    pipeHandler.ProcessRtpPacketAsync(e.Message.Data, e.Message.Data.Length);
+
+                //    System.Diagnostics.Debug.WriteLine("Ignoring this Video RTP payload");
+                //    return; // ignore this data
+                //}
 
                 // Check the payload type in the RTP packet matches the Payload Type value from the SDP
                 else if (data_received.Channel == audio_data_channel && rtp_payload_type != audio_payload) {
-                    System.Diagnostics.Debug.WriteLine("Ignoring this Audio RTP payload");
+                    //System.Diagnostics.Debug.WriteLine("Ignoring this Audio RTP payload");
                     return; // ignore this data
                 } else if (data_received.Channel == video_data_channel
-                           && rtp_payload_type == video_payload
-                           && video_codec.Equals("H264")) {
+                           //&& rtp_payload_type == video_payload
+                           && rtp_payload_type == 2
+                           //&& video_codec.Equals("H264")
+                           ) {
                     // H264 RTP Packet
 
                     // If rtp_marker is '1' then this is the final transmission for this packet.
@@ -445,8 +507,12 @@ namespace SoftSled.Components.RTSP {
                                     int nal_ref_idc = (nal_unit[0] >> 5) & 0x03;
                                     int nal_unit_type = nal_unit[0] & 0x1F;
 
-                                    if (nal_unit_type == 7) sps = nal_unit; // SPS
-                                    if (nal_unit_type == 8) pps = nal_unit; // PPS
+                                    if (nal_unit_type == 7) {
+                                        sps = nal_unit; // SPS
+                                    }
+                                    if (nal_unit_type == 8) {
+                                        pps = nal_unit; // PPS
+                                    }
                                 }
                             }
                             if (sps != null && pps != null) {
@@ -459,11 +525,12 @@ namespace SoftSled.Components.RTSP {
                         }
 
 
+                        nalHandler.ProcessFrameNalUnitsAsync(nal_units).Wait();
 
-                        // we have a frame of NAL Units. Write them to the file
-                        if (Received_NALs != null) {
-                            Received_NALs(nal_units);
-                        }
+                        //// we have a frame of NAL Units. Write them to the file
+                        //if (Received_NALs != null) {
+                        //    //Received_NALs(nal_units);
+                        //}
                     }
                 } else if (data_received.Channel == video_data_channel
                            && rtp_payload_type == video_payload
@@ -666,8 +733,9 @@ namespace SoftSled.Components.RTSP {
                     describe_message.RtspUri = new Uri(url);
                     describe_message.AddHeader("Accept: application/sdp");
                     describe_message.AddHeader("Accept-Language: en-us, *;q=0.1");
-                    describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-                    describe_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+                    //describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                    describe_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
+                    describe_message.AddHeader(UserAgent);
                     if (auth_type != null) {
                         AddAuthorization(describe_message, username, password, auth_type, realm, nonce, url);
                     }
@@ -796,30 +864,34 @@ namespace SoftSled.Components.RTSP {
                                 Rtsp.Sdp.AttributRtpMap rtpmap = attrib as Rtsp.Sdp.AttributRtpMap;
 
                                 // Check if the Codec Used (EncodingName) is one we support
-                                String[] valid_video_codecs = { "H264", "H265", "VND.MS.WM-MPV" };
-                                String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "VND.MS.WM-MPA" /* for aac */}; // Note some are "mpeg4-generic" lower case
+                                String[] valid_video_codecs = { "H264", "H265", "X-WMF-PF" };
+                                //String[] valid_video_codecs = { "H264", "H265", "VND.MS.WM-MPV", "X-WMF-PF" };
+                                String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "X-WMF-PF" /* for aac */}; // Note some are "mpeg4-generic" lower case
+                                //String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "VND.MS.WM-MPA", "X-WMF-PF" /* for aac */}; // Note some are "mpeg4-generic" lower case
 
-                                if (video && Array.IndexOf(valid_video_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
+                                if (video && video_payload == -1 && Array.IndexOf(valid_video_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
                                     // found a valid codec
                                     video_codec = rtpmap.EncodingName.ToUpper();
                                     video_payload = sdp_data.Medias[x].PayloadType;
+                                    video_payload = rtpmap.PayloadNumber;
                                 }
                                 if (audio) {
-                                    if (audio && Array.IndexOf(valid_audio_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
+                                    if (audio && audio_payload == -1 && Array.IndexOf(valid_audio_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
                                         audio_codec = rtpmap.EncodingName.ToUpper();
                                         audio_payload = sdp_data.Medias[x].PayloadType;
+                                        //audio_payload = rtpmap.PayloadNumber;
                                     }
                                 }
                             }
                         }
 
                         // Create H264 RTP Parser
-                        if (video && video_codec.Contains("H264")) {
+                        if (video && (video_codec.Contains("H264") || video_codec.ToUpper().Contains("X-WMF-PF"))) {
                             h264Payload = new Rtsp.H264Payload();
                         }
 
                         // If the rtpmap contains H264 then split the fmtp to get the sprop-parameter-sets which hold the SPS and PPS in base64
-                        if (video && video_codec.Contains("H264") && fmtp != null) {
+                        if (video && (video_codec.Contains("H264") || video_codec.ToUpper().Contains("X-WMF-PF")) && fmtp != null) {
                             var param = Rtsp.Sdp.H264Parameters.Parse(fmtp.FormatParameter);
                             var sps_pps = param.SpropParameterSets;
                             if (sps_pps.Count() >= 2) {
@@ -909,6 +981,7 @@ namespace SoftSled.Components.RTSP {
                             }
                             transport = new RtspTransport() {
                                 LowerTransport = RtspTransport.LowerTransportType.UDP,
+                                Profile = RtspTransport.ProfileType.AVPF,
                                 IsMulticast = false,
                                 ClientPort = new PortCouple(rtp_port, rtcp_port), // a UDP Port for data (video or audio). a UDP Port for RTCP status reports
                             };
@@ -938,8 +1011,9 @@ namespace SoftSled.Components.RTSP {
                         setup_message.AddTransport(transport);
                         setup_message.AddHeader("Accept-Language: en-us, *;q=0.1");
                         setup_message.AddHeader("Buffer-Info.dlna.org: dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0");
-                        setup_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-                        setup_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+                        //setup_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                        setup_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
+                        setup_message.AddHeader(UserAgent);
                         if (auth_type != null) {
                             AddAuthorization(setup_message, username, password, auth_type, realm, nonce, url);
                         }
@@ -1015,8 +1089,9 @@ namespace SoftSled.Components.RTSP {
                     next_setup.Session = session;
                     next_setup.AddHeader("Accept-Language: en-us, *;q=0.1");
                     next_setup.AddHeader("Buffer-Info.dlna.org: dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0");
-                    next_setup.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-                    next_setup.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+                    //next_setup.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                    next_setup.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
+                    next_setup.AddHeader(UserAgent);
                     rtsp_client.SendMessage(next_setup);
 
                     setup_messages.RemoveAt(0);
@@ -1026,8 +1101,9 @@ namespace SoftSled.Components.RTSP {
                     play_message.RtspUri = new Uri(url);
                     play_message.Session = session;
                     play_message.AddHeader("Accept-Language: en-us, *;q=0.1");
-                    play_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-                    play_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+                    //play_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                    play_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
+                    play_message.AddHeader(UserAgent);
                     if (auth_type != null) {
                         AddAuthorization(play_message, username, password, auth_type, realm, nonce, url);
                     }
@@ -1062,8 +1138,9 @@ namespace SoftSled.Components.RTSP {
                 getparam_message.RtspUri = new Uri(url);
                 getparam_message.Session = session;
                 getparam_message.AddHeader("Accept-Language: en-us, *;q=0.1");
-                getparam_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-                getparam_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+                //getparam_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                getparam_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
+                getparam_message.AddHeader(UserAgent);
                 if (auth_type != null) {
                     AddAuthorization(getparam_message, username, password, auth_type, realm, nonce, url);
                 }
@@ -1074,8 +1151,9 @@ namespace SoftSled.Components.RTSP {
                 Rtsp.Messages.RtspRequest options_message = new Rtsp.Messages.RtspRequestOptions();
                 options_message.RtspUri = new Uri(url);
                 options_message.AddHeader("Accept-Language: en-us, *;q=0.1");
-                options_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-                options_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+                //options_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                options_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
+                options_message.AddHeader(UserAgent);
                 if (auth_type != null) {
                     AddAuthorization(options_message, username, password, auth_type, realm, nonce, url);
                 }

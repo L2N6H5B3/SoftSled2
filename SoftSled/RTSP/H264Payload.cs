@@ -57,11 +57,19 @@ namespace Rtsp
                 int nal_header_nri = (rtp_payloads[payload_index][0] >> 5) & 0x03;
                 int nal_header_type = (rtp_payloads[payload_index][0] >> 0) & 0x1F;
 
+
+                //string byteArray = "";
+                //foreach (byte b in rtp_payloads[payload_index]) {
+                //    byteArray += b.ToString("X2") + " ";
+                //}
+
+                //System.Diagnostics.Debug.WriteLine(byteArray);
+
                 // If the Nal Header Type is in the range 1..23 this is a normal NAL (not fragmented)
                 // So write the NAL to the file
                 if (nal_header_type >= 1 && nal_header_type <= 23)
                 {
-                    System.Diagnostics.Debug.WriteLine("Normal NAL");
+                    System.Diagnostics.Debug.WriteLine($"Normal NAL {nal_header_type}");
                     norm++;
                     nal_units.Add(rtp_payloads[payload_index]);
                 }

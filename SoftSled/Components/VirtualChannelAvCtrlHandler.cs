@@ -18,7 +18,7 @@ namespace SoftSled.Components {
         private LibVLC _libVLC;
         private MediaPlayer _mp;
         private AxWMPLib.AxWindowsMediaPlayer wmp;
-        private RTSPClient rtspClient = new RTSPClient();
+        private RTSPClient rtspClient;
 
         private int DMCTServiceHandle;
         private int DSPAServiceHandle;
@@ -200,7 +200,10 @@ namespace SoftSled.Components {
                         DMCTOpenMediaURL = OpenMediaPayloadURL;
                         Debug.WriteLine(DMCTOpenMediaURL);
 
+                        rtspClient = new RTSPClient();
                         rtspClient.Connect(DMCTOpenMediaURL, RTSPClient.RTP_TRANSPORT.UDP, RTSPClient.MEDIA_REQUEST.VIDEO_AND_AUDIO);
+
+                        
 
 
                         //RTSPHandler.StartRtsp(DMCTOpenMediaURL);

@@ -351,9 +351,9 @@ namespace SoftSled {
         }
 
         private void PlayOpening() {
-            string audioFile = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "Resources", "audio", "intro_a.wav");
-            System.Media.SoundPlayer player = new System.Media.SoundPlayer(audioFile);
-            player.Play();
+            //string audioFile = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "Resources", "audio", "intro_a.wav");
+            //System.Media.SoundPlayer player = new System.Media.SoundPlayer(audioFile);
+            //player.Play();
         }
 
         #endregion ############################################################

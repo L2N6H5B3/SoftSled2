@@ -71,6 +71,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="FFmpeg.AutoGen, Version=7.1.1.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\FFmpeg.AutoGen.7.1.1\lib\netstandard2.0\FFmpeg.AutoGen.dll</HintPath>
+    </Reference>
     <Reference Include="LibVLCSharp, Version=3.6.0.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\LibVLCSharp.3.6.0\lib\net40\LibVLCSharp.dll</HintPath>
     </Reference>
@@ -106,6 +109,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Components\Logger.cs" />
+    <Compile Include="Components\M2TS.cs" />
     <Compile Include="Components\NamedPipeClient.cs" />
     <Compile Include="Components\NamedPipeServer.cs" />
     <Compile Include="Components\PipeStreamWrapperBase.cs" />
@@ -172,7 +176,6 @@
     <Compile Include="RTSP\Messages\RTSPRequestTeardown.cs" />
     <Compile Include="RTSP\Messages\RTSPResponse.cs" />
     <Compile Include="RTSP\Messages\RTSPTransport.cs" />
-    <Compile Include="RTSP\MP2TransportPayload.cs" />
     <Compile Include="RTSP\RTSPListener.cs" />
     <Compile Include="RTSP\RTSPMessageEventArgs.cs" />
     <Compile Include="RTSP\RTSPTCPTransport.cs" />
@@ -236,6 +239,7 @@
     <None Include="Certificates\Xbox360.cer">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
+    <Compile Include="Components\NalUnitPipeHandler.cs" />
     <None Include="KeyExchange\2\devicecert.cer" />
     <None Include="KeyExchange\2\hostcert.cer" />
     <None Include="KeyExchange\Wireshark Captures\Linksys 2200 Setup.cap" />
