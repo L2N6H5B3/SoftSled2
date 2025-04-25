@@ -238,7 +238,7 @@ namespace SoftSled.Components {
                     // ShellIsActive Request
                     else if (dispatchFunctionHandle == 2) {
 
-                        m_logger.LogDebug("MCXSESS: ShellIsActive");
+                        //m_logger.LogDebug("MCXSESS: ShellIsActive");
 
                         // Create new StatusChangedArgs
                         StatusChangedArgs args = new StatusChangedArgs {
@@ -264,7 +264,7 @@ namespace SoftSled.Components {
                     // GetQWaveSinkInfo Request
                     else if (dispatchFunctionHandle == 3) {
 
-                        m_logger.LogDebug("MCXSESS: GetQWaveSinkInfo");
+                        //m_logger.LogDebug("MCXSESS: GetQWaveSinkInfo");
 
                         // Get GetQWaveSinkInfo Data
                         int GetQWaveSinkInfoPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
@@ -289,10 +289,17 @@ namespace SoftSled.Components {
                         // Get Unknown Data
                         int UnknownPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
                         int UnknownChildCount = DataUtilities.Get2ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4);
-
+                        byte[] UnknownPayloadData;
                         if (UnknownPayloadSize > 0) {
-                            byte[] UnknownPayloadData = DataUtilities.GetByteSubArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2, UnknownPayloadSize);
+                            UnknownPayloadData = DataUtilities.GetByteSubArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2, UnknownPayloadSize);
                             //m_logger.LogDebug("MCXSESS: " + BitConverter.ToString(UnknownPayloadData));
+                            System.Diagnostics.Debug.WriteLine("MCXSESS BYTES: " + BitConverter.ToString(UnknownPayloadData));
+                            //System.Diagnostics.Debug.WriteLine("MCXSESS ASCII: " + Encoding.ASCII.GetString(UnknownPayloadData));
+                            //System.Diagnostics.Debug.WriteLine("MCXSESS    UN: " + Encoding.Unicode.GetString(UnknownPayloadData));
+                            //System.Diagnostics.Debug.WriteLine("MCXSESS  UTF32: " + Encoding.UTF32.GetString(UnknownPayloadData));
+                            //System.Diagnostics.Debug.WriteLine("MCXSESS  UTF8: " + Encoding.UTF8.GetString(UnknownPayloadData));
+                            //System.Diagnostics.Debug.WriteLine("MCXSESS  UTF7: " + Encoding.UTF7.GetString(UnknownPayloadData));
+                            //System.Diagnostics.Debug.WriteLine("MCXSESS BE UN: " + Encoding.BigEndianUnicode.GetString(UnknownPayloadData));
                         }
 
                         // Initialise Generic Response

@@ -1,78 +1,62 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+using System.Text;
 
 namespace SoftSled.Components {
-    class VirtualChannelDevCapsHandler {
+    class VirtualChannelMceCapsSender {
 
         private Logger m_logger;
 
         public event EventHandler<VirtualChannelSendArgs> VirtualChannelSend;
 
         private int DSPAServiceHandle;
-        private string channelName = "devcaps";
-        private List<string> DevCapsEnabledCapabilities = new List<string> {
-            //"2DA", // 2DA - Is 2D animation allowed?
-            //"ANI", // ANI - Is intensive animation allowed?
-            //"APP", // APP - Is tray applet allowed?
-            //"ARA", // ARA - Is auto restart allowed?
-            "AUD", // AUD - Is audio allowed?
-            "AUR", // AUR - Is audio Non WMP?
-            //"BIG", // BIG - Is remote UI renderer big-endian?
-            //"BLB", // BLB - Is black letters box needed?
-            //"CCC", // CCC - Is CC rendered by the client?
-            //"CDA", // CDA - Is CD playback allowed?
-            //"CLO", // CLO - Is the close button shown?
-            //"CPY", // CPY - Is CD copying allowed?
-            //"CRC", // CRC - Is CD burning allowed?
-            //"DES", // DES - Is MCE a Windows shell?
-            //"DOC", // DOC - Is my Documents populated?
-            //"DRC", // DRC - Is DVD burning allowed?
-            //"DVD", // DVD - Is DVD playback allowed?
-            "EXT", // EXT - Are Extender Settings allowed?
-            //"FPD", // FPD - Is FPD allowed?
-            "GDI", // GDI - Is GDI renderer used?
-            "H02", // H02 - Is 2 feet help allowed? 
-            "H10", // H10 - Is 10 feet help allowed? 
-            "HDN", // HDN - Is HD content allowed by the network?
-            "HDV", // HDV - Is HD content allowed?
-            "HTM", // HTM - Is HTML supported?
-            //"MAR", // MAR - Are over-scan margins needed?
-            "MUT", // MUT - Is mute ui allowed?
-            //"NLZ", // NLZ - Is nonlinear zoom supported?
-            //"ONS", // ONS - Is online spotlight allowed?
-            "PHO", // PHO - Are advanced photo features allowed?
-            "POP", // POP - Are Pop ups allowed?
-            "REM", // REM - Is input treated as if from a remote?
-            //"RSZ", // RSZ - Is raw stretched zoom supported?
-            //"RUI", // RUI - Is remote UI rendering supported?
-            "SCR", // SCR - Is a native screensaver required?
-            //"SDM", // SDM - Is a screen data mode workaround needed? (Not Supported on Win7+)
-            "SDN", // SDN - Is SD content allowed by the network?
-            "SOU", // SOU - Is UI sound supported?
-            //"SUP", // SUP - Is RDP super blt allowed?
-            //"SYN", // SYN - Is transfer to a device allowed?
-            "TBA", // TBA - Is a Toolbar allowed?
-            //"TVS", // TVS - Is a TV skin used?
-			"VID", // VID - Is video allowed?
-            //"VIZ", // VIZ - Is WMP visualisation allowed?
-            "VOL", // VOL - Is volume UI allowed?
-            "W32", // W32 - Is Win32 content allowed?
-            "WE2", // WE2 - Is 2 feet web content allowed? 
-            "WEB", // WEB - Is 10 feet web content allowed? 
-            "WID", // WID - Is wide screen enabled?
-            //"WIN", // WIN - Is window mode allowed?
-            //"ZOM" // ZOM - Is video zoom mode allowed?
-        };
+        private string channelName = "splash";
 
-        public VirtualChannelDevCapsHandler(Logger m_logger) {
+        private int StubRequestHandleIter = 0;
+        private int StubServiceHandleIter = 0;
+
+        public VirtualChannelMceCapsSender(Logger m_logger) {
             this.m_logger = m_logger;
         }
 
-        public void ProcessData(byte[] incomingBuff) {
+        public void ConfigureDSPA() {
+            byte[] createServiceClassID = DataUtilities.GuidToArray(new Guid("EF22F459-6B7E-48ba-8838-E2BEF821DF3C"));
+            byte[] createServiceServiceID = DataUtilities.GuidToArray(new Guid("1EEEDA73-2B68-4d6f-8041-52336CF46072"));
+            byte[] createServiceRequest = Components.DSLRCommunication.CreateServiceRequest(StubRequestHandleIter, createServiceClassID, createServiceServiceID, 0);
+
+            StubRequestHandleIter++;
+
+            // Encapsulate the Request (Doesn't seem to work without this?)
+            byte[] encapsulatedRequest = Components.DSLRCommunication.Encapsulate(createServiceRequest);
+
+            // Send the GetStringProperty Response
+            VirtualChannelSend(this, new VirtualChannelSendArgs(channelName, encapsulatedRequest));
+
+            //switch (createServiceClassID.ToString().ToLower()) {
+            //    // DSPA DevCaps ClassID
+            //    case "ef22f459-6b7e-48ba-8838-e2bef821df3c":
+            //        DSPAServiceHandle = createServiceServiceHandle;
+            //        m_logger.LogDebug($"{channelName.ToUpper()}: CreateService DSPA ({DSPAServiceHandle})");
+            //        break;
+            //    default:
+            //        m_logger.LogDebug($"{channelName.ToUpper()}: CreateService ClassID {createServiceClassID} with ServiceID {createServiceServiceID} not available");
+            //        break;
+            //}
+
+            //// Initialise CreateService Response
+            //byte[] response = Components.DSLRCommunication.CreateServiceResponse(
+            //    DataUtilities.GetByteSubArray(incomingBuff, 10, 4)
+            //);
+            //// Encapsulate the Response (Doesn't seem to work without this?)
+            //byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
+
+            //// Send the CreateService Response
+            //VirtualChannelSend(this, new VirtualChannelSendArgs(channelName, encapsulatedResponse));
+        }
+
+        public void ProcessData(string data) {
 
             // Convert the incoming data to bytes
-            //byte[] incomingBuff = Encoding.Unicode.GetBytes(data);
+            byte[] incomingBuff = Encoding.Unicode.GetBytes(data);
 
             // Get DSLR Dispatcher Data
             int dispatchPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 0);
@@ -188,42 +172,33 @@ namespace SoftSled.Components {
 
                         switch (GetStringPropertyPayloadPropertyName.Replace("\0", "")) {
                             // Property Bag Service
-                            case "NAM":
+                            case "NA":
                                 // Initialise GetStringProperty Response
                                 response = Components.DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
                                     "McxClient"
                                 );
                                 break;
-                            case "PRT":
-                                m_logger.LogDebug($"{channelName.ToUpper()}: PRT String");
+                            case "PR":
                                 // Initialise GetStringProperty Response
                                 response = Components.DSLRCommunication.GetStringPropertyResponse(
-                                   DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
-                                   @"rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3"
-                               );
-                                //response = Components.DSLRCommunication.GetStringPropertyNullResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
+                                    DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
+                                    "rtsp-rtp-udp:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL;DLNA.ORG_PN=WMAPRO;MICROSOFT.COM_PN=WMALSL" +
+                                    "rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3" +
+                                    "http-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM" +
+                                    "rtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2" +
+                                    "rtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;MICROSOFT.COM_PN=WMVHIGH_LSL;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED" +
+                                    "http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL"
+                                );
                                 break;
-                                //// Initialise GetStringProperty Response
-                                //response = Components.DSLRCommunication.GetStringPropertyResponse(
-                                //    DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
-                                //    @"rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3
-                                //http-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM
-                                //rtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_AVI_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3;MICROSOFT.COM_PN=MPEG4_P2_AVI_ASP_L5_AC3
-                                //rtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;MICROSOFT.COM_PN=WMVHIGH_LSL;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED
-                                //http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL;DLNA.ORG_PN=MPEG4_P2_TS_ASP_MPEG1_L3;DLNA.ORG_PN=MPEG4_P2_TS_ASP_AC3;DLNA.ORG_PN=MPEG4_P2_TS_ASP_AC3;DLNA.ORG_PN=AVC_MP4_MP_SD_MPEG1_L3;DLNA.ORG_PN=AVC_TS_MP_HD_MPEG1_L3;DLNA.ORG_PN=AVC_MP4_MP_HD_AC3;DLNA.ORG_PN=AVC_MP4_MP_SD_AC3;DLNA.ORG_PN=AVC_TS_MP_HD_AC3"
-                                //);
-                                ////response = Components.DSLRCommunication.GetStringPropertyNullResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
-                                //break;
-                            case "XTY":
-                                m_logger.LogDebug($"{channelName.ToUpper()}: XTY String");
+                            case "XT":
                                 // Initialise GetStringProperty Response
                                 response = Components.DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
                                     "McxClient"
                                 );
                                 break;
-                            case "PBV":
+                            case "PB":
                                 // Initialise GetStringProperty Response
                                 response = Components.DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
@@ -251,18 +226,15 @@ namespace SoftSled.Components {
                         int GetDWORDPropertyPayloadLength = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
                         string GetDWORDPropertyPayloadPropertyName = DataUtilities.GetByteArrayString(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4, GetDWORDPropertyPayloadLength);
 
+                        m_logger.LogDebug($"{channelName.ToUpper()}: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName.Replace("\0", "")})");
 
                         byte[] response;
-                        // Get the DevCaps Entry
-                        var devCapsEntry = DevCapsEnabledCapabilities.FirstOrDefault(xx => xx.StartsWith(GetDWORDPropertyPayloadPropertyName.Replace("\0", "")));
-                        if (devCapsEntry != null) {
+
+                        //if (DevCapsDisabledCapabilities.Contains(GetDWORDPropertyPayloadPropertyName.Replace("\0", ""))) {
+                            //response = Components.DSLRCommunication.DeviceCapabilityFalseGetDWORDPropertyResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
+                        //} else {
                             response = Components.DSLRCommunication.DeviceCapabilityTrueGetDWORDPropertyResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
-                            //m_logger.LogDebug($"{channelName.ToUpper()}: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName.Replace("\0", "")}) True");
-                            
-                        } else {
-                            response = Components.DSLRCommunication.DeviceCapabilityFalseGetDWORDPropertyResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
-                            //m_logger.LogDebug($"{channelName.ToUpper()}: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName.Replace("\0", "")}) False");
-                        }
+                        //}
 
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = Components.DSLRCommunication.Encapsulate(response);
@@ -286,11 +258,7 @@ namespace SoftSled.Components {
 
             } else if (dispatchCallingConvention == 2) {
 
-                m_logger.LogDebug($"{channelName.ToUpper()}: Response {dispatchRequestHandle} not implemented");
-
-            } else {
-
-                m_logger.LogDebug($"{channelName.ToUpper()}: Unknown CallingConvention {dispatchCallingConvention} not implemented");
+                 m_logger.LogDebug($"{channelName.ToUpper()}: Response {dispatchRequestHandle} not implemented");
 
             }
         }

@@ -124,7 +124,8 @@ namespace SoftSled {
             #region Create Root Device ########################################
 
             device = UPnPDevice.CreateRootDevice(1800, 1.0, "\\XD");
-            device.UniqueDeviceName = "68c4b624-e1a0-42c5-94b8-4f5fa6fec622";
+            device.UniqueDeviceName = "68c4b624-e1a0-42c5-94b8-4f5fa6fec622"; // W7P01
+            //device.UniqueDeviceName = "b8501007-688e-4939-b4a2-fd7c649cdaac";
             //device.UniqueDeviceName = "20000000-0000-0000-0200-0022483E33F6";
             //device.UniqueDeviceName = "1B19160E-0B19-433B-9315-40AD98C6F5E0";
             device.FriendlyName = "SoftSled Media Center Extender";

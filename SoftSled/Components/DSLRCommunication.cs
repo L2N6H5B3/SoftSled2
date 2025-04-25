@@ -980,6 +980,58 @@ namespace SoftSled.Components {
             return response.ToArray();
         }
 
+        public static byte[] OnMediaEventRequest(int dispatchRequestHandleInt, int dispatchServiceHandleInt, byte[] errorCode, byte[] mediaState) {
+
+            byte[] dispatchRequestHandle = GetInverse4ByteArrayFromInt(dispatchRequestHandleInt);
+            byte[] dispatchServiceHandle = GetInverse4ByteArrayFromInt(dispatchServiceHandleInt);
+            byte[] dispatchFunctionHandle = new byte[] { 0, 0, 0, 0 };
+
+            // Get Dispatch Byte Arrays
+            byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
+                4 +
+                dispatchRequestHandle.Length +
+                dispatchServiceHandle.Length +
+                dispatchFunctionHandle.Length
+            );
+            byte[] dispatchChildCount = new byte[] { 0, 1 };
+            byte[] dispatchCallingConvention = new byte[] { 0, 0, 0, 1 };
+
+            // Get RegisterMediaEventCallbackCreateService Byte Arrays
+            byte[] OnMediaEventChildCount = new byte[] { 0, 0 };
+            byte[] OnMediaEventPropertyPayloadSize = GetInverse4ByteArrayFromInt(
+                errorCode.Length +
+                mediaState.Length
+            );
+
+            // Create Base Byte Array
+            byte[] baseArray = new byte[0];
+            // Formulate full response
+            IEnumerable<byte> response = baseArray
+                // Add Dispatch PayloadSize
+                .Concat(dispatchPayloadSize)
+                // Add Dispatch ChildCount
+                .Concat(dispatchChildCount)
+                // Add Dispatch CallingConvention 
+                .Concat(dispatchCallingConvention)
+                // Add Dispatch RequestHandle
+                .Concat(dispatchRequestHandle)
+                // Add Dispatch ServiceHandle
+                .Concat(dispatchServiceHandle)
+                // Add Dispatch FunctionHandle
+                .Concat(dispatchFunctionHandle)
+                // Add OnMediaEvent PayloadSize
+                .Concat(OnMediaEventPropertyPayloadSize)
+                // Add OnMediaEvent ChildCount
+                .Concat(OnMediaEventChildCount)
+                // Add OnMediaEvent Payload ErrorCode
+                .Concat(errorCode)
+                // Add OnMediaEvent Payload MediaState
+                .Concat(mediaState);
+
+            // Return the created byte array
+            return response.ToArray();
+        }
+
         #endregion ############################################################
 
 
@@ -998,7 +1050,7 @@ namespace SoftSled.Components {
             // Get GetStringProperty Byte Arrays
             byte[] GetStringPropertyChildCount = new byte[] { 0, 0 };
             byte[] GetStringPropertyPayloadS_OK = new byte[] { 0, 0, 0, 0 };
-            byte[] GetStringPropertyPayloadPropertyValue = Encoding.UTF8.GetBytes(propertyValueString+'\0');
+            byte[] GetStringPropertyPayloadPropertyValue = Encoding.UTF8.GetBytes(propertyValueString + '\0');
             byte[] GetStringPropertyPayloadLength = GetInverse4ByteArrayFromInt(
                 GetStringPropertyPayloadPropertyValue.Length
             );
@@ -1260,7 +1312,7 @@ namespace SoftSled.Components {
 
         #region DRMRI Functions ###############################################
 
-        public static byte[] RegisterTransmitterServiceResponse(byte[] dispatchRequestHandle) {
+        public static byte[] RegisterTransmitterServiceResponse(byte[] dispatchRequestHandle, bool success) {
 
             // Get Dispatch Byte Arrays
             byte[] dispatchPayloadSize = GetInverse4ByteArrayFromInt(
@@ -1280,21 +1332,26 @@ namespace SoftSled.Components {
             byte[] baseArray = new byte[0];
             // Formulate full response
             IEnumerable<byte> response = baseArray
-                // Add Dispatch PayloadSize
-                .Concat(dispatchPayloadSize)
-                // Add Dispatch ChildCount
-                .Concat(dispatchChildCount)
-                // Add Dispatch CallingConvention 
-                .Concat(dispatchCallingConvention)
-                // Add Dispatch RequestHandle
-                .Concat(dispatchRequestHandle)
-                // Add RegisterTransmitterService PayloadSize
-                .Concat(RegisterTransmitterServicePayloadSize)
-                // Add RegisterTransmitterService ChildCount
-                .Concat(RegisterTransmitterServiceChildCount)
+                    // Add Dispatch PayloadSize
+                    .Concat(dispatchPayloadSize)
+                    // Add Dispatch ChildCount
+                    .Concat(dispatchChildCount)
+                    // Add Dispatch CallingConvention 
+                    .Concat(dispatchCallingConvention)
+                    // Add Dispatch RequestHandle
+                    .Concat(dispatchRequestHandle)
+                    // Add RegisterTransmitterService PayloadSize
+                    .Concat(RegisterTransmitterServicePayloadSize)
+                    // Add RegisterTransmitterService ChildCount
+                    .Concat(RegisterTransmitterServiceChildCount);
+                    ;
+            if (success) {
                 // Add RegisterTransmitterService Payload
-                .Concat(RegisterTransmitterServicePayloadDSLR_E_FAIL);
-
+                response = response.Concat(RegisterTransmitterServicePayloadS_OK);
+            } else {
+                // Add RegisterTransmitterService Payload
+                response = response.Concat(RegisterTransmitterServicePayloadDSLR_E_FAIL);
+            }
             // Return the created byte array
             return response.ToArray();
         }

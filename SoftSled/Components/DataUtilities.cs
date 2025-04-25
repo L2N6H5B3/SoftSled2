@@ -77,6 +77,16 @@ namespace SoftSled.Components {
             return result;
         }
 
+        public static byte[] GetInt2Byte(int integer) {
+            byte[] result = BitConverter.GetBytes(integer);
+            result = GetByteSubArray(result, 0, 2);
+
+            if (BitConverter.IsLittleEndian) {
+                Array.Reverse(result);
+            }
+            return result;
+        }
+
         public static Guid GuidFromArray(byte[] byteArray, int startPosition) {
 
             int byteCount = 16;
@@ -121,24 +131,29 @@ namespace SoftSled.Components {
 
         public static byte[] GuidToArray(Guid guid) {
 
-            byte[] byteArray = Encoding.Unicode.GetBytes(guid.ToString());
+            byte[] byteArray = guid.ToByteArray();
 
-            byte[] data1 = new byte[4];
-            byte[] data2 = new byte[2];
-            byte[] data3 = new byte[2];
-            byte[] data4 = new byte[8];
+            //byte[] data1 = new byte[4];
+            //byte[] data2 = new byte[2];
+            //byte[] data3 = new byte[2];
+            //byte[] data4 = new byte[8];
 
-            for (int i = 0; i < 16; i++) {
-                if (i < 4) {
-                    data1[i] = byteArray[i];
-                } else if (i < 6) {
-                    data2[i - 4] = byteArray[i];
-                } else if (i < 8) {
-                    data3[i - 6] = byteArray[i];
-                } else {
-                    data4[i - 8] = byteArray[i];
-                }
-            }
+            //for (int i = 0; i < 16; i++) {
+            //    if (i < 4) {
+            //        data1[i] = byteArray[i];
+            //    } else if (i < 6) {
+            //        data2[i - 4] = byteArray[i];
+            //    } else if (i < 8) {
+            //        data3[i - 6] = byteArray[i];
+            //    } else {
+            //        data4[i - 8] = byteArray[i];
+            //    }
+            //}
+
+            byte[] data1 = GetByteSubArray(byteArray, 0, 4);
+            byte[] data2 = GetByteSubArray(byteArray, 4, 2);
+            byte[] data3 = GetByteSubArray(byteArray, 6, 2);
+            byte[] data4 = GetByteSubArray(byteArray, 8, 8);
 
             if (BitConverter.IsLittleEndian) {
                 Array.Reverse(data1);
@@ -156,9 +171,9 @@ namespace SoftSled.Components {
                 .Concat(data3)
                 // Add Data 4
                 .Concat(data4);
-
+            byte[] resultArray = result.ToArray();
             // Return the created Byte Array
-            return result.ToArray();
+            return resultArray;
         }
     }
 }

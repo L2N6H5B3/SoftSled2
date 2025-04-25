@@ -35,7 +35,7 @@ namespace SoftSled.Components
 
         protected string GetPrefix()
         {
-            return DateTime.Now.ToShortDateString() + " " + DateTime.Now.ToShortTimeString() + " :";
+            return DateTime.Now.ToShortDateString() + " " + DateTime.Now.ToString("HH:mm:ss:fff") + " :";
         }
 
 

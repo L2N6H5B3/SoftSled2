@@ -17,10 +17,9 @@ namespace SoftSled {
         private bool isConnecting = false;
         private bool rdpInitialised = false;
 
-        private bool useExternalVCManager = true;
-
         private RDPVCInterface rdpVCInterface;
 
+        private VirtualChannelMceCapsSender MceCapsHandler;
         private VirtualChannelAvCtrlHandler AvCtrlHandler;
         private VirtualChannelDevCapsHandler DevCapsHandler;
         private VirtualChannelMcxSessHandler McxSessHandler;
@@ -44,24 +43,35 @@ namespace SoftSled {
         private void FrmMain_Load(object sender, EventArgs e) {
             InitialiseLogger();
 
-            if (useExternalVCManager) {
-                rdpVCInterface = new RDPVCInterface(m_logger);
-                rdpVCInterface.DataReceived += RdpVCInterface_DataReceived;
-            }
+            // Create RDPVCInterface to handle Virtual Channel Communications
+            rdpVCInterface = new RDPVCInterface(m_logger);
+            rdpVCInterface.DataReceived += RdpVCInterface_DataReceived;
 
             // Configure Buttons
             btnExtenderDisconnect.Enabled = false;
 
             // Create VirtualChannel Handlers
+            MceCapsHandler = new VirtualChannelMceCapsSender(m_logger);
             McxSessHandler = new VirtualChannelMcxSessHandler(m_logger);
             DevCapsHandler = new VirtualChannelDevCapsHandler(m_logger);
             AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger, _libVLC, _mp, axWindowsMediaPlayer1);
+            MceCapsHandler.VirtualChannelSend += On_VirtualChannelSend;
             McxSessHandler.VirtualChannelSend += On_VirtualChannelSend;
             DevCapsHandler.VirtualChannelSend += On_VirtualChannelSend;
             AvCtrlHandler.VirtualChannelSend += On_VirtualChannelSend;
 
             // Create VirtualChannel Handlers EventHandlers
             McxSessHandler.StatusChanged += McxSessHandler_StatusChanged;
+
+
+            // TESTING Media Player
+
+            //axWindowsMediaPlayer1.EndOfStream += AxWindowsMediaPlayer1_EndOfStream;
+            //axWindowsMediaPlayer1.MediaError += AxWindowsMediaPlayer1_MediaError;
+            //axWindowsMediaPlayer1.Disconnect += AxWindowsMediaPlayer1_Disconnect;
+            //axWindowsMediaPlayer1.PlayStateChange += AxWindowsMediaPlayer1_PlayStateChange;
+            //axWindowsMediaPlayer1.Buffering += AxWindowsMediaPlayer1_Buffering;
+
 
             m_logger.LogInfo("Open SoftSled (http://github.com/l2n6h5b3/SoftSled2)");
 
@@ -75,12 +85,36 @@ namespace SoftSled {
             }
         }
 
-        private void On_VirtualChannelSend(object sender, VirtualChannelSendArgs e) {
-            if (useExternalVCManager) {
-                rdpVCInterface.SendOnVirtualChannel(e.channelName, e.data);
-            } else {
-                rdpClient.SendOnVirtualChannel(e.channelName, Encoding.Unicode.GetString(e.data));
+        private void AxWindowsMediaPlayer1_Buffering(object sender, AxWMPLib._WMPOCXEvents_BufferingEvent e) {
+            if (!e.start) {
+                AvCtrlHandler.OnMediaEvent(MediaEvent.BUFFERING_STOP);
             }
+        }
+
+        private void AxWindowsMediaPlayer1_PlayStateChange(object sender, AxWMPLib._WMPOCXEvents_PlayStateChangeEvent e) {
+            if (e.newState == 8) {
+                AvCtrlHandler.OnMediaEvent(MediaEvent.END_OF_MEDIA);
+            }
+        }
+
+        private void AxWindowsMediaPlayer1_ErrorEvent(object sender, EventArgs e) {
+            AvCtrlHandler.OnMediaEvent(MediaEvent.DRM_LICENSE_ERROR);
+        }
+
+        private void AxWindowsMediaPlayer1_Disconnect(object sender, AxWMPLib._WMPOCXEvents_DisconnectEvent e) {
+            AvCtrlHandler.OnMediaEvent(MediaEvent.RTSP_DISCONNECT);
+        }
+
+        private void AxWindowsMediaPlayer1_MediaError(object sender, AxWMPLib._WMPOCXEvents_MediaErrorEvent e) {
+            AvCtrlHandler.OnMediaEvent(MediaEvent.DRM_LICENSE_ERROR);
+        }
+
+        private void AxWindowsMediaPlayer1_EndOfStream(object sender, AxWMPLib._WMPOCXEvents_EndOfStreamEvent e) {
+            AvCtrlHandler.OnMediaEvent(MediaEvent.END_OF_MEDIA);
+        }
+
+        private void On_VirtualChannelSend(object sender, VirtualChannelSendArgs e) {
+            rdpVCInterface.SendOnVirtualChannel(e.channelName, e.data);
         }
 
         private void RdpVCInterface_DataReceived(object sender, DataReceived e) {
@@ -103,41 +137,24 @@ namespace SoftSled {
         }
 
         private void McxSessHandler_StatusChanged(object sender, StatusChangedArgs e) {
-            if (!useExternalVCManager) {
-                // Set Status
-                SetStatus(e.statusText);
 
-                // If the Shell is open
-                if (e.shellOpen) {
-                    panOverlay.Visible = false;
-                    rdpClient.Visible = true;
-                    // Play Opening Music
-                    PlayOpening();
-                } else if (e.shellOpen && rdpClient.Visible == true) {
-                    panOverlay.Visible = false;
-                    rdpClient.Visible = true;
-                } else {
-                    panOverlay.Visible = true;
-                    rdpClient.Visible = false;
-                }
+            // Set Status
+            SetStatus(e.statusText);
+
+            // If the Shell is open
+            if (e.shellOpen) {
+                SetPanOverlayVisible(false);
+                SetRdpClientVisible(true);
+                // Play Opening Music
+                PlayOpening();
+            } else if (e.shellOpen && rdpClient.Visible == true) {
+                SetPanOverlayVisible(false);
+                SetRdpClientVisible(true);
             } else {
-                // Set Status
-                SetStatus(e.statusText);
-
-                // If the Shell is open
-                if (e.shellOpen) {
-                    SetPanOverlayVisible(false);
-                    SetRdpClientVisible(true);
-                    // Play Opening Music
-                    PlayOpening();
-                } else if (e.shellOpen && rdpClient.Visible == true) {
-                    SetPanOverlayVisible(false);
-                    SetRdpClientVisible(true);
-                } else {
-                    SetPanOverlayVisible(true);
-                    SetRdpClientVisible(false);
-                }
+                SetPanOverlayVisible(true);
+                SetRdpClientVisible(false);
             }
+            
         }
 
         private void btnExtenderConnect_Click(object sender, EventArgs e) {
@@ -183,6 +200,7 @@ namespace SoftSled {
             rdpClient.AdvancedSettings2.ClearTextPassword = currConfig.RdpLoginPassword;
             // Set RDP Color Depth
             rdpClient.ColorDepth = 32;
+            rdpClient.AdvancedSettings7.AudioRedirectionMode = 0;
             // Connect RDP
             rdpClient.Connect();
 
@@ -228,13 +246,15 @@ namespace SoftSled {
             // Add EventHandlers
             rdpClient.OnConnected += new EventHandler(RdpClient_OnConnected);
             rdpClient.OnDisconnected += new AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEventHandler(RdpClient_OnDisconnected);
-            //rdpClient.OnChannelReceivedData += new AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEventHandler(RdpClient_OnChannelReceivedData);
 
             // Set Port
             rdpClient.AdvancedSettings3.RDPPort = 3390;
+            //rdpClient.AdvancedSettings3.RDPPort = 3389;
             rdpClient.AdvancedSettings7.PluginDlls = "RDPVCManager.dll";
             rdpClient.AdvancedSettings7.RedirectClipboard = false;
             rdpClient.AdvancedSettings7.RedirectPrinters = false;
+            //rdpClient.ColorDepth = 16;
+
 
             // McxSess - Used by McrMgr for Extender Session Control
             // MCECaps - not known where used
@@ -246,39 +266,13 @@ namespace SoftSled {
             // NOTICE, if you want ehshell.exe to start up in normal Remote Desktop mode, remove the devcaps channel definition bellow. 
             //rdpClient.CreateVirtualChannels("McxSess,MCECaps,avctrl,VCHD");
             //rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD");
-
-            if (!useExternalVCManager) {
-                // Create Virtual Channels
-                rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD,splash");
-                //rdpClient.CreateVirtualChannels("McxSess");
-            }
+            //rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD,splash");
 
             // Set RDP Initialised
             rdpInitialised = true;
         }
 
-        //void RdpClient_OnChannelReceivedData(object sender, AxMSTSCLib.IMsTscAxEvents_OnChannelReceivedDataEvent e) {
-        //    try {
-        //        //var res = rdpClient.GetVirtualChannelOptions("McxSess");
-        //        if (e.chanName == "avctrl") {
-        //            AvCtrlHandler.ProcessData(Encoding.Unicode.GetBytes(e.data));
-        //        } else if (e.chanName == "devcaps") {
-        //            DevCapsHandler.ProcessData(Encoding.Unicode.GetBytes(e.data));
-        //        } else if (e.chanName == "McxSess") {
-        //            McxSessHandler.ProcessData(Encoding.Unicode.GetBytes(e.data));
-        //        } else {
-        //            MessageBox.Show("unhandled data on channel " + e.chanName);
-        //            m_logger.LogDebug($"{e.chanName} Bytes: " + BitConverter.ToString(Encoding.Unicode.GetBytes(e.data)));
-        //        }
-
-        //    } catch (Exception ee) {
-        //        MessageBox.Show(ee.Message + " " + ee.StackTrace);
-        //    }
-        //}
-
-
         void RdpClient_OnDisconnected(object sender, AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEvent e) {
-
             btnDoExtenderConnect.Enabled = true;
             btnExtenderDisconnect.Enabled = false;
 
@@ -299,64 +293,9 @@ namespace SoftSled {
 
             btnDoExtenderConnect.Enabled = false;
             btnExtenderDisconnect.Enabled = true;
-
         }
 
         #endregion ############################################################
-
-        
-        //#region IObjectSafety Implementation
-
-        //// This method is called by the ActiveX control to ask what safety options the host supports
-        //// and which are currently enabled for the interface identified by riid.
-        //public int GetInterfaceSafetyOptions(ref Guid riid, out int pdwSupportedOptions, out int pdwEnabledOptions) {
-        //    // We are telling the control that we support safety for untrusted callers (scripting)
-        //    // and untrusted data (initialization).
-        //    pdwSupportedOptions = ObjectSafetyConstants.INTERFACESAFE_FOR_UNTRUSTED_CALLER |
-        //                          ObjectSafetyConstants.INTERFACESAFE_FOR_UNTRUSTED_DATA;
-
-        //    // *** CRITICAL SECURITY DECISION ***
-        //    // Here we enable the safety options. By enabling these, you are asserting that
-        //    // your application handles the potential risks associated with scripting the control
-        //    // or initializing it with data from potentially untrusted sources.
-        //    // Enabling both provides the highest level of "trust" to the control, potentially
-        //    // suppressing more warnings, but also carries the highest risk if not handled carefully.
-        //    // Start cautiously if unsure, perhaps enabling only one.
-        //    pdwEnabledOptions = ObjectSafetyConstants.INTERFACESAFE_FOR_UNTRUSTED_CALLER |
-        //                        ObjectSafetyConstants.INTERFACESAFE_FOR_UNTRUSTED_DATA;
-
-        //    // You could optionally check the 'riid' parameter here if you wanted to provide
-        //    // different safety options for different interfaces the control might query.
-        //    // For many controls, providing the same options for all queried interfaces is sufficient.
-
-        //    return ObjectSafetyConstants.S_OK; // Indicate success
-        //}
-
-        //// This method is called by the ActiveX control to *request* that the host enable
-        //// certain safety options specified in dwEnabledOptions, based on the mask dwOptionSetMask.
-        //public int SetInterfaceSafetyOptions(ref Guid riid, int dwOptionSetMask, int dwEnabledOptions) {
-        //    // A simple implementation often just returns S_OK, effectively allowing the control
-        //    // to set options as long as they were declared as supported in GetInterfaceSafetyOptions.
-        //    // You could add logic here to selectively deny certain requests if needed.
-
-        //    // Optional: Check if the requested options are within the supported set.
-        //    int currentSupported, currentEnabled;
-        //    GetInterfaceSafetyOptions(ref riid, out currentSupported, out currentEnabled); // Get our supported options
-
-        //    if (((dwEnabledOptions & dwOptionSetMask) | ~dwOptionSetMask) == currentSupported) {
-        //        // Requested options are valid within the mask and supported options
-        //        return ObjectSafetyConstants.S_OK; // Indicate success
-        //    } else {
-        //        // Requested options not supported
-        //        // return ObjectSafetyConstants.E_FAIL; // Indicate failure (optional)
-        //        // Often, just returning S_OK is enough if GetInterfaceSafetyOptions sets the desired state.
-        //        return ObjectSafetyConstants.S_OK;
-        //    }
-        //    // Simpler Approach: Many examples just return S_OK here.
-        //    // return ObjectSafetyConstants.S_OK;
-        //}
-
-        //#endregion
 
 
         #region Misc Form Events ##############################################
@@ -419,8 +358,8 @@ namespace SoftSled {
 
         #endregion ############################################################
 
-        private void axWindowsMediaPlayer1_Enter(object sender, EventArgs e) {
-
+        private void button1_Click(object sender, EventArgs e) {
+            MceCapsHandler.ConfigureDSPA();
         }
     }
 }

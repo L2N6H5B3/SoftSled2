@@ -2,49 +2,39 @@ using System;
 using System.IO.Pipes;
 
 namespace SoftSled.Components {
-    public class NamedPipeServer : PipeStreamWrapperBase<NamedPipeServerStream>
-    {
-        public NamedPipeServer(string pipeName, string channelName) : base(pipeName, channelName)
-        {
+    public class NamedPipeServer : PipeStreamWrapperBase<NamedPipeServerStream> {
+        public NamedPipeServer(string pipeName, string channelName) : base(pipeName, channelName) {
 
         }
 
-        ~NamedPipeServer()
-        {
+        ~NamedPipeServer() {
             if (Pipe != null) Pipe.Dispose();
         }
 
-        protected override bool AutoFlushPipeWriter
-        {
+        protected override bool AutoFlushPipeWriter {
             get { return true; }
         }
 
-        protected override NamedPipeServerStream CreateStream()
-        {
-            return new NamedPipeServerStream(PipeName, 
-                       PipeDirection.InOut, 
-                       1, 
-                       PipeTransmissionMode.Message, 
-                       PipeOptions.Asynchronous, 
-                       BUFFER_SIZE, 
+        protected override NamedPipeServerStream CreateStream() {
+            return new NamedPipeServerStream(PipeName,
+                       PipeDirection.InOut,
+                       1,
+                       PipeTransmissionMode.Message,
+                       PipeOptions.Asynchronous,
+                       BUFFER_SIZE,
                        BUFFER_SIZE);
         }
 
-        protected override void ReadFromPipe(object state)
-        {
-            try
-            {
-                while (Pipe != null && m_stopRequested == false)
-                {
+        protected override void ReadFromPipe(object state) {
+            try {
+                while (Pipe != null && m_stopRequested == false) {
                     if (Pipe.IsConnected == false) Pipe.WaitForConnection();
 
                     byte[] msg = ReadMessage(Pipe);
 
                     ThrowOnReceivedMessage(msg);
                 }
-            }
-            catch (Exception ex)
-            {
+            } catch (Exception ex) {
                 Console.WriteLine(ex.ToString());
             }
         }

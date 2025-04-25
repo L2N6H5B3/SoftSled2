@@ -79,7 +79,7 @@ namespace SoftSled.Components.RTSP {
         public RTSPClient() {
 
         }
-        
+
 
         public void Connect(string url, RTP_TRANSPORT rtp_transport, MEDIA_REQUEST media_request = MEDIA_REQUEST.VIDEO_AND_AUDIO) {
 
@@ -162,14 +162,26 @@ namespace SoftSled.Components.RTSP {
             }
 
 
-            // Send OPTIONS
-            // In the Received Message handler we will send DESCRIBE, SETUP and PLAY
-            Rtsp.Messages.RtspRequest options_message = new Rtsp.Messages.RtspRequestOptions();
-            options_message.RtspUri = new Uri(this.url);
-            options_message.AddHeader("Accept-Language: en-us, *;q=0.1");
-            options_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-            options_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
-            rtsp_client.SendMessage(options_message);
+            //// Send OPTIONS
+            //// In the Received Message handler we will send DESCRIBE, SETUP and PLAY
+            //Rtsp.Messages.RtspRequest options_message = new Rtsp.Messages.RtspRequestOptions();
+            //options_message.RtspUri = new Uri(this.url);
+            //options_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+            //options_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+            //options_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+            //rtsp_client.SendMessage(options_message);
+
+            // Send DESCRIBE
+            Rtsp.Messages.RtspRequest describe_message = new Rtsp.Messages.RtspRequestDescribe();
+            describe_message.RtspUri = new Uri(url);
+            describe_message.AddHeader("Accept: application/sdp");
+            describe_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+            describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+            describe_message.AddHeader("User-Agent: MCExtender/1.50.X.090522.00");
+            if (auth_type != null) {
+                AddAuthorization(describe_message, username, password, auth_type, realm, nonce, url);
+            }
+            rtsp_client.SendMessage(describe_message);
         }
 
         // return true if this connection failed, or if it connected but is no longer connected.
@@ -645,7 +657,7 @@ namespace SoftSled.Components.RTSP {
                 if (keepalive_timer == null) {
                     // Start a Timer to send an Keepalive RTSP command every 20 seconds
                     keepalive_timer = new System.Timers.Timer();
-                    keepalive_timer.Elapsed += Timer_Elapsed;
+                    //keepalive_timer.Elapsed += Timer_Elapsed;
                     keepalive_timer.Interval = 20 * 1000;
                     keepalive_timer.Enabled = true;
 
@@ -676,6 +688,22 @@ namespace SoftSled.Components.RTSP {
                     System.Diagnostics.Debug.WriteLine("Got Error in DESCRIBE Reply " + message.ReturnCode + " " + message.ReturnMessage);
                     return;
                 }
+
+
+                // ADDED TEMPORARILY //
+
+                if (keepalive_timer == null) {
+                    // Start a Timer to send an Keepalive RTSP command every 20 seconds
+                    keepalive_timer = new System.Timers.Timer();
+                    //keepalive_timer.Elapsed += Timer_Elapsed;
+                    keepalive_timer.Interval = 20 * 1000;
+                    keepalive_timer.Enabled = true;
+                }
+
+                // END ADDED TEMPORARILY //
+
+
+
 
                 // Examine the SDP
 
@@ -709,6 +737,24 @@ namespace SoftSled.Components.RTSP {
                 // Process each 'Media' Attribute in the SDP (each sub-stream)
 
                 for (int x = 0; x < sdp_data.Medias.Count; x++) {
+
+                    using (StreamReader sdp_stream = new StreamReader(new MemoryStream(message.Data))) {
+                        sdp_data = Rtsp.Sdp.SdpFile.Read(sdp_stream);
+
+                        // Find the base RTSP Server URL
+                        foreach (Rtsp.Sdp.Attribut attrib in sdp_data.Attributs) {
+                            // If this is the Control attribute
+                            if (attrib.Key.Equals("control")) {
+                                string sdp_control = attrib.Value;
+                                if (sdp_control.ToLower().StartsWith("rtsp://")) {
+                                    control = sdp_control; //absolute path
+                                } else {
+                                    control = url + "/" + sdp_control; // relative path
+                                }
+                            }
+                        }
+                    }
+
                     bool audio = (sdp_data.Medias[x].MediaType == Rtsp.Sdp.Media.MediaTypes.audio);
                     bool video = (sdp_data.Medias[x].MediaType == Rtsp.Sdp.Media.MediaTypes.video);
 
@@ -722,7 +768,7 @@ namespace SoftSled.Components.RTSP {
                     if (audio) audio_uri = new Uri(control);
 
                     if (audio || video) {
-                        
+
                         // search the attributes for control, rtpmap and fmtp
                         // (fmtp only applies to video)
                         Rtsp.Sdp.AttributFmtp fmtp = null; // holds SPS and PPS in base64 (h264 video)
@@ -750,17 +796,19 @@ namespace SoftSled.Components.RTSP {
                                 Rtsp.Sdp.AttributRtpMap rtpmap = attrib as Rtsp.Sdp.AttributRtpMap;
 
                                 // Check if the Codec Used (EncodingName) is one we support
-                                String[] valid_video_codecs = { "H264", "H265" };
-                                String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC" /* for aac */}; // Note some are "mpeg4-generic" lower case
+                                String[] valid_video_codecs = { "H264", "H265", "VND.MS.WM-MPV" };
+                                String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "VND.MS.WM-MPA" /* for aac */}; // Note some are "mpeg4-generic" lower case
 
                                 if (video && Array.IndexOf(valid_video_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
                                     // found a valid codec
                                     video_codec = rtpmap.EncodingName.ToUpper();
                                     video_payload = sdp_data.Medias[x].PayloadType;
                                 }
-                                if (audio && Array.IndexOf(valid_audio_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
-                                    audio_codec = rtpmap.EncodingName.ToUpper();
-                                    audio_payload = sdp_data.Medias[x].PayloadType;
+                                if (audio) {
+                                    if (audio && Array.IndexOf(valid_audio_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
+                                        audio_codec = rtpmap.EncodingName.ToUpper();
+                                        audio_payload = sdp_data.Medias[x].PayloadType;
+                                    }
                                 }
                             }
                         }

@@ -15,8 +15,7 @@ namespace RDPVCManager {
         private static ChannelContext[] _channelContexts;
         //private static string _logFilePath = "RDPVCManager.log"; // Log file path
         private static string pipePrefix = "RDPVCManager_";
-        //private static string[] channelNames = { "McxSess", "devcaps", "avctrl" };
-        private static string[] channelNames = { "McxSess", "devcaps", "avctrl", "mcecaps", "VCHD", "splash" };
+        private static string[] channelNames = { "McxSess", "devcaps", "avctrl", "MCECaps", "VCHD", "splash" };
         static ChannelInitEventDelegate channelInitEventDelegate = new ChannelInitEventDelegate(VirtualChannelInitEventProc);
         static ChannelOpenEventDelegate channelOpenEventDelegate = new ChannelOpenEventDelegate(VirtualChannelOpenEvent);
 
@@ -90,10 +89,16 @@ namespace RDPVCManager {
                 case ChannelEvents.WriteCanceled:
                     break;
                 case ChannelEvents.Disconnected:
+                    //foreach (ChannelContext channelContext in _channelContexts) {
+                    //    channelContext.PipeClient.Stop();
+                    //}
                     GC.Collect();
                     GC.WaitForPendingFinalizers();
                     break;
                 case ChannelEvents.Terminated:
+                    //foreach (ChannelContext channelContext in _channelContexts) {
+                    //    channelContext.PipeClient.Stop();
+                    //}
                     GC.KeepAlive(channelInitEventDelegate);
                     GC.KeepAlive(channelOpenEventDelegate);
                     GC.Collect();
@@ -170,9 +175,7 @@ namespace RDPVCManager {
                 }
                 LogToFile($"Received Data to send on {channelContext.ChannelName} Channel {sb}");
 
-                string userData = "test1";
-
-                ChannelReturnCodes ret = EntryPoints.VirtualChannelWrite(channelContext.OpenHandle, channelContext.SentBytes, channelContext.SentBytes.Length, Encoding.Unicode.GetBytes(userData));
+                ChannelReturnCodes ret = EntryPoints.VirtualChannelWrite(channelContext.OpenHandle, channelContext.SentBytes, channelContext.SentBytes.Length, Encoding.Unicode.GetBytes(sb.ToString()));
 
                 if (ret != ChannelReturnCodes.Ok)
                     LogToFile($"ERROR: Media Center Extender VirtualChannelWrite failed for {channelContext.ChannelName} with error code: {ret}");
