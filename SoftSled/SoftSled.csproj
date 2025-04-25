@@ -68,6 +68,7 @@
     <WarningLevel>4</WarningLevel>
     <PlatformTarget>x86</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="LibVLCSharp, Version=3.6.0.0, Culture=neutral, processorArchitecture=MSIL">
@@ -109,6 +110,8 @@
     <Compile Include="Components\NamedPipeServer.cs" />
     <Compile Include="Components\PipeStreamWrapperBase.cs" />
     <Compile Include="Components\RDPVCInterface.cs" />
+    <Compile Include="Components\RTSPClient.cs" />
+    <Compile Include="Components\VirtualChannelMceCapsSender.cs" />
     <Compile Include="Components\VirtualChannelMcxSessHandler.cs" />
     <Compile Include="Components\VirtualChannelDevCapsHandler.cs" />
     <Compile Include="Components\VirtualChannelAvCtrlHandler.cs" />
@@ -144,6 +147,52 @@
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Components\DSLRCommunication.cs" />
+    <Compile Include="RTSP\AACPayload.cs" />
+    <Compile Include="RTSP\AMRPayload.cs" />
+    <Compile Include="RTSP\Authentication.cs" />
+    <Compile Include="RTSP\BitStream.cs" />
+    <Compile Include="RTSP\G711Payload.cs" />
+    <Compile Include="RTSP\H264Payload.cs" />
+    <Compile Include="RTSP\H265Payload.cs" />
+    <Compile Include="RTSP\IRTSPTransport.cs" />
+    <Compile Include="RTSP\Messages\PortCouple.cs" />
+    <Compile Include="RTSP\Messages\RTSPChunk.cs" />
+    <Compile Include="RTSP\Messages\RTSPData.cs" />
+    <Compile Include="RTSP\Messages\RTSPHeaderNames.cs" />
+    <Compile Include="RTSP\Messages\RTSPMessage.cs" />
+    <Compile Include="RTSP\Messages\RTSPRequest.cs" />
+    <Compile Include="RTSP\Messages\RTSPRequestAnnounce.cs" />
+    <Compile Include="RTSP\Messages\RTSPRequestDescribe.cs" />
+    <Compile Include="RTSP\Messages\RTSPRequestGetParameter.cs" />
+    <Compile Include="RTSP\Messages\RTSPRequestOptions.cs" />
+    <Compile Include="RTSP\Messages\RTSPRequestPause.cs" />
+    <Compile Include="RTSP\Messages\RTSPRequestPlay.cs" />
+    <Compile Include="RTSP\Messages\RTSPRequestRecord.cs" />
+    <Compile Include="RTSP\Messages\RTSPRequestSetup.cs" />
+    <Compile Include="RTSP\Messages\RTSPRequestTeardown.cs" />
+    <Compile Include="RTSP\Messages\RTSPResponse.cs" />
+    <Compile Include="RTSP\Messages\RTSPTransport.cs" />
+    <Compile Include="RTSP\MP2TransportPayload.cs" />
+    <Compile Include="RTSP\RTSPListener.cs" />
+    <Compile Include="RTSP\RTSPMessageEventArgs.cs" />
+    <Compile Include="RTSP\RTSPTCPTransport.cs" />
+    <Compile Include="RTSP\RTSPUtils.cs" />
+    <Compile Include="RTSP\Sdp\Attribut.cs" />
+    <Compile Include="RTSP\Sdp\AttributFmtp.cs" />
+    <Compile Include="RTSP\Sdp\AttributRtpMap.cs" />
+    <Compile Include="RTSP\Sdp\Bandwidth.cs" />
+    <Compile Include="RTSP\Sdp\Connection.cs" />
+    <Compile Include="RTSP\Sdp\ConnectionIP4.cs" />
+    <Compile Include="RTSP\Sdp\ConnectionIP6.cs" />
+    <Compile Include="RTSP\Sdp\EncriptionKey.cs" />
+    <Compile Include="RTSP\Sdp\H264Parameter.cs" />
+    <Compile Include="RTSP\Sdp\H265Parameter.cs" />
+    <Compile Include="RTSP\Sdp\Media.cs" />
+    <Compile Include="RTSP\Sdp\Origin.cs" />
+    <Compile Include="RTSP\Sdp\SdpFile.cs" />
+    <Compile Include="RTSP\Sdp\SdpTimeZone.cs" />
+    <Compile Include="RTSP\Sdp\Timing.cs" />
+    <Compile Include="RTSP\UdpSocket.cs" />
     <Compile Include="XBox360Device.cs" />
     <EmbeddedResource Include="Form1.resx">
       <SubType>Designer</SubType>
