@@ -125,6 +125,7 @@
     <Compile Include="Components\TextBoxLogger.cs" />
     <Compile Include="Components\VirtualChannelSendArgs.cs" />
     <Compile Include="Components\WindowsSystemAudio.cs" />
+    <Compile Include="Components\WmrptHandling.cs" />
     <Compile Include="ContentHandler.cs" />
     <Compile Include="Crypto.cs" />
     <Compile Include="ExtenderDevice.cs" />

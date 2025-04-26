@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Security.Cryptography;
+using SoftSled.WmrptHandling;
 
 namespace SoftSled.Components.RTSP {
     class RTSPClient {
@@ -78,6 +79,7 @@ namespace SoftSled.Components.RTSP {
         Rtsp.AACPayload aacPayload = null;
         M2TsHandling.Pipe.RtpPipeHandler pipeHandler = null;
         NalUnitHandling.Pipe.NalUnitPipeHandler nalHandler = null;
+        WmrptDepacketizer wmrptDepacketizer = null;
         List<Rtsp.Messages.RtspRequestSetup> setup_messages = new List<Rtsp.Messages.RtspRequestSetup>(); // setup messages still to send
 
         // Constructor
@@ -104,11 +106,25 @@ namespace SoftSled.Components.RTSP {
             //int mpegTsPayloadType = 113; // Or the actual type from SDP
 
 
+            wmrptDepacketizer = new WmrptDepacketizer();
+
             //nalHandler = new NalUnitHandling.Pipe.NalUnitPipeHandler(ffmpegPath, ffmpegArgs);
             nalHandler = new NalUnitHandling.Pipe.NalUnitPipeHandler(ffplayPath, ffplayArgs);
 
             nalHandler.FfplayErrorDataReceived += (sender, logLine) => {
                 Console.WriteLine($"FFPLAY LOG: {logLine}");
+            };
+
+            wmrptDepacketizer.NalUnitReady += async (sender, nalUnit) => {
+                // Trace.WriteLine($"Depacketizer output NAL Unit, Size: {nalUnit.Length}");
+                if (nalHandler != null) // Check if handler is still valid
+                {
+                    // Option 1: Process individual NALs
+                    await nalHandler.ProcessNalUnitAsync(nalUnit);
+
+                    // Option 2: If your parser groups NALs by frame boundary (RTP Marker),
+                    // you would collect NALs here and call ProcessFrameNalUnitsAsync instead.
+                }
             };
 
             if (!nalHandler.Start()) { /* Handle error */ return; }
@@ -457,25 +473,29 @@ namespace SoftSled.Components.RTSP {
                 //                   + " Size=" + e.Message.Data.Length);
 
 
-                //// Check the payload type in the RTP packet matches the Payload Type value from the SDP
-                //if (data_received.Channel == video_data_channel && rtp_payload_type != video_payload) {
-                //    //byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
-                //    //System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
+                // Check the payload type in the RTP packet matches the Payload Type value from the SDP
+                if (data_received.Channel == video_data_channel && rtp_payload_type == 2) {
+                    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
+                    System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
 
-                //    // Process the packet asynchronously
-                //    pipeHandler.ProcessRtpPacketAsync(e.Message.Data, e.Message.Data.Length);
+                    wmrptDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number);
 
-                //    System.Diagnostics.Debug.WriteLine("Ignoring this Video RTP payload");
-                //    return; // ignore this data
-                //}
+
+
+                    //// Process the packet asynchronously
+                    //pipeHandler.ProcessRtpPacketAsync(e.Message.Data, e.Message.Data.Length);
+
+                    System.Diagnostics.Debug.WriteLine("Ignoring this Video RTP payload");
+                    return; // ignore this data
+                }
 
                 // Check the payload type in the RTP packet matches the Payload Type value from the SDP
                 else if (data_received.Channel == audio_data_channel && rtp_payload_type != audio_payload) {
                     //System.Diagnostics.Debug.WriteLine("Ignoring this Audio RTP payload");
                     return; // ignore this data
                 } else if (data_received.Channel == video_data_channel
-                           //&& rtp_payload_type == video_payload
-                           && rtp_payload_type == 2
+                           && rtp_payload_type == video_payload
+                           //&& rtp_payload_type == 2
                            //&& video_codec.Equals("H264")
                            ) {
                     // H264 RTP Packet
