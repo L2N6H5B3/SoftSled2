@@ -4,9 +4,11 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 ![Screenshot of the Dev Shell](https://raw.githubusercontent.com/L2N6H5B3/SoftSled2/master/Screenshot_230425.png)
 
 ## Current Progress
-* Audio RTSP communication is close to complete, RTSP playback working via the AxWMP control.
-* Video RTSP communication is mostly done, RTSP playback working via the AxWMP control for WMV Videos but not MP4, AVI, or WTV (Recorded TV).  RTSP Client WIP that is able to receive RTP packets sent from the MC Host for WTV and other video files.
-* OnMediaEvent requests are working via the AxWMP control, though this will need to be revisited if the WMP control will not be used moving into the future.
+* Audio RTSP communication needs work with ffplay and parsing RTSP / RTP packets
+* Video RTSP communication needs work with ffplay and parsing RTSP / RTP packets
+   * H.264 working
+   * MPEG2-TS underway
+   * Recorded TV and Live TV playback over H.264 is working!
 * Interface sounds (through RDP or local) currently being worked out
 
 ## Finished Elements
@@ -33,7 +35,7 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 
 ## Installation and configuration
 ### Prerequisites
-* Windows 7
+* Windows 7 OR Windows 8 with Media Center (yes, SoftSled2 works with WMC8)
 
 ### Configuration
 (If using Linksys2200.cer)
