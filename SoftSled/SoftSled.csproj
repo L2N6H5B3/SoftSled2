@@ -108,6 +108,8 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Components\AudioPipeHandler.cs" />
+    <Compile Include="Components\AvMuxPipe.cs" />
     <Compile Include="Components\Logger.cs" />
     <Compile Include="Components\M2TS.cs" />
     <Compile Include="Components\NamedPipeClient.cs" />
@@ -125,7 +127,8 @@
     <Compile Include="Components\TextBoxLogger.cs" />
     <Compile Include="Components\VirtualChannelSendArgs.cs" />
     <Compile Include="Components\WindowsSystemAudio.cs" />
-    <Compile Include="Components\WmrptHandling.cs" />
+    <Compile Include="Components\WmrptAudioDepacketizer.cs" />
+    <Compile Include="Components\WmrptVideoDepacketizer.cs" />
     <Compile Include="ContentHandler.cs" />
     <Compile Include="Crypto.cs" />
     <Compile Include="ExtenderDevice.cs" />

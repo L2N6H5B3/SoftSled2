@@ -41,8 +41,9 @@ namespace NalUnitHandling.Pipe {
             if (string.IsNullOrEmpty(ffplayPath)) throw new ArgumentNullException(nameof(ffplayPath));
             if (!File.Exists(ffplayPath)) throw new FileNotFoundException("ffplay.exe not found at specified path.", ffplayPath);
             // Ensure required arguments are present
-            if (string.IsNullOrEmpty(ffplayArguments) || !ffplayArguments.Contains("-i pipe:0") || !ffplayArguments.Contains("-f h264")) {
-                throw new ArgumentException("ffplayArguments must include '-f h264 -i pipe:0' to read H.264 from standard input.", nameof(ffplayArguments));
+            //if (string.IsNullOrEmpty(ffplayArguments) || !ffplayArguments.Contains("-i pipe:0") || !ffplayArguments.Contains("-f h264")) {
+            if (string.IsNullOrEmpty(ffplayArguments) || !ffplayArguments.Contains("-i pipe:0")) {
+                    throw new ArgumentException("ffplayArguments must include '-f h264 -i pipe:0' to read H.264 from standard input.", nameof(ffplayArguments));
             }
 
             _ffplayPath = ffplayPath;
@@ -193,8 +194,8 @@ namespace NalUnitHandling.Pipe {
                         continue; // Skip empty NAL units in the list
                     }
 
-                    // 1. Write the Annex B start code
-                    await _ffplayInputStream.WriteAsync(AnnexBStartCode, 0, AnnexBStartCode.Length);
+                    //// 1. Write the Annex B start code
+                    //await _ffplayInputStream.WriteAsync(AnnexBStartCode, 0, AnnexBStartCode.Length);
 
                     // 2. Write the NAL unit data itself
                     await _ffplayInputStream.WriteAsync(nalUnit, 0, nalUnit.Length);
@@ -231,12 +232,15 @@ namespace NalUnitHandling.Pipe {
             }
 
             try {
-                // 1. Write the Annex B start code
-                await _ffplayInputStream.WriteAsync(AnnexBStartCode, 0, AnnexBStartCode.Length);
+                if (_ffplayInputStream != null) {
 
-                // 2. Write the NAL unit data itself
-                await _ffplayInputStream.WriteAsync(nalUnit, 0, nalUnit.Length);
+                    //// 1. Write the Annex B start code
+                    //await _ffplayInputStream.WriteAsync(AnnexBStartCode, 0, AnnexBStartCode.Length);
 
+                    // 2. Write the NAL unit data itself
+                    await _ffplayInputStream.WriteAsync(nalUnit, 0, nalUnit.Length);
+
+                }
                 // Optional: Flush if needed
                 // await _ffplayInputStream.FlushAsync();
             } catch (IOException ex) // Catches pipe closed errors

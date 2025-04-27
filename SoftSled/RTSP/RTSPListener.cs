@@ -132,10 +132,10 @@
                     {
                         if (!(currentMessage is RtspData))
                         {
-                            // on logue le tout
-                            if (currentMessage.SourcePort != null)
-                                System.Diagnostics.Debug.WriteLine($"Receive from {currentMessage.SourcePort.RemoteAdress}");
-                            currentMessage.LogMessage();
+                            //// on logue le tout
+                            //if (currentMessage.SourcePort != null)
+                            //    System.Diagnostics.Debug.WriteLine($"Receive from {currentMessage.SourcePort.RemoteAdress}");
+                            //currentMessage.LogMessage();
                         }
                         if (currentMessage is RtspResponse)
                         {
@@ -255,8 +255,8 @@
                 }
             }
 
-            System.Diagnostics.Debug.WriteLine("Send Message");
-            message.LogMessage();
+            //System.Diagnostics.Debug.WriteLine("Send Message");
+            //message.LogMessage();
             message.SendTo(_stream);
             return true;
         }

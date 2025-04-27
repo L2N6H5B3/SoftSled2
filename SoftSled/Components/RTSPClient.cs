@@ -1,11 +1,14 @@
 ﻿using Rtsp.Messages;
+using SoftSled.Components.AudioHandling.Pipe;
+using SoftSled.Components.AvMuxPipe;
+using SoftSled.Components.WmrptHandling;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Security.Cryptography;
-using SoftSled.WmrptHandling;
+using System.Text;
 
 namespace SoftSled.Components.RTSP {
     class RTSPClient {
@@ -77,9 +80,12 @@ namespace SoftSled.Components.RTSP {
         Rtsp.G711Payload g711Payload = new Rtsp.G711Payload();
         Rtsp.AMRPayload amrPayload = new Rtsp.AMRPayload();
         Rtsp.AACPayload aacPayload = null;
-        M2TsHandling.Pipe.RtpPipeHandler pipeHandler = null;
+        M2TsHandling.Pipe.RtpPipeHandler m2tsPipeHandler = null;
         NalUnitHandling.Pipe.NalUnitPipeHandler nalHandler = null;
-        WmrptDepacketizer wmrptDepacketizer = null;
+        AudioPipeHandler audioPipeHandler = null;
+        AvPipeMuxer muxer = null;
+        WmrptVideoDepacketizer videoDepacketizer = null;
+        WmrptAudioDepacketizer audioDepacketizer = null;
         List<Rtsp.Messages.RtspRequestSetup> setup_messages = new List<Rtsp.Messages.RtspRequestSetup>(); // setup messages still to send
 
         // Constructor
@@ -90,7 +96,7 @@ namespace SoftSled.Components.RTSP {
             //string ffplayArgs = "-loglevel debug -probesize 5M -analyzeduration 10M -f mpegts -i pipe:0";
             //string ffplayArgs = "-loglevel debug -f asf -i pipe:0";
             //string ffplayArgs = "-loglevel debug -video_size 1920x1080 -f h264 -i pipe:0";
-            string ffplayArgs = "-loglevel debug -f h264 -i pipe:0";
+            //string ffplayArgs = "-loglevel debug -f h264 -i pipe:0";
             //string ffplayArgs = "-loglevel debug -probesize 5M -analyzeduration 10M -f h264 -i pipe:0";
             //string ffplayArgs = "-loglevel debug -f h264 -i pipe:0 -video_size 720x480";
             //Example arguments: Output raw BGRA video to stdout (requires reading stdout)
@@ -102,45 +108,115 @@ namespace SoftSled.Components.RTSP {
             //// Args tell ffmpeg to expect H.264 with size from pipe, decode it, and discard output. Log verbosely.
             //string ffmpegArgs = $" - loglevel debug -f h264 -i pipe:0 -f null -";
 
-            string ffplayPath = @"C:\Users\Luke\source\repos\SoftSled2\SoftSled\bin\x86\Debug\ffplay.exe"; // CHANGE THIS
             //int mpegTsPayloadType = 113; // Or the actual type from SDP
 
 
-            wmrptDepacketizer = new WmrptDepacketizer();
 
-            //nalHandler = new NalUnitHandling.Pipe.NalUnitPipeHandler(ffmpegPath, ffmpegArgs);
-            nalHandler = new NalUnitHandling.Pipe.NalUnitPipeHandler(ffplayPath, ffplayArgs);
 
-            nalHandler.FfplayErrorDataReceived += (sender, logLine) => {
-                Console.WriteLine($"FFPLAY LOG: {logLine}");
-            };
+            // --- Configuration ---
+            string ffmpegPath = @"C:\Users\Luke\source\repos\SoftSled2\SoftSled\bin\x86\Debug\ffmpeg.exe";
+            string ffplayPath = @"C:\Users\Luke\source\repos\SoftSled2\SoftSled\bin\x86\Debug\ffplay.exe";
 
-            wmrptDepacketizer.NalUnitReady += async (sender, nalUnit) => {
-                // Trace.WriteLine($"Depacketizer output NAL Unit, Size: {nalUnit.Length}");
-                if (nalHandler != null) // Check if handler is still valid
-                {
-                    // Option 1: Process individual NALs
-                    await nalHandler.ProcessNalUnitAsync(nalUnit);
+            // Payload types from SDP
+            int videoPayloadType = 4; // Example: H.264 1280x720
+            int audioPayloadType = 104; // Example: AC3 48k/2ch
 
-                    // Option 2: If your parser groups NALs by frame boundary (RTP Marker),
-                    // you would collect NALs here and call ProcessFrameNalUnitsAsync instead.
-                }
-            };
+            // Input formats for ffmpeg (match payload types)
+            string videoFormat = "h264";
+            string audioFormat = "s16le"; // Example: Signed 16-bit Little Endian
+            int audioSampleRate = 48000; // Example
+            int audioChannels = 2; // Example
 
-            if (!nalHandler.Start()) { /* Handle error */ return; }
 
-            //pipeHandler = new M2TsHandling.Pipe.RtpPipeHandler(mpegTsPayloadType, ffplayPath, ffplayArgs);
+            // --- Initialization ---
+            videoDepacketizer = new WmrptVideoDepacketizer();
+            // var audioDepacketizer = new YourAudioDepacketizer(audioPayloadType); // Replace with your audio handler
+            audioDepacketizer = new WmrptAudioDepacketizer(); // Use Wmrpt if audio also uses x-wmf-pf
 
-            //// Optional: Subscribe to error output
-            //pipeHandler.ProcessErrorDataReceived += (sender, errorLine) => {
-            //    Console.WriteLine($"FFMPEG LOG: {errorLine}");
+
+
+            // Optional extra args
+            string ffmpegExtraArgs = $"-ar {audioSampleRate} -ac {audioChannels}"; // Add audio params
+            //string ffmpegExtraArgs = $""; // Add audio params
+            string ffplayExtraArgs = "";
+
+
+            //audioPipeHandler = new AudioPipeHandler(ffmpegPath, ffplayPath, audioFormat, audioSampleRate, audioChannels);
+
+            //// Subscribe to logs (optional)
+            ////audioPipeHandler.FfplayErrorDataReceived += (s, e) => Debug.WriteLine($"FFPLAY_AUDIO: {e}");
+            //audioPipeHandler.FfmpegErrorDataReceived += (s, e) => Debug.WriteLine($"FFMPEG_AUDIO: {e}");
+
+            //// Subscribe to depacketizer output
+            //audioDepacketizer.AudioDataReady += async (s, audioData) => {
+            //    if (audioPipeHandler != null) // Check if handler is still valid
+            //    {
+            //        await audioPipeHandler.ProcessAudioDataAsync(audioData);
+            //    }
             //};
 
-            //if (!pipeHandler.Start()) {
-            //    Console.WriteLine("Failed to start ffmpeg process.");
-            //    // Handle error
+            //// --- Start Playback ---
+            //if (!audioPipeHandler.Start()) {
+            //    Console.WriteLine("Failed to start audio ffplay process.");
             //    return;
             //}
+
+
+
+            muxer = new AvPipeMuxer(
+                ffmpegPath, ffplayPath, videoFormat, audioFormat, audioSampleRate, audioChannels,
+                videoPipeName: "mcxVidPipe", audioPipeName: "mcxAudPipe");
+
+            // Subscribe to logs
+            muxer.FfmpegErrorDataReceived += (s, e) => Trace.WriteLine($"FFMPEG: {e}");
+            muxer.FfplayErrorDataReceived += (s, e) => Trace.WriteLine($"FFPLAY: {e}");
+
+            //// Subscribe to depacketizer outputs
+            videoDepacketizer.NalUnitReady += async (s, nalUnit) => {
+                // Assuming NAL units come one by one, collect them into frames if needed
+                // For simplicity here, processing individually (adjust if needed)
+                await muxer.ProcessVideoFrameNalUnitsAsync(new List<byte[]> { nalUnit });
+            };
+            audioDepacketizer.AudioDataReady += async (s, audioFrame) => { // Assuming NalUnitReady for audio too
+                await muxer.ProcessAudioDataAsync(audioFrame);
+            };
+
+            
+
+
+            ////nalHandler = new NalUnitHandling.Pipe.NalUnitPipeHandler(ffmpegPath, ffmpegArgs);
+            //nalHandler = new NalUnitHandling.Pipe.NalUnitPipeHandler(ffplayPath, ffplayArgs);
+
+            //nalHandler.FfplayErrorDataReceived += (sender, logLine) => {
+            //    Console.WriteLine($"FFPLAY LOG: {logLine}");
+            //};
+
+            //videoDepacketizer.NalUnitReady += async (sender, nalUnit) => {
+            //    // Trace.WriteLine($"Depacketizer output NAL Unit, Size: {nalUnit.Length}");
+            //    if (nalHandler != null) // Check if handler is still valid
+            //    {
+            //        // Option 1: Process individual NALs
+            //        await nalHandler.ProcessNalUnitAsync(nalUnit);
+
+            //        // Option 2: If your parser groups NALs by frame boundary (RTP Marker),
+            //        // you would collect NALs here and call ProcessFrameNalUnitsAsync instead.
+            //    }
+            //};
+
+            //audioDepacketizer.AudioDataReady += async (sender, nalUnit) => {
+            //    // Trace.WriteLine($"Depacketizer output NAL Unit, Size: {nalUnit.Length}");
+            //    if (nalHandler != null) // Check if handler is still valid
+            //    {
+            //        // Option 1: Process individual NALs
+            //        await nalHandler.ProcessNalUnitAsync(nalUnit);
+
+            //        // Option 2: If your parser groups NALs by frame boundary (RTP Marker),
+            //        // you would collect NALs here and call ProcessFrameNalUnitsAsync instead.
+            //    }
+            //};
+
+            //if (!nalHandler.Start()) { /* Handle error */ return; }
+
         }
 
 
@@ -292,7 +368,9 @@ namespace SoftSled.Components.RTSP {
 
         public void Stop() {
 
-            nalHandler.Stop();
+            //nalHandler.Stop();
+            //audioPipeHandler.Stop();
+            muxer.Stop();
 
             if (rtsp_client != null) {
                 // Send TEARDOWN
@@ -472,31 +550,38 @@ namespace SoftSled.Components.RTSP {
                 //                   + " SSRC=" + rtp_ssrc
                 //                   + " Size=" + e.Message.Data.Length);
 
+                // Handle Video with X-WMF-PF Payload
+                // If the payload type in the RTP packet matches the Video X-WMF-PF value from the SDP
+                if (data_received.Channel == video_data_channel && video_codec.Equals("X-WMF-PF")) {
+                    // Create Byte Array to hold RTP Payload
+                    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start];
+                    // Copy the RTP Payload to the Byte Array
+                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length);
+                    // Process the WMRPT PayLoad
+                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number);
+                    return;
+                }
 
-                // Check the payload type in the RTP packet matches the Payload Type value from the SDP
-                if (data_received.Channel == video_data_channel && rtp_payload_type == 2) {
-                    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
-                    System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
-
-                    wmrptDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number);
-
-
-
-                    //// Process the packet asynchronously
-                    //pipeHandler.ProcessRtpPacketAsync(e.Message.Data, e.Message.Data.Length);
-
-                    System.Diagnostics.Debug.WriteLine("Ignoring this Video RTP payload");
-                    return; // ignore this data
+                // Handle Audio with X-WMF-PF Payload
+                // If the payload type in the RTP packet matches the Audio X-WMF-PF value from the SDP
+                if (data_received.Channel == audio_data_channel && audio_codec.Equals("X-WMF-PF")) {
+                    // Create Byte Array to hold RTP Payload
+                    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start];
+                    // Copy the RTP Payload to the Byte Array
+                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length);
+                    // Process the WMRPT PayLoad
+                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number);
+                    return;
                 }
 
                 // Check the payload type in the RTP packet matches the Payload Type value from the SDP
                 else if (data_received.Channel == audio_data_channel && rtp_payload_type != audio_payload) {
-                    //System.Diagnostics.Debug.WriteLine("Ignoring this Audio RTP payload");
+                    System.Diagnostics.Debug.WriteLine("Ignoring this Audio RTP payload");
                     return; // ignore this data
                 } else if (data_received.Channel == video_data_channel
                            && rtp_payload_type == video_payload
                            //&& rtp_payload_type == 2
-                           //&& video_codec.Equals("H264")
+                           && video_codec.Equals("H264")
                            ) {
                     // H264 RTP Packet
 
@@ -666,7 +751,7 @@ namespace SoftSled.Components.RTSP {
         private void Rtsp_MessageReceived(object sender, Rtsp.RtspChunkEventArgs e) {
             Rtsp.Messages.RtspResponse message = e.Message as Rtsp.Messages.RtspResponse;
 
-            System.Diagnostics.Debug.WriteLine("Received RTSP Message " + message.OriginalRequest.ToString());
+            //System.Diagnostics.Debug.WriteLine("Received RTSP Message " + message.OriginalRequest.ToString());
 
             // If message has a 401 - Unauthorised Error, then we re-send the message with Authorization
             // using the most recently received 'realm' and 'nonce'
@@ -795,7 +880,7 @@ namespace SoftSled.Components.RTSP {
 
                 // Examine the SDP
 
-                System.Diagnostics.Debug.WriteLine(System.Text.Encoding.UTF8.GetString(message.Data));
+                //System.Diagnostics.Debug.WriteLine(System.Text.Encoding.UTF8.GetString(message.Data));
 
                 Rtsp.Sdp.SdpFile sdp_data;
                 String control = "";  // the "track" or "stream id"
@@ -892,7 +977,7 @@ namespace SoftSled.Components.RTSP {
                                 if (video && video_payload == -1 && Array.IndexOf(valid_video_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
                                     // found a valid codec
                                     video_codec = rtpmap.EncodingName.ToUpper();
-                                    video_payload = sdp_data.Medias[x].PayloadType;
+                                    //video_payload = sdp_data.Medias[x].PayloadType;
                                     video_payload = rtpmap.PayloadNumber;
                                 }
                                 if (audio) {
@@ -1136,6 +1221,12 @@ namespace SoftSled.Components.RTSP {
                 // Got Reply to PLAY
                 if (message.IsOk == false) {
                     System.Diagnostics.Debug.WriteLine("Got Error in PLAY Reply " + message.ReturnCode + " " + message.ReturnMessage);
+                    return;
+                }
+
+                // --- Start Playback ---
+                if (!muxer.Start()) {
+                    Console.WriteLine("Failed to start muxer.");
                     return;
                 }
 
