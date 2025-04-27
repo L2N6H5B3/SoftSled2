@@ -107,22 +107,22 @@ namespace SoftSled.Components.AvMuxPipe // New namespace
             _videoPipeName = videoPipeName;
             _audioPipeName = audioPipeName;
 
-            // Construct ffmpeg arguments with per-input probing and avioflags
+            // Construct ffmpeg arguments with targeted probing
             string videoPipePath = $@"\\.\pipe\{_videoPipeName}";
             string audioPipePath = $@"\\.\pipe\{_audioPipeName}";
 
-            // Keep audio first, minimal probing, copyts, avioflags direct
+            // *** Force re-encode for video (-c:v libx264), keep audio encode (-c:a aac) ***
+            // *** Removed -copyts ***
             _ffmpegArgs = $"-loglevel debug " +
-                          //$"-copyts " +
                           $"{additionalFfmpegInputArgs} " +
                           // Input 0: Audio
                           $"-probesize 32 -analyzeduration 0 -avioflags direct -f {_audioInputFormat} -ar {_audioSampleRate} -ac {_audioChannels} -i \"{audioPipePath}\" " +
                           // Input 1: Video
-                          $"-probesize 32 -analyzeduration 0 -fpsprobesize 0 -avioflags direct -f {_videoInputFormat} {additionalFfmpegVideoInputArgs} -i \"{videoPipePath}\" " +
+                          $"-probesize 4k -analyzeduration 500k -fpsprobesize 0 -avioflags direct -f {_videoInputFormat} {additionalFfmpegVideoInputArgs} -i \"{videoPipePath}\" " +
                           // Mapping (Audio=0, Video=1)
                           $"-map 1:v? -map 0:a? " +
-                          $"-c:v copy " +
-                          $"-c:a aac -b:a 128k " +
+                          $"-c:v libx264 -preset ultrafast -crf 23 " + // *** Re-encode video ***
+                          $"-c:a aac -b:a 128k " + // Encode audio (AAC)
                           $"{additionalFfmpegOutputArgs} " +
                           $"-f mpegts pipe:1";
 
@@ -164,7 +164,7 @@ namespace SoftSled.Components.AvMuxPipe // New namespace
                 _videoPipeServer = new NamedPipeServerStream(_videoPipeName, PipeDirection.Out, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
                 videoPipeCreated = true;
 
-                // Assign streams immediately so writing can begin
+                // Assign streams immediately
                 _audioPipeStream = _audioPipeServer;
                 _videoPipeStream = _videoPipeServer;
                 Trace.WriteLine("Pipe streams assigned (but not connected yet).");
@@ -189,8 +189,6 @@ namespace SoftSled.Components.AvMuxPipe // New namespace
 
 
                 // Now start waiting for connections asynchronously
-                // We still start the wait task, but don't block the Start() method on it.
-                // The write methods will await these tasks if needed.
                 Trace.WriteLine("Initiating pipe connection waits asynchronously...");
                 _audioPipeConnectTask = _audioPipeServer.WaitForConnectionAsync(_processCts.Token);
                 _videoPipeConnectTask = _videoPipeServer.WaitForConnectionAsync(_processCts.Token);
@@ -255,8 +253,6 @@ namespace SoftSled.Components.AvMuxPipe // New namespace
             _processCts?.Cancel(); // Signal tasks to stop
 
             // Close pipe streams first to signal EOF to ffmpeg readers
-            // Use the server variables as the stream variables might be null if Start failed early
-            // Also ensure the stream variable is nulled AFTER closing server stream
             try { _videoPipeServer?.Close(); } catch { /* Ignore */ } finally { _videoPipeStream = null; }
             try { _audioPipeServer?.Close(); } catch { /* Ignore */ } finally { _audioPipeStream = null; }
 
@@ -304,8 +300,9 @@ namespace SoftSled.Components.AvMuxPipe // New namespace
             if (!serverPipe.IsConnected) {
                 if (connectTask == null || connectTask.IsCompleted) // Check if task is already done or wasn't started properly
                 {
-                    Trace.WriteLine("Video pipe connection task not running or already completed, cannot write.");
-                    return; // Or handle error appropriately
+                    // Don't log error here, just return as data might arrive before connection
+                    // Trace.WriteLine("Video pipe connection task not running or already completed, cannot write.");
+                    return;
                 }
                 try {
                     // Trace.WriteLine("Video pipe waiting for connection before write...");
@@ -348,7 +345,7 @@ namespace SoftSled.Components.AvMuxPipe // New namespace
             // Wait for connection if not yet established before writing
             if (!serverPipe.IsConnected) {
                 if (connectTask == null || connectTask.IsCompleted) {
-                    Trace.WriteLine("Audio pipe connection task not running or already completed, cannot write.");
+                    // Trace.WriteLine("Audio pipe connection task not running or already completed, cannot write.");
                     return;
                 }
                 try {

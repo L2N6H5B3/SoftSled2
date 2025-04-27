@@ -1,6 +1,11 @@
 ﻿using AxMSTSCLib;
+using MSTSCLib;
+using SoftSled.Components.Communication;
+using SoftSled.Components.Configuration;
+using SoftSled.Components.Diagnostics;
+using SoftSled.Components.Extender;
+using SoftSled.Components.VirtualChannel;
 using System;
-using System.Runtime.InteropServices;
 using System.Windows;
 
 namespace SoftSledWPF {
@@ -9,186 +14,352 @@ namespace SoftSledWPF {
     /// </summary>
     public partial class MainWindow : Window {
 
-        public AxMsRdpClient7NotSafeForScripting rdpControl;
+        // Private members
+        private Logger m_logger;
+        private ExtenderDevice m_device;
+        private bool isConnecting = false;
+        private bool rdpInitialised = false;
+
+        public AxMsRdpClient7NotSafeForScripting rdpClient;
         public System.Windows.Forms.Panel testPanel;
 
+        private RDPVCInterface rdpVCInterface;
+
+        private VirtualChannelAvCtrlHandler AvCtrlHandler;
+        private VirtualChannelDevCapsHandler DevCapsHandler;
+        private VirtualChannelMcxSessHandler McxSessHandler;
+
         public MainWindow() {
-
-            
             InitializeComponent();
-
-            // Subscribe to the event AFTER InitializeComponent
-            wfHost.SizeChanged += WfHost_SizeChanged;
-
-            wfHost.Loaded += MainWindow_Loaded;
-
-            
-
-            // Subscribe to the event AFTER InitializeComponent
-            wfHost.SizeChanged += WfHost_SizeChanged;
-
-            // Create and setup the RDP control
-            SetupRdpControl();
-
+            this.Loaded += MainWindow_Loaded;
+            this.Closed += MainWindow_Closed; // Add handler for cleanup
         }
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e) {
-            // Delay the call slightly using the dispatcher
-            // Use Loaded priority first, if that still fails, try Background
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
-                new Action(() => ApplyTransparencyToHostedControl()));
+            InitialiseLogger();
+
+            // Create RDPVCInterface to handle Virtual Channel Communications
+            //rdpVCInterface = new RDPVCInterface(m_logger);
+            rdpVCInterface = new RDPVCInterface();
+            rdpVCInterface.DataReceived += RdpVCInterface_DataReceived;
+
+
+            // Create VirtualChannel Handlers
+            McxSessHandler = new VirtualChannelMcxSessHandler(m_logger);
+            DevCapsHandler = new VirtualChannelDevCapsHandler(m_logger);
+            AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger);
+            McxSessHandler.VirtualChannelSend += On_VirtualChannelSend;
+            DevCapsHandler.VirtualChannelSend += On_VirtualChannelSend;
+            AvCtrlHandler.VirtualChannelSend += On_VirtualChannelSend;
+
+            // Create VirtualChannel Handlers EventHandlers
+            McxSessHandler.StatusChanged += McxSessHandler_StatusChanged;
+
+            SoftSledConfig config = SoftSledConfigManager.ReadConfig();
+            if (!config.IsPaired) {
+                m_logger.LogInfo("Extender is not paired!");
+                //SetStatus("Extender is not paired");
+            } else {
+                m_logger.LogInfo("Extender is paired with " + config.RdpLoginHost);
+                //SetStatus("Extender ready to connect");
+            }
+
+
+            // Create the RDP Client ActiveX control.
+            this.rdpClient = new AxMsRdpClient7NotSafeForScripting();
+
+            // Important: Add the control to the WindowsFormsHost element's Child property
+            this.rdpHost.Child = this.rdpClient;
+
+            // Initialize the control (optional, but recommended)
+            // Must cast the Child back to the specific type
+            ((System.ComponentModel.ISupportInitialize)(this.rdpClient)).BeginInit();
+            this.rdpClient.Enabled = true;
+            // Add any other initialization properties here if needed
+            ((System.ComponentModel.ISupportInitialize)(this.rdpClient)).EndInit();
+
+            // Optional: Subscribe to RDP events
+            this.rdpClient.OnDisconnected += RdpClient_OnDisconnected;
+            this.rdpClient.OnLoginComplete += RdpClient_OnLoginComplete;
+            // Add other event handlers as needed...
         }
 
-        // You could also call this from a Button Click event handler
-        private void ApplyTransparencyToHostedControl() {
-            if (testPanel == null || !testPanel.IsHandleCreated) {
-                MessageBox.Show("Hosted control or its handle is not ready yet.");
+        void InitialiseLogger() {
+            // For now simply hardcode the logger.
+            m_logger = new TextBoxLogger(loggerTextBox, this);
+            m_logger.IsLoggingDebug = true;
+        }
+
+        private void RdpVCInterface_DataReceived(object sender, DataReceived e) {
+            try {
+                //var res = rdpClient.GetVirtualChannelOptions("McxSess");
+                if (e.channelName == "McxSess") {
+                    McxSessHandler.ProcessData(e.data);
+                } else if (e.channelName == "devcaps") {
+                    DevCapsHandler.ProcessData(e.data);
+                } else if (e.channelName == "avctrl") {
+                    AvCtrlHandler.ProcessData(e.data);
+                } else {
+                    MessageBox.Show("Unhandled data on channel " + e.channelName);
+                    m_logger.LogDebug($"{e.channelName} Bytes: " + BitConverter.ToString(e.data));
+                }
+
+            } catch (Exception ee) {
+                MessageBox.Show(ee.Message + " " + ee.StackTrace);
+            }
+        }
+
+        private void BtnConnect_Click(object sender, RoutedEventArgs e) {
+            if (this.rdpClient == null || string.IsNullOrWhiteSpace(txtServer.Text)) {
+                MessageBox.Show("RDP client not initialized or server name is missing.");
                 return;
             }
-
-
-
-            IntPtr hwnd = testPanel.Handle;
-            if (hwnd == IntPtr.Zero) {
-                MessageBox.Show("Failed to get HWND handle for the hosted control.");
-                return;
-            }
-
-            System.Diagnostics.Debug.WriteLine($"ApplyTransparency - HWND: {hwnd.ToInt64()}, IsHandleCreated: {testPanel.IsHandleCreated}"); // Debug output
 
             try {
+                // Basic connection settings
+                this.rdpClient.Server = txtServer.Text;
+                // NOTE: Avoid hardcoding usernames/passwords. Prompt user securely or use SSO.
+                // this.rdpClient.UserName = "YourUsername";
 
-                // 1. Get current extended window styles USING THE HELPER
-                IntPtr currentExStyle = NativeMethods.GetWindowLongPtrHelper(hwnd, NativeMethods.GWL_EXSTYLE); // Use Helper!
+                // Example of advanced settings (use the correct AdvancedSettings object, e.g., 7, 8, 9)
+                IMsRdpClientAdvancedSettings7 advancedSettings =
+                    (IMsRdpClientAdvancedSettings7)this.rdpClient.AdvancedSettings7;
 
-                // Check for error from GetWindowLongPtrHelper (optional but good)
-                if (currentExStyle == IntPtr.Zero && Marshal.GetLastWin32Error() != 0) {
-                    MessageBox.Show($"Failed to get window extended style. Error code: {Marshal.GetLastWin32Error()}");
-                    return;
-                }
+                // !! SECURITY WARNING !! Avoid ClearTextPassword in production!
+                // advancedSettings.ClearTextPassword = "YourPassword";
 
-                // 2. Add the WS_EX_LAYERED style
-                IntPtr newExStyle = new IntPtr(currentExStyle.ToInt64() | NativeMethods.WS_EX_LAYERED);
+                // Recommended: Use CredSSP (Network Level Authentication) if available
+                advancedSettings.EnableCredSspSupport = true;
 
-                // 3. Set the new extended window styles USING THE HELPER
-                IntPtr resultSetStyle = NativeMethods.SetWindowLongPtrHelper(hwnd, NativeMethods.GWL_EXSTYLE, newExStyle); // Use Helper!
-                if (resultSetStyle == IntPtr.Zero && Marshal.GetLastWin32Error() != 0) {
-                    MessageBox.Show($"Failed to set WS_EX_LAYERED style. Error code: {Marshal.GetLastWin32Error()}");
-                    return;
-                }
+                // Other common settings
+                // advancedSettings.RedirectDrives = true;
+                // advancedSettings.RedirectPrinters = false;
+                // this.rdpClient.DesktopWidth = 1024;
+                // this.rdpClient.DesktopHeight = 768;
+                // this.rdpClient.ColorDepth = 24;
 
-                IntPtr checkExStyle = NativeMethods.GetWindowLongPtrHelper(hwnd, NativeMethods.GWL_EXSTYLE);
-                if ((checkExStyle.ToInt64() & NativeMethods.WS_EX_LAYERED) == 0) {
-                    MessageBox.Show("Error: WS_EX_LAYERED style check failed AFTER setting it.");
-                    return; // Don't proceed if style isn't confirmed
-                }
-                System.Diagnostics.Debug.WriteLine("Style check PASSED. WS_EX_LAYERED is present.");
-                // *** END VERIFICATION STEP ***
-
-                //// 1. Get current extended window styles
-                //IntPtr currentExStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
-
-                //// 2. Add the WS_EX_LAYERED style
-                //IntPtr newExStyle = new IntPtr(currentExStyle.ToInt64() | NativeMethods.WS_EX_LAYERED);
-
-                //// 3. Set the new extended window styles
-                //IntPtr resultSetStyle = NativeMethods.SetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE, newExStyle);
-                //if (resultSetStyle == IntPtr.Zero && Marshal.GetLastWin32Error() != 0) {
-                //    MessageBox.Show($"Failed to set WS_EX_LAYERED style. Error code: {Marshal.GetLastWin32Error()}");
-                //    return;
-                //}
-
-                // 4. Define the color key (e.g., Magenta)
-                System.Drawing.Color keyColor = System.Drawing.Color.Black; // Change this to your desired transparent color
-                uint keyColorWin32 = NativeMethods.ToWin32Color(keyColor);
-
-                // 5. Set the layered window attributes for color keying
-                bool setResult = NativeMethods.SetLayeredWindowAttributes(hwnd, keyColorWin32, 0, NativeMethods.LWA_COLORKEY);
-                if (!setResult) {
-                    MessageBox.Show($"Failed to set layered window attributes. Error code: {Marshal.GetLastWin32Error()}");
-                } else {
-                    // Optional: Indicate success if desired
-                     MessageBox.Show("Transparency Key Applied Successfully!");
-                }
+                this.rdpClient.Connect();
             } catch (Exception ex) {
-                MessageBox.Show($"An error occurred: {ex.Message}");
+                MessageBox.Show($"Error connecting: {ex.Message}");
             }
         }
 
-
-        private void SetupRdpControl() {
-
-            testPanel = new System.Windows.Forms.Panel();
-            testPanel.BackColor = System.Drawing.Color.Blue; // Make it visible
-            //testPanel.Dock = DockStyle.Fill; // Test docking too
-
-            wfHost.Child = testPanel; // Assign the PANEL as the child
-
-
-            //rdpControl = new AxMsRdpClient7NotSafeForScripting();
-
-            //// Initialize the ActiveX control if needed (often done automatically)
-            //((System.ComponentModel.ISupportInitialize)(rdpControl)).BeginInit();
-            //rdpControl.Enabled = true;
-            //// Assign the ActiveX wrapper control to the WindowsFormsHost
-            //wfHost.Child = rdpControl;
-
-            //((System.ComponentModel.ISupportInitialize)(rdpControl)).EndInit();
-
-
-            //// Initial size sync (optional but can help)
-            //SynchronizeRdpSize(wfHost, wfHost.RenderSize);
-
-            //// Initialize RDP settings etc.
-            //rdpControl.Server = "10.1.1.33";
-            //rdpControl.UserName = "BradNet-Admin";
-            //rdpControl.AdvancedSettings7.ClearTextPassword = "nesjeorithsA1";
-            //rdpControl.AdvancedSettings7.SmartSizing = true;
-
-            //rdpControl.Connect();
+        private void BtnDisconnect_Click(object sender, RoutedEventArgs e) {
+            DisconnectRdp();
         }
 
-
-        private void WfHost_SizeChanged(object sender, SizeChangedEventArgs e) {
-            SynchronizeRdpSize(sender as System.Windows.Forms.Integration.WindowsFormsHost, e.NewSize);
-        }
-
-        private void SynchronizeRdpSize(System.Windows.Forms.Integration.WindowsFormsHost host, Size newSize) {
-            if (host?.Child is AxMsRdpClient7NotSafeForScripting childControl) {
-                // Check for valid size (prevents issues during load/unload)
-                if (newSize.Width > 0 && newSize.Height > 0 &&
-                    IsFinite(newSize.Width) && IsFinite(newSize.Height)) {
-                    // Set the size explicitly
-                    childControl.Width = (int)newSize.Width;
-                    childControl.Height = (int)newSize.Height;
-
-                    // -- Optional: Use BeginInvoke for potential timing issues --
-                    // If the direct setting still seems off, sometimes marshalling
-                    // the call to the WinForms UI thread helps.
-                    // childControl.BeginInvoke(new Action(() => {
-                    //     if (childControl.IsHandleCreated && !childControl.IsDisposed)
-                    //     {
-                    //        childControl.Width = (int)newSize.Width;
-                    //        childControl.Height = (int)newSize.Height;
-                    //     }
-                    // }));
+        private void DisconnectRdp() {
+            if (this.rdpClient != null && this.rdpClient.Connected == 1) // Check if connected (1=Connected, 0=Not Connected)
+           {
+                try {
+                    this.rdpClient.Disconnect();
+                } catch (Exception ex) {
+                    // Log or handle disconnection error
+                    System.Diagnostics.Debug.WriteLine($"Error disconnecting: {ex.Message}");
                 }
             }
         }
 
-        // Helper to check for valid finite numbers
-        private bool IsFinite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
 
-        // --- Remember to unsubscribe when the window closes ---
-        protected override void OnClosed(EventArgs e) {
-            if (wfHost != null) {
-                wfHost.SizeChanged -= WfHost_SizeChanged;
-                // Dispose child properly
-                wfHost.Child?.Dispose();
-                wfHost.Dispose();
-            }
-            base.OnClosed(e);
+        // --- Event Handlers ---
+
+        private void RdpClient_OnLoginComplete(object sender, EventArgs e) {
+            // Handle successful login (runs on UI thread)
+            System.Diagnostics.Debug.WriteLine("RDP Login Complete.");
         }
+
+        private void RdpClient_OnDisconnected(object sender, IMsTscAxEvents_OnDisconnectedEvent e) {
+            // Handle disconnection (runs on UI thread)
+            // e.discReason provides details about why the disconnect happened
+            MessageBox.Show($"Disconnected from RDP session. Reason code: {e.discReason}");
+            System.Diagnostics.Debug.WriteLine($"RDP Disconnected. Reason: {e.discReason}");
+        }
+
+
+        // --- Cleanup ---
+
+        private void MainWindow_Closed(object sender, EventArgs e) {
+            // Ensure disconnection and proper disposal on window close
+            DisconnectRdp();
+
+            if (this.rdpClient != null) {
+                // Unsubscribe from events to prevent memory leaks
+                this.rdpClient.OnDisconnected -= RdpClient_OnDisconnected;
+                this.rdpClient.OnLoginComplete -= RdpClient_OnLoginComplete;
+                // Unsubscribe others...
+
+                this.rdpClient.Dispose(); // Dispose the ActiveX control
+                this.rdpClient = null;
+            }
+
+            if (this.rdpHost != null) {
+                this.rdpHost.Dispose(); // Dispose the host control
+                this.rdpHost = null;
+            }
+        }
+
+        private void btnPair_Click(object sender, RoutedEventArgs e) {
+
+        }
+
+
+        //private void MainWindow_Loaded(object sender, RoutedEventArgs e) {
+        //    //// Delay the call slightly using the dispatcher
+        //    //// Use Loaded priority first, if that still fails, try Background
+        //    //Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
+        //    //    new Action(() => ApplyTransparencyToHostedControl()));
+        //}
+
+        //// You could also call this from a Button Click event handler
+        //private void ApplyTransparencyToHostedControl() {
+        //    if (testPanel == null || !testPanel.IsHandleCreated) {
+        //        MessageBox.Show("Hosted control or its handle is not ready yet.");
+        //        return;
+        //    }
+
+
+
+        //    IntPtr hwnd = testPanel.Handle;
+        //    if (hwnd == IntPtr.Zero) {
+        //        MessageBox.Show("Failed to get HWND handle for the hosted control.");
+        //        return;
+        //    }
+
+        //    System.Diagnostics.Debug.WriteLine($"ApplyTransparency - HWND: {hwnd.ToInt64()}, IsHandleCreated: {testPanel.IsHandleCreated}"); // Debug output
+
+        //    try {
+
+        //        // 1. Get current extended window styles USING THE HELPER
+        //        IntPtr currentExStyle = NativeMethods.GetWindowLongPtrHelper(hwnd, NativeMethods.GWL_EXSTYLE); // Use Helper!
+
+        //        // Check for error from GetWindowLongPtrHelper (optional but good)
+        //        if (currentExStyle == IntPtr.Zero && Marshal.GetLastWin32Error() != 0) {
+        //            MessageBox.Show($"Failed to get window extended style. Error code: {Marshal.GetLastWin32Error()}");
+        //            return;
+        //        }
+
+        //        // 2. Add the WS_EX_LAYERED style
+        //        IntPtr newExStyle = new IntPtr(currentExStyle.ToInt64() | NativeMethods.WS_EX_LAYERED);
+
+        //        // 3. Set the new extended window styles USING THE HELPER
+        //        IntPtr resultSetStyle = NativeMethods.SetWindowLongPtrHelper(hwnd, NativeMethods.GWL_EXSTYLE, newExStyle); // Use Helper!
+        //        if (resultSetStyle == IntPtr.Zero && Marshal.GetLastWin32Error() != 0) {
+        //            MessageBox.Show($"Failed to set WS_EX_LAYERED style. Error code: {Marshal.GetLastWin32Error()}");
+        //            return;
+        //        }
+
+        //        IntPtr checkExStyle = NativeMethods.GetWindowLongPtrHelper(hwnd, NativeMethods.GWL_EXSTYLE);
+        //        if ((checkExStyle.ToInt64() & NativeMethods.WS_EX_LAYERED) == 0) {
+        //            MessageBox.Show("Error: WS_EX_LAYERED style check failed AFTER setting it.");
+        //            return; // Don't proceed if style isn't confirmed
+        //        }
+        //        System.Diagnostics.Debug.WriteLine("Style check PASSED. WS_EX_LAYERED is present.");
+        //        // *** END VERIFICATION STEP ***
+
+        //        //// 1. Get current extended window styles
+        //        //IntPtr currentExStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
+
+        //        //// 2. Add the WS_EX_LAYERED style
+        //        //IntPtr newExStyle = new IntPtr(currentExStyle.ToInt64() | NativeMethods.WS_EX_LAYERED);
+
+        //        //// 3. Set the new extended window styles
+        //        //IntPtr resultSetStyle = NativeMethods.SetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE, newExStyle);
+        //        //if (resultSetStyle == IntPtr.Zero && Marshal.GetLastWin32Error() != 0) {
+        //        //    MessageBox.Show($"Failed to set WS_EX_LAYERED style. Error code: {Marshal.GetLastWin32Error()}");
+        //        //    return;
+        //        //}
+
+        //        // 4. Define the color key (e.g., Magenta)
+        //        System.Drawing.Color keyColor = System.Drawing.Color.Black; // Change this to your desired transparent color
+        //        uint keyColorWin32 = NativeMethods.ToWin32Color(keyColor);
+
+        //        // 5. Set the layered window attributes for color keying
+        //        bool setResult = NativeMethods.SetLayeredWindowAttributes(hwnd, keyColorWin32, 0, NativeMethods.LWA_COLORKEY);
+        //        if (!setResult) {
+        //            MessageBox.Show($"Failed to set layered window attributes. Error code: {Marshal.GetLastWin32Error()}");
+        //        } else {
+        //            // Optional: Indicate success if desired
+        //             MessageBox.Show("Transparency Key Applied Successfully!");
+        //        }
+        //    } catch (Exception ex) {
+        //        MessageBox.Show($"An error occurred: {ex.Message}");
+        //    }
+        //}
+
+
+        //private void SetupRdpControl() {
+
+        //    //testPanel = new System.Windows.Forms.Panel();
+        //    //testPanel.BackColor = System.Drawing.Color.Blue; // Make it visible
+        //    ////testPanel.Dock = DockStyle.Fill; // Test docking too
+
+        //    //wfHost.Child = testPanel; // Assign the PANEL as the child
+
+
+        //    //rdpControl = new AxMsRdpClient7NotSafeForScripting();
+
+        //    //// Initialize the ActiveX control if needed (often done automatically)
+        //    //((System.ComponentModel.ISupportInitialize)(rdpControl)).BeginInit();
+        //    //rdpControl.Enabled = true;
+        //    //// Assign the ActiveX wrapper control to the WindowsFormsHost
+        //    //wfHost.Child = rdpControl;
+
+        //    //((System.ComponentModel.ISupportInitialize)(rdpControl)).EndInit();
+
+
+        //    //// Initial size sync (optional but can help)
+        //    //SynchronizeRdpSize(wfHost, wfHost.RenderSize);
+
+        //    //// Initialize RDP settings etc.
+        //    //rdpControl.Server = "10.1.1.33";
+        //    //rdpControl.UserName = "BradNet-Admin";
+        //    //rdpControl.AdvancedSettings7.ClearTextPassword = "nesjeorithsA1";
+        //    //rdpControl.AdvancedSettings7.SmartSizing = true;
+
+        //    //rdpControl.Connect();
+        //}
+
+
+        //private void WfHost_SizeChanged(object sender, SizeChangedEventArgs e) {
+        //    SynchronizeRdpSize(sender as System.Windows.Forms.Integration.WindowsFormsHost, e.NewSize);
+        //}
+
+        //private void SynchronizeRdpSize(System.Windows.Forms.Integration.WindowsFormsHost host, Size newSize) {
+        //    if (host?.Child is AxMsRdpClient7NotSafeForScripting childControl) {
+        //        // Check for valid size (prevents issues during load/unload)
+        //        if (newSize.Width > 0 && newSize.Height > 0 &&
+        //            IsFinite(newSize.Width) && IsFinite(newSize.Height)) {
+        //            // Set the size explicitly
+        //            childControl.Width = (int)newSize.Width;
+        //            childControl.Height = (int)newSize.Height;
+
+        //            // -- Optional: Use BeginInvoke for potential timing issues --
+        //            // If the direct setting still seems off, sometimes marshalling
+        //            // the call to the WinForms UI thread helps.
+        //            // childControl.BeginInvoke(new Action(() => {
+        //            //     if (childControl.IsHandleCreated && !childControl.IsDisposed)
+        //            //     {
+        //            //        childControl.Width = (int)newSize.Width;
+        //            //        childControl.Height = (int)newSize.Height;
+        //            //     }
+        //            // }));
+        //        }
+        //    }
+        //}
+
+        //// Helper to check for valid finite numbers
+        //private bool IsFinite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
+
+        //// --- Remember to unsubscribe when the window closes ---
+        //protected override void OnClosed(EventArgs e) {
+        //    if (wfHost != null) {
+        //        wfHost.SizeChanged -= WfHost_SizeChanged;
+        //        // Dispose child properly
+        //        wfHost.Child?.Dispose();
+        //        wfHost.Dispose();
+        //    }
+        //    base.OnClosed(e);
+        //}
 
     }
 }

@@ -108,12 +108,12 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Components\AudioPipeHandler.cs" />
-    <Compile Include="Components\AvMuxPipe.cs" />
+    <Compile Include="Components\Native Decoding\H264Decoder.cs" />
     <Compile Include="Components\Logger.cs" />
     <Compile Include="Components\M2TS.cs" />
     <Compile Include="Components\NamedPipeClient.cs" />
     <Compile Include="Components\NamedPipeServer.cs" />
+    <Compile Include="Components\Native Decoding\PcmAudioDecoder.cs" />
     <Compile Include="Components\PipeStreamWrapperBase.cs" />
     <Compile Include="Components\RDPVCInterface.cs" />
     <Compile Include="Components\RTSPClient.cs" />
@@ -200,6 +200,9 @@
     <Compile Include="RTSP\Sdp\SdpTimeZone.cs" />
     <Compile Include="RTSP\Sdp\Timing.cs" />
     <Compile Include="RTSP\UdpSocket.cs" />
+    <Compile Include="VideoForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="XBox360Device.cs" />
     <EmbeddedResource Include="Form1.resx">
       <SubType>Designer</SubType>
@@ -243,25 +246,11 @@
     <None Include="Certificates\Xbox360.cer">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <Compile Include="Components\NalUnitPipeHandler.cs" />
-    <None Include="KeyExchange\2\devicecert.cer" />
-    <None Include="KeyExchange\2\hostcert.cer" />
-    <None Include="KeyExchange\Wireshark Captures\Linksys 2200 Setup.cap" />
+    <Compile Include="Components\Native Decoding\FrameConverter.cs" />
     <None Include="packages.config" />
     <None Include="Properties\Settings.settings">
       <Generator>SettingsSingleFileGenerator</Generator>
       <LastGenOutput>Settings.Designer.cs</LastGenOutput>
-    </None>
-    <None Include="Tools\IntelDigitalHomeDeviceCodeWizard.zip" />
-    <None Include="Tools\IntelToolsForUPnPTechnology_v2.zip" />
-    <None Include="VChan\devcaps\Disabled">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Include="VChan\devcaps\Enabled">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <None Include="VChan\devcaps\Initial">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
     <Compile Include="Properties\Settings.Designer.cs">
       <AutoGen>True</AutoGen>
@@ -277,17 +266,6 @@
     <Content Include="Certificates\SoftSledPrivateKey.xml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="KeyExchange\1\KeyExchange1.xml" />
-    <Content Include="KeyExchange\1\KeyExchange2.xml" />
-    <Content Include="KeyExchange\1\KeyExchange3.xml" />
-    <Content Include="KeyExchange\1\KeyExchange4.xml" />
-    <Content Include="KeyExchange\1\KeyExchange5.xml" />
-    <Content Include="KeyExchange\1\KeyExchange6.xml" />
-    <Content Include="KeyExchange\1\KeyExchange7.xml" />
-    <Content Include="KeyExchange\1\KeyExchangeConfirm.xml" />
-    <Content Include="KeyExchange\2\CertificateAuthorities.txt" />
-    <Content Include="KeyExchange\2\FullKeyExchange.txt" />
-    <Content Include="KeyExchange\2\TempFile.xml" />
     <Content Include="RDPVCManager.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

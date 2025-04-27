@@ -70,13 +70,75 @@
       <DependentUpon>App.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="Components\AudioVisual\WindowsSystemAudio.cs" />
+    <Compile Include="Components\AudioVisual\WmrptAudioDepacketizer.cs" />
+    <Compile Include="Components\AudioVisual\WmrptVideoDepacketizer.cs" />
+    <Compile Include="Components\Communication\DSLRCommunication.cs" />
+    <Compile Include="Components\Configuration\SoftSledConfig.cs" />
+    <Compile Include="Components\Configuration\SoftSledConfigManager.cs" />
+    <Compile Include="Components\Diagnostics\Logger.cs" />
+    <Compile Include="Components\Diagnostics\TextBoxLogger.cs" />
+    <Compile Include="Components\Communication\NamedPipeClient.cs" />
+    <Compile Include="Components\Communication\NamedPipeServer.cs" />
+    <Compile Include="Components\Communication\PipeStreamWrapperBase.cs" />
+    <Compile Include="Components\RTSP\AACPayload.cs" />
+    <Compile Include="Components\RTSP\AMRPayload.cs" />
+    <Compile Include="Components\RTSP\Authentication.cs" />
+    <Compile Include="Components\RTSP\BitStream.cs" />
+    <Compile Include="Components\RTSP\G711Payload.cs" />
+    <Compile Include="Components\RTSP\H264Payload.cs" />
+    <Compile Include="Components\RTSP\H265Payload.cs" />
+    <Compile Include="Components\RTSP\IRTSPTransport.cs" />
+    <Compile Include="Components\RTSP\Messages\PortCouple.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPChunk.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPData.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPHeaderNames.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPMessage.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPRequest.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPRequestAnnounce.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPRequestDescribe.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPRequestGetParameter.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPRequestOptions.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPRequestPause.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPRequestPlay.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPRequestRecord.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPRequestSetup.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPRequestTeardown.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPResponse.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPTransport.cs" />
+    <Compile Include="Components\RTSP\RTSPClient.cs" />
+    <Compile Include="Components\RTSP\RTSPListener.cs" />
+    <Compile Include="Components\RTSP\RTSPMessageEventArgs.cs" />
+    <Compile Include="Components\RTSP\RTSPTCPTransport.cs" />
+    <Compile Include="Components\RTSP\RTSPUtils.cs" />
+    <Compile Include="Components\RTSP\Sdp\Attribut.cs" />
+    <Compile Include="Components\RTSP\Sdp\AttributFmtp.cs" />
+    <Compile Include="Components\RTSP\Sdp\AttributRtpMap.cs" />
+    <Compile Include="Components\RTSP\Sdp\Bandwidth.cs" />
+    <Compile Include="Components\RTSP\Sdp\Connection.cs" />
+    <Compile Include="Components\RTSP\Sdp\ConnectionIP4.cs" />
+    <Compile Include="Components\RTSP\Sdp\ConnectionIP6.cs" />
+    <Compile Include="Components\RTSP\Sdp\EncriptionKey.cs" />
+    <Compile Include="Components\RTSP\Sdp\H264Parameter.cs" />
+    <Compile Include="Components\RTSP\Sdp\H265Parameter.cs" />
+    <Compile Include="Components\RTSP\Sdp\Media.cs" />
+    <Compile Include="Components\RTSP\Sdp\Origin.cs" />
+    <Compile Include="Components\RTSP\Sdp\SdpFile.cs" />
+    <Compile Include="Components\RTSP\Sdp\SdpTimeZone.cs" />
+    <Compile Include="Components\RTSP\Sdp\Timing.cs" />
+    <Compile Include="Components\RTSP\UdpSocket.cs" />
+    <Compile Include="Components\Utility\DataUtilities.cs" />
+    <Compile Include="Components\VirtualChannel\RDPVCInterface.cs" />
+    <Compile Include="Components\VirtualChannel\VirtualChannelAvCtrlHandler.cs" />
+    <Compile Include="Components\VirtualChannel\VirtualChannelDevCapsHandler.cs" />
+    <Compile Include="Components\VirtualChannel\VirtualChannelMcxSessHandler.cs" />
+    <Compile Include="Components\VirtualChannel\VirtualChannelSendArgs.cs" />
     <Compile Include="MainWindow.xaml.cs">
       <DependentUpon>MainWindow.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="NativeMethods.cs" />
     <Compile Include="Properties\AssemblyInfo.cs">
       <SubType>Code</SubType>
     </Compile>

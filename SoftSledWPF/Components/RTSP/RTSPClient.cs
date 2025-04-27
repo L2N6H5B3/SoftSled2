@@ -1,6 +1,6 @@
-﻿using FFmpeg.AutoGen;
+﻿//using FFmpeg.AutoGen;
 using Rtsp.Messages;
-using SoftSled.Components.WmrptHandling;
+using SoftSled.Components.AudioVisual;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -8,7 +8,6 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
-using WinFormsVideoPlayer;
 
 namespace SoftSled.Components.RTSP {
     class RTSPClient {
@@ -88,7 +87,6 @@ namespace SoftSled.Components.RTSP {
         //AudioPipeHandler audioPipeHandler = null;
         //AvPipeMuxer muxer = null;
 
-        VideoForm videoForm = new VideoForm();
         WmrptVideoDepacketizer videoDepacketizer = null;
         WmrptAudioDepacketizer audioDepacketizer = null;
         List<Rtsp.Messages.RtspRequestSetup> setup_messages = new List<Rtsp.Messages.RtspRequestSetup>(); // setup messages still to send
@@ -186,15 +184,11 @@ namespace SoftSled.Components.RTSP {
                 Array.Copy(AnnexBStartCode, 0, annexedArray, 0, AnnexBStartCode.Length);
                 Array.Copy(nalUnit, 0, annexedArray, AnnexBStartCode.Length, AnnexBStartCode.Length);
 
-                videoForm.videoDecoder.DecodeNalUnits(annexedArray, annexedArray.Length, ffmpeg.AV_NOPTS_VALUE);
+                //videoForm.videoDecoder.DecodeNalUnits(annexedArray, annexedArray.Length, ffmpeg.AV_NOPTS_VALUE);
             };
             //audioDepacketizer.AudioDataReady += async (s, audioFrame) => { // Assuming NalUnitReady for audio too
             //    await muxer.ProcessAudioDataAsync(audioFrame);
             //};
-
-            videoForm.Visible = true;
-
-
 
 
             ////nalHandler = new NalUnitHandling.Pipe.NalUnitPipeHandler(ffmpegPath, ffmpegArgs);
