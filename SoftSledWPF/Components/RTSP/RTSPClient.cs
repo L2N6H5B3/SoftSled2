@@ -1,4 +1,4 @@
-﻿//using FFmpeg.AutoGen;
+﻿using FFmpeg.AutoGen;
 using Rtsp.Messages;
 using SoftSled.Components.AudioVisual;
 using System;
@@ -23,7 +23,6 @@ namespace SoftSled.Components.RTSP {
         public event Received_G711_Delegate Received_G711;
         public event Received_AMR_Delegate Received_AMR;
         public event Received_AAC_Delegate Received_AAC;
-        //public event Received_WMF_Delegate Received_WMF;
 
         // Delegated functions (essentially the function prototype)
         public delegate void Received_SPS_PPS_Delegate(byte[] sps, byte[] pps); // H264
@@ -45,9 +44,14 @@ namespace SoftSled.Components.RTSP {
         Rtsp.UDPSocket audio_udp_pair = null;                   // Pair of UDP ports used in RTP over UDP mode or in MULTICAST mode
         string url = "";                                        // RTSP URL (username & password will be stripped out
         string base_url = "";                                   // RTSP Base URL
+        string username = "";                                   // Username
+        string password = "";                                   // Password
         string hostname = "";                                   // RTSP Server hostname or IP address
         int port = 0;                                           // RTSP Server TCP Port number
         string session = "";                                    // RTSP Session
+        string auth_type = null;                                // cached from most recent WWW-Authenticate reply
+        string realm = null;                                    // cached from most recent WWW-Authenticate reply
+        string nonce = null;                                    // cached from most recent WWW-Authenticate reply
         uint ssrc = 12345;
         bool client_wants_video = false;                        // Client wants to receive Video
         bool client_wants_audio = false;                        // Client wants to receive Audio
@@ -78,14 +82,44 @@ namespace SoftSled.Components.RTSP {
         Rtsp.G711Payload g711Payload = new Rtsp.G711Payload();
         Rtsp.AMRPayload amrPayload = new Rtsp.AMRPayload();
         Rtsp.AACPayload aacPayload = null;
-        //H264DecoderView decoder = null;
-        WmrptVideoDepacketizer videoDepacketizer = null;
+        //M2TsHandling.Pipe.RtpPipeHandler m2tsPipeHandler = null;
+        //NalUnitHandling.Pipe.NalUnitPipeHandler nalHandler = null;
+        //AudioPipeHandler audioPipeHandler = null;
+        AvPipeMuxer muxer = null;
 
-        List<RtspRequestSetup> setup_messages = new List<RtspRequestSetup>(); // setup messages still to send
+        //VideoForm videoForm = new VideoForm();
+        WmrptVideoDepacketizer videoDepacketizer = null;
+        WmrptAudioDepacketizer audioDepacketizer = null;
+        List<Rtsp.Messages.RtspRequestSetup> setup_messages = new List<Rtsp.Messages.RtspRequestSetup>(); // setup messages still to send
 
         // Constructor
         public RTSPClient() {
-            //this.decoder = decoder;
+            // Example arguments: Just demux and discard output (for testing connection)
+            //string ffmpegArgs = "-hide_banner -loglevel error -f mpegts -i pipe:0 -f null -";
+            //string ffplayArgs = "-loglevel debug -f mpegts -i pipe:0";
+            //string ffplayArgs = "-loglevel debug -probesize 5M -analyzeduration 10M -f mpegts -i pipe:0";
+            //string ffplayArgs = "-loglevel debug -f asf -i pipe:0";
+            //string ffplayArgs = "-loglevel debug -video_size 1920x1080 -f h264 -i pipe:0";
+            //string ffplayArgs = "-loglevel debug -f h264 -i pipe:0";
+            //string ffplayArgs = "-loglevel debug -probesize 5M -analyzeduration 10M -f h264 -i pipe:0";
+            //string ffplayArgs = "-loglevel debug -f h264 -i pipe:0 -video_size 720x480";
+            //Example arguments: Output raw BGRA video to stdout (requires reading stdout)
+            // string ffmpegArgs = "-hide_banner -loglevel error -f mpegts -i pipe:0 -vf format=pix_fmts=bgra -f rawvideo pipe:1";
+            // Example arguments: Copy streams to a file
+            // string ffmpegArgs = "-hide_banner -loglevel error -f mpegts -i pipe:0 -c copy output.ts";
+
+            //string ffmpegPath = @"C:\Users\Luke\source\repos\SoftSled2\SoftSled\bin\x86\Debug\ffmpeg.exe"; // CHANGE THIS
+            //// Args tell ffmpeg to expect H.264 with size from pipe, decode it, and discard output. Log verbosely.
+            //string ffmpegArgs = $" - loglevel debug -f h264 -i pipe:0 -f null -";
+
+            //int mpegTsPayloadType = 113; // Or the actual type from SDP
+
+
+
+
+            // --- Configuration ---
+            string ffmpegPath = @"C:\Users\Luke\source\repos\SoftSled2\SoftSled\bin\x86\Debug\ffmpeg.exe";
+            string ffplayPath = @"C:\Users\Luke\source\repos\SoftSled2\SoftSled\bin\x86\Debug\ffplay.exe";
 
             // Payload types from SDP
             int videoPayloadType = 4; // Example: H.264 1280x720
@@ -101,7 +135,7 @@ namespace SoftSled.Components.RTSP {
             // --- Initialization ---
             videoDepacketizer = new WmrptVideoDepacketizer();
             // var audioDepacketizer = new YourAudioDepacketizer(audioPayloadType); // Replace with your audio handler
-            //audioDepacketizer = new WmrptAudioDepacketizer(); // Use Wmrpt if audio also uses x-wmf-pf
+            audioDepacketizer = new WmrptAudioDepacketizer(); // Use Wmrpt if audio also uses x-wmf-pf
 
 
 
@@ -133,32 +167,35 @@ namespace SoftSled.Components.RTSP {
 
 
 
-            //muxer = new AvPipeMuxer(
-            //    ffmpegPath, ffplayPath, videoFormat, audioFormat, audioSampleRate, audioChannels,
-            //    videoPipeName: "mcxVidPipe", audioPipeName: "mcxAudPipe");
+            muxer = new AvPipeMuxer(
+                ffmpegPath, ffplayPath, videoFormat, audioFormat, audioSampleRate, audioChannels,
+                videoPipeName: "mcxVidPipe", audioPipeName: "mcxAudPipe");
 
-            //// Subscribe to logs
-            //muxer.FfmpegErrorDataReceived += (s, e) => Trace.WriteLine($"FFMPEG: {e}");
-            //muxer.FfplayErrorDataReceived += (s, e) => Trace.WriteLine($"FFPLAY: {e}");
+            // Subscribe to logs
+            muxer.FfmpegErrorDataReceived += (s, e) => Trace.WriteLine($"FFMPEG: {e}");
+            muxer.FfplayErrorDataReceived += (s, e) => Trace.WriteLine($"FFPLAY: {e}");
 
             //// Subscribe to depacketizer outputs
             videoDepacketizer.NalUnitReady += async (s, nalUnit) => {
                 // Assuming NAL units come one by one, collect them into frames if needed
                 // For simplicity here, processing individually (adjust if needed)
-                //await muxer.ProcessVideoFrameNalUnitsAsync(new List<byte[]> { nalUnit });
+                await muxer.ProcessVideoFrameNalUnitsAsync(new List<byte[]> { nalUnit });
 
-                byte[] annexedArray = new byte[nalUnit.Length + AnnexBStartCode.Length];
-                Array.Copy(AnnexBStartCode, 0, annexedArray, 0, AnnexBStartCode.Length);
-                Array.Copy(nalUnit, 0, annexedArray, AnnexBStartCode.Length, AnnexBStartCode.Length);
-
-                //decoder.ReceiveNalUnit(nalUnit);
+                //byte[] annexedArray = new byte[nalUnit.Length + AnnexBStartCode.Length];
+                //Array.Copy(AnnexBStartCode, 0, annexedArray, 0, AnnexBStartCode.Length);
+                //Array.Copy(nalUnit, 0, annexedArray, AnnexBStartCode.Length, AnnexBStartCode.Length);
 
                 //videoForm.videoDecoder.DecodeNalUnits(annexedArray, annexedArray.Length, ffmpeg.AV_NOPTS_VALUE);
             };
-            //audioDepacketizer.AudioDataReady += async (s, audioFrame) => { // Assuming NalUnitReady for audio too
-            //    await muxer.ProcessAudioDataAsync(audioFrame);
-            //};
+            audioDepacketizer.AudioDataReady += async (s, audioFrame) => { // Assuming NalUnitReady for audio too
+                await muxer.ProcessAudioDataAsync(audioFrame);
+            };
 
+            // --- Start Playback ---
+            if (!muxer.Start()) {
+                Console.WriteLine("Failed to start muxer processes.");
+                return;
+            }
 
             ////nalHandler = new NalUnitHandling.Pipe.NalUnitPipeHandler(ffmpegPath, ffmpegArgs);
             //nalHandler = new NalUnitHandling.Pipe.NalUnitPipeHandler(ffplayPath, ffplayArgs);
@@ -169,7 +206,7 @@ namespace SoftSled.Components.RTSP {
 
             //videoDepacketizer.NalUnitReady += async (sender, nalUnit) => {
             //    // Trace.WriteLine($"Depacketizer output NAL Unit, Size: {nalUnit.Length}");
-            //    if (decoder != null) // Check if handler is still valid
+            //    if (nalHandler != null) // Check if handler is still valid
             //    {
             //        // Option 1: Process individual NALs
             //        await nalHandler.ProcessNalUnitAsync(nalUnit);
@@ -203,9 +240,23 @@ namespace SoftSled.Components.RTSP {
             System.Diagnostics.Debug.WriteLine("Connecting to " + url);
             this.url = url;
 
-            Uri uri = new Uri(this.url);
-            hostname = uri.Host;
-            port = uri.Port;
+            // Use URI to extract username and password
+            // and to make a new URL without the username and password
+            try {
+                Uri uri = new Uri(this.url);
+                hostname = uri.Host;
+                port = uri.Port;
+
+                if (uri.UserInfo.Length > 0) {
+                    username = uri.UserInfo.Split(new char[] { ':' })[0];
+                    password = uri.UserInfo.Split(new char[] { ':' })[1];
+                    this.url = uri.GetComponents((UriComponents.AbsoluteUri & ~UriComponents.UserInfo),
+                                                 UriFormat.UriEscaped);
+                }
+            } catch {
+                username = null;
+                password = null;
+            }
 
             // We can ask the RTSP server for Video, Audio or both. If we don't want audio we don't need to SETUP the audio channal or receive it
             client_wants_video = false;
@@ -273,13 +324,16 @@ namespace SoftSled.Components.RTSP {
             //rtsp_client.SendMessage(options_message);
 
             // Send DESCRIBE
-            RtspRequest describe_message = new RtspRequestDescribe();
+            Rtsp.Messages.RtspRequest describe_message = new Rtsp.Messages.RtspRequestDescribe();
             describe_message.RtspUri = new Uri(url);
             describe_message.AddHeader("Accept: application/sdp");
             describe_message.AddHeader("Accept-Language: en-us, *;q=0.1");
             //describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
             describe_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
             describe_message.AddHeader(UserAgent);
+            if (auth_type != null) {
+                AddAuthorization(describe_message, username, password, auth_type, realm, nonce, url);
+            }
             rtsp_client.SendMessage(describe_message);
         }
 
@@ -294,29 +348,32 @@ namespace SoftSled.Components.RTSP {
         public void Pause() {
             if (rtsp_client != null) {
                 // Send PAUSE
-                RtspRequest pause_message = new RtspRequestPause();
+                Rtsp.Messages.RtspRequest pause_message = new Rtsp.Messages.RtspRequestPause();
                 pause_message.RtspUri = new Uri(url);
                 pause_message.Session = session;
                 pause_message.AddHeader("Accept-Language: en-us, *;q=0.1");
                 //pause_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                 pause_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
                 pause_message.AddHeader(UserAgent);
+                if (auth_type != null) {
+                    AddAuthorization(pause_message, username, password, auth_type, realm, nonce, url);
+                }
                 rtsp_client.SendMessage(pause_message);
             }
         }
 
-        public void Play(long startTime) {
+        public void Play() {
             if (rtsp_client != null) {
                 // Send PLAY
-                RtspRequest play_message = new RtspRequestPlay();
+                RtspRequest play_message = new Rtsp.Messages.RtspRequestPlay();
                 play_message.RtspUri = new Uri(url);
                 play_message.Session = session;
                 play_message.AddHeader("Accept-Language: en-us, *;q=0.1");
                 //play_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                 play_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
                 play_message.AddHeader(UserAgent);
-                if (startTime != 0) {
-                    play_message.AddHeader($"Range: npt={startTime}-");
+                if (auth_type != null) {
+                    AddAuthorization(play_message, username, password, auth_type, realm, nonce, url);
                 }
                 rtsp_client.SendMessage(play_message);
             }
@@ -324,15 +381,22 @@ namespace SoftSled.Components.RTSP {
 
         public void Stop() {
 
+            //nalHandler.Stop();
+            //audioPipeHandler.Stop();
+            //muxer.Stop();
+
             if (rtsp_client != null) {
                 // Send TEARDOWN
-                RtspRequest teardown_message = new RtspRequestTeardown();
+                Rtsp.Messages.RtspRequest teardown_message = new Rtsp.Messages.RtspRequestTeardown();
                 teardown_message.RtspUri = new Uri(url);
                 teardown_message.Session = session;
                 teardown_message.AddHeader("Accept-Language: en-us, *;q=0.1");
                 //teardown_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                 teardown_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
                 teardown_message.AddHeader("User-Agent: MCExtender/1.0.0.0");
+                if (auth_type != null) {
+                    AddAuthorization(teardown_message, username, password, auth_type, realm, nonce, url);
+                }
                 rtsp_client.SendMessage(teardown_message);
             }
 
@@ -519,7 +583,7 @@ namespace SoftSled.Components.RTSP {
                     // Copy the RTP Payload to the Byte Array
                     Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length);
                     // Process the WMRPT PayLoad
-                    //audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number);
+                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number);
                     return;
                 }
 
@@ -713,7 +777,46 @@ namespace SoftSled.Components.RTSP {
                     return;
                 }
 
+                // Check if the Reply has an Authenticate header.
+                if (message.ReturnCode == 401 && message.Headers.ContainsKey(RtspHeaderNames.WWWAuthenticate)) {
+
+                    // Process the WWW-Authenticate header
+                    // EG:   Basic realm="AProxy"
+                    // EG:   Digest realm="AXIS_WS_ACCC8E3A0A8F", nonce="000057c3Y810622bff50b36005eb5efeae118626a161bf", stale=FALSE
+                    // EG:   Digest realm="IP Camera(21388)", nonce="534407f373af1bdff561b7b4da295354", stale="FALSE"
+
+                    string www_authenticate = message.Headers[RtspHeaderNames.WWWAuthenticate];
+                    string auth_params = "";
+
+                    if (www_authenticate.StartsWith("basic", StringComparison.InvariantCultureIgnoreCase)) {
+                        auth_type = "Basic";
+                        auth_params = www_authenticate.Substring(5);
+                    }
+                    if (www_authenticate.StartsWith("digest", StringComparison.InvariantCultureIgnoreCase)) {
+                        auth_type = "Digest";
+                        auth_params = www_authenticate.Substring(6);
+                    }
+
+                    string[] items = auth_params.Split(new char[] { ',' }); // NOTE, does not handle Commas in Quotes
+
+                    foreach (string item in items) {
+                        // Split on the = symbol and update the realm and nonce
+                        string[] parts = item.Trim().Split(new char[] { '=' }, 2); // max 2 parts in the results array
+                        if (parts.Count() >= 2 && parts[0].Trim().Equals("realm")) {
+                            realm = parts[1].Trim(new char[] { ' ', '\"' }); // trim space and quotes
+                        } else if (parts.Count() >= 2 && parts[0].Trim().Equals("nonce")) {
+                            nonce = parts[1].Trim(new char[] { ' ', '\"' }); // trim space and quotes
+                        }
+                    }
+
+                    System.Diagnostics.Debug.WriteLine("WWW Authorize parsed for " + auth_type + " " + realm + " " + nonce);
+                }
+
                 RtspMessage resend_message = message.OriginalRequest.Clone() as RtspMessage;
+
+                if (auth_type != null) {
+                    AddAuthorization(resend_message, username, password, auth_type, realm, nonce, url);
+                }
 
                 rtsp_client.SendMessage(resend_message);
 
@@ -751,6 +854,9 @@ namespace SoftSled.Components.RTSP {
                     //describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                     describe_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
                     describe_message.AddHeader(UserAgent);
+                    if (auth_type != null) {
+                        AddAuthorization(describe_message, username, password, auth_type, realm, nonce, url);
+                    }
                     rtsp_client.SendMessage(describe_message);
                 } else {
                     // If the Keepalive Timer was not null, the OPTIONS reply may have come from a Keepalive
@@ -1026,6 +1132,9 @@ namespace SoftSled.Components.RTSP {
                         //setup_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                         setup_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
                         setup_message.AddHeader(UserAgent);
+                        if (auth_type != null) {
+                            AddAuthorization(setup_message, username, password, auth_type, realm, nonce, url);
+                        }
 
                         // Add SETUP message to list of messages to send
                         setup_messages.Add(setup_message);
@@ -1113,6 +1222,9 @@ namespace SoftSled.Components.RTSP {
                     //play_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                     play_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
                     play_message.AddHeader(UserAgent);
+                    if (auth_type != null) {
+                        AddAuthorization(play_message, username, password, auth_type, realm, nonce, url);
+                    }
                     rtsp_client.SendMessage(play_message);
                 }
             }
@@ -1124,6 +1236,12 @@ namespace SoftSled.Components.RTSP {
                     System.Diagnostics.Debug.WriteLine("Got Error in PLAY Reply " + message.ReturnCode + " " + message.ReturnMessage);
                     return;
                 }
+
+                //// --- Start Playback ---
+                //if (!muxer.Start()) {
+                //    Console.WriteLine("Failed to start muxer.");
+                //    return;
+                //}
 
                 System.Diagnostics.Debug.WriteLine("Got reply from Play  " + message.Command);
             }
@@ -1147,6 +1265,9 @@ namespace SoftSled.Components.RTSP {
                 //getparam_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                 getparam_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
                 getparam_message.AddHeader(UserAgent);
+                if (auth_type != null) {
+                    AddAuthorization(getparam_message, username, password, auth_type, realm, nonce, url);
+                }
                 rtsp_client.SendMessage(getparam_message);
 
             } else {
@@ -1157,8 +1278,53 @@ namespace SoftSled.Components.RTSP {
                 //options_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                 options_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
                 options_message.AddHeader(UserAgent);
+                if (auth_type != null) {
+                    AddAuthorization(options_message, username, password, auth_type, realm, nonce, url);
+                }
                 rtsp_client.SendMessage(options_message);
             }
+        }
+
+        // Generate Basic or Digest Authorization
+        public void AddAuthorization(RtspMessage message, string username, string password,
+            string auth_type, string realm, string nonce, string url) {
+
+            if (username == null || username.Length == 0) return;
+            if (password == null || password.Length == 0) return;
+            if (realm == null || realm.Length == 0) return;
+            if (auth_type.Equals("Digest") && (nonce == null || nonce.Length == 0)) return;
+
+            if (auth_type.Equals("Basic")) {
+                byte[] credentials = System.Text.Encoding.UTF8.GetBytes(username + ":" + password);
+                String credentials_base64 = Convert.ToBase64String(credentials);
+                String basic_authorization = "Basic " + credentials_base64;
+
+                message.Headers.Add(RtspHeaderNames.Authorization, basic_authorization);
+
+                return;
+            } else if (auth_type.Equals("Digest")) {
+
+                string method = message.Method; // DESCRIBE, SETUP, PLAY etc
+
+                MD5 md5 = System.Security.Cryptography.MD5.Create();
+                String hashA1 = CalculateMD5Hash(md5, username + ":" + realm + ":" + password);
+                String hashA2 = CalculateMD5Hash(md5, method + ":" + url);
+                String response = CalculateMD5Hash(md5, hashA1 + ":" + nonce + ":" + hashA2);
+
+                const String quote = "\"";
+                String digest_authorization = "Digest username=" + quote + username + quote + ", "
+                    + "realm=" + quote + realm + quote + ", "
+                    + "nonce=" + quote + nonce + quote + ", "
+                    + "uri=" + quote + url + quote + ", "
+                    + "response=" + quote + response + quote;
+
+                message.Headers.Add(RtspHeaderNames.Authorization, digest_authorization);
+
+                return;
+            } else {
+                return;
+            }
+
         }
 
         // MD5 (lower case)

@@ -38,6 +38,8 @@ namespace SoftSledWPF {
             InitializeComponent();
             this.Loaded += MainWindow_Loaded;
             this.Closed += MainWindow_Closed; // Add handler for cleanup
+
+            Unosquare.FFME.Library.FFmpegDirectory = @"C:\ffmpeg\x86\bin";
         }
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e) {
@@ -67,6 +69,7 @@ namespace SoftSledWPF {
             rdpVCInterface = new RDPVCInterface();
             rdpVCInterface.DataReceived += RdpVCInterface_DataReceived;
 
+            //Media.
 
             // Create VirtualChannel Handlers
             McxSessHandler = new VirtualChannelMcxSessHandler(m_logger);

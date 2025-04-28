@@ -6,6 +6,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:SoftSledWPF"
+        xmlns:ffme="clr-namespace:Unosquare.FFME;assembly=ffme.win"
         mc:Ignorable="d"
         AllowsTransparency="False"
         Title="MainWindow" Height="720" Width="1580">
@@ -28,6 +29,7 @@
         <wfi:WindowsFormsHost Grid.Row="1" Grid.ColumnSpan="1" Grid.RowSpan="2" Name="rdpHost" Margin="5"/>
         <TextBox Name="loggerTextBox" Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="1" Margin="5" TextWrapping="Wrap" Width="290"/>
         <Image Name="VideoImageDisplay" Grid.Row="2" Grid.Column="2" Grid.ColumnSpan="1" Grid.RowSpan="1" Margin="5" VerticalAlignment="Bottom" />
-
+        <Frame Content="Frame" Grid.Column="1" HorizontalAlignment="Left" Height="100" Margin="538,858,-338,-299" Grid.Row="1" VerticalAlignment="Top" Width="100"/>
+        <ffme:MediaElement x:Name="Media" Background="Gray" LoadedBehavior="Play" UnloadedBehavior="Manual" />
     </Grid>
 </Window>
