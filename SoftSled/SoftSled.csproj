@@ -108,6 +108,7 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Components\AvMuxPipe.cs" />
     <Compile Include="Components\Native Decoding\H264Decoder.cs" />
     <Compile Include="Components\Logger.cs" />
     <Compile Include="Components\M2TS.cs" />

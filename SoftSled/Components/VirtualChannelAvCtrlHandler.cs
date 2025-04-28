@@ -198,12 +198,12 @@ namespace SoftSled.Components {
                         m_logger.LogDebug($"AVCTRL: OpenMedia ({OpenMediaPayloadURL})");
 
                         DMCTOpenMediaURL = OpenMediaPayloadURL;
-                        //Debug.WriteLine(DMCTOpenMediaURL);
+                        Debug.WriteLine(DMCTOpenMediaURL);
 
                         rtspClient = new RTSPClient();
                         rtspClient.Connect(DMCTOpenMediaURL, RTSPClient.RTP_TRANSPORT.UDP, RTSPClient.MEDIA_REQUEST.VIDEO_AND_AUDIO);
 
-                        
+
 
 
                         //RTSPHandler.StartRtsp(DMCTOpenMediaURL);

@@ -23,6 +23,7 @@ namespace SoftSled.Components.RTSP {
         public event Received_G711_Delegate Received_G711;
         public event Received_AMR_Delegate Received_AMR;
         public event Received_AAC_Delegate Received_AAC;
+        //public event Received_WMF_Delegate Received_WMF;
 
         // Delegated functions (essentially the function prototype)
         public delegate void Received_SPS_PPS_Delegate(byte[] sps, byte[] pps); // H264
@@ -77,17 +78,14 @@ namespace SoftSled.Components.RTSP {
         Rtsp.G711Payload g711Payload = new Rtsp.G711Payload();
         Rtsp.AMRPayload amrPayload = new Rtsp.AMRPayload();
         Rtsp.AACPayload aacPayload = null;
-
+        //H264DecoderView decoder = null;
+        WmrptVideoDepacketizer videoDepacketizer = null;
 
         List<RtspRequestSetup> setup_messages = new List<RtspRequestSetup>(); // setup messages still to send
 
         // Constructor
         public RTSPClient() {
-            
-
-            // --- Configuration ---
-            string ffmpegPath = @"C:\Users\Luke\source\repos\SoftSled2\SoftSled\bin\x86\Debug\ffmpeg.exe";
-            string ffplayPath = @"C:\Users\Luke\source\repos\SoftSled2\SoftSled\bin\x86\Debug\ffplay.exe";
+            //this.decoder = decoder;
 
             // Payload types from SDP
             int videoPayloadType = 4; // Example: H.264 1280x720
@@ -103,7 +101,7 @@ namespace SoftSled.Components.RTSP {
             // --- Initialization ---
             videoDepacketizer = new WmrptVideoDepacketizer();
             // var audioDepacketizer = new YourAudioDepacketizer(audioPayloadType); // Replace with your audio handler
-            audioDepacketizer = new WmrptAudioDepacketizer(); // Use Wmrpt if audio also uses x-wmf-pf
+            //audioDepacketizer = new WmrptAudioDepacketizer(); // Use Wmrpt if audio also uses x-wmf-pf
 
 
 
@@ -153,6 +151,8 @@ namespace SoftSled.Components.RTSP {
                 Array.Copy(AnnexBStartCode, 0, annexedArray, 0, AnnexBStartCode.Length);
                 Array.Copy(nalUnit, 0, annexedArray, AnnexBStartCode.Length, AnnexBStartCode.Length);
 
+                //decoder.ReceiveNalUnit(nalUnit);
+
                 //videoForm.videoDecoder.DecodeNalUnits(annexedArray, annexedArray.Length, ffmpeg.AV_NOPTS_VALUE);
             };
             //audioDepacketizer.AudioDataReady += async (s, audioFrame) => { // Assuming NalUnitReady for audio too
@@ -169,7 +169,7 @@ namespace SoftSled.Components.RTSP {
 
             //videoDepacketizer.NalUnitReady += async (sender, nalUnit) => {
             //    // Trace.WriteLine($"Depacketizer output NAL Unit, Size: {nalUnit.Length}");
-            //    if (nalHandler != null) // Check if handler is still valid
+            //    if (decoder != null) // Check if handler is still valid
             //    {
             //        // Option 1: Process individual NALs
             //        await nalHandler.ProcessNalUnitAsync(nalUnit);
@@ -1104,21 +1104,17 @@ namespace SoftSled.Components.RTSP {
                     rtsp_client.SendMessage(next_setup);
 
                     setup_messages.RemoveAt(0);
+                } else {
+                    // Send PLAY
+                    Rtsp.Messages.RtspRequest play_message = new Rtsp.Messages.RtspRequestPlay();
+                    play_message.RtspUri = new Uri(url);
+                    play_message.Session = session;
+                    play_message.AddHeader("Accept-Language: en-us, *;q=0.1");
+                    //play_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                    play_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
+                    play_message.AddHeader(UserAgent);
+                    rtsp_client.SendMessage(play_message);
                 }
-                //else {
-                //    // Send PLAY
-                //    Rtsp.Messages.RtspRequest play_message = new Rtsp.Messages.RtspRequestPlay();
-                //    play_message.RtspUri = new Uri(url);
-                //    play_message.Session = session;
-                //    play_message.AddHeader("Accept-Language: en-us, *;q=0.1");
-                //    //play_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-                //    play_message.AddHeader("Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile");
-                //    play_message.AddHeader(UserAgent);
-                //    if (auth_type != null) {
-                //        AddAuthorization(play_message, username, password, auth_type, realm, nonce, url);
-                //    }
-                //    rtsp_client.SendMessage(play_message);
-                //}
             }
 
             // If we get a reply to PLAY (which was our fourth command), then we should have video being received

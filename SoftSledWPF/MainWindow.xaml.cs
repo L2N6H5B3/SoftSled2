@@ -32,6 +32,8 @@ namespace SoftSledWPF {
         private VirtualChannelDevCapsHandler DevCapsHandler;
         private VirtualChannelMcxSessHandler McxSessHandler;
 
+        //public H264DecoderView _decoderView;
+
         public MainWindow() {
             InitializeComponent();
             this.Loaded += MainWindow_Loaded;
@@ -40,6 +42,25 @@ namespace SoftSledWPF {
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e) {
             InitialiseLogger();
+
+            //_decoderView = new H264DecoderView(Application.Current.Dispatcher);
+
+            //int videoWidth = 1280;
+            //int videoHeight = 720;
+
+            //if (_decoderView.Initialize(videoWidth, videoHeight)) {
+            //    // Bind the Image source to the decoder's output
+            //    VideoImageDisplay.Source = _decoderView.VideoSource;
+            //    _decoderView.Start();
+
+            //    // === Example: Start feeding NAL units (replace with your actual source) ===
+            //    // Start a background task or event handler that calls:
+            //    // _decoderView.ReceiveNalUnit(your_nal_byte_array);
+            //    // ExampleTimerFeed(); // Call a method that simulates receiving NALs
+            //    // =========================================================================
+            //} else {
+            //    MessageBox.Show("Failed to initialize video decoder.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            //}
 
             // Create RDPVCInterface to handle Virtual Channel Communications
             //rdpVCInterface = new RDPVCInterface(m_logger);
@@ -50,6 +71,7 @@ namespace SoftSledWPF {
             // Create VirtualChannel Handlers
             McxSessHandler = new VirtualChannelMcxSessHandler(m_logger);
             DevCapsHandler = new VirtualChannelDevCapsHandler(m_logger);
+            //AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger, _decoderView);
             AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger);
             McxSessHandler.VirtualChannelSend += On_VirtualChannelSend;
             DevCapsHandler.VirtualChannelSend += On_VirtualChannelSend;
@@ -239,6 +261,18 @@ namespace SoftSledWPF {
                     System.Diagnostics.Debug.WriteLine($"Error disconnecting: {ex.Message}");
                 }
             }
+        }
+
+        private void BtnExtenderSetup_Click(object sender, EventArgs e) {
+            if (m_device != null) {
+                MessageBox.Show("Device is already broadcasting!");
+                return;
+            }
+
+            m_device = new ExtenderDevice(m_logger);
+            m_device.Start();
+
+            MessageBox.Show("SoftSled is broadcasting! Use the key 1234-3706 to pair the device");
         }
 
         #region RDPClient ActiveX Events ######################################

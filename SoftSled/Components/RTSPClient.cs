@@ -1,5 +1,6 @@
 ﻿using FFmpeg.AutoGen;
 using Rtsp.Messages;
+using SoftSled.Components.AvMuxPipe;
 using SoftSled.Components.WmrptHandling;
 using System;
 using System.Collections.Generic;
@@ -86,9 +87,9 @@ namespace SoftSled.Components.RTSP {
         //M2TsHandling.Pipe.RtpPipeHandler m2tsPipeHandler = null;
         //NalUnitHandling.Pipe.NalUnitPipeHandler nalHandler = null;
         //AudioPipeHandler audioPipeHandler = null;
-        //AvPipeMuxer muxer = null;
+        AvPipeMuxer muxer = null;
 
-        VideoForm videoForm = new VideoForm();
+        //VideoForm videoForm = new VideoForm();
         WmrptVideoDepacketizer videoDepacketizer = null;
         WmrptAudioDepacketizer audioDepacketizer = null;
         List<Rtsp.Messages.RtspRequestSetup> setup_messages = new List<Rtsp.Messages.RtspRequestSetup>(); // setup messages still to send
@@ -168,34 +169,35 @@ namespace SoftSled.Components.RTSP {
 
 
 
-            //muxer = new AvPipeMuxer(
-            //    ffmpegPath, ffplayPath, videoFormat, audioFormat, audioSampleRate, audioChannels,
-            //    videoPipeName: "mcxVidPipe", audioPipeName: "mcxAudPipe");
+            muxer = new AvPipeMuxer(
+                ffmpegPath, ffplayPath, videoFormat, audioFormat, audioSampleRate, audioChannels,
+                videoPipeName: "mcxVidPipe", audioPipeName: "mcxAudPipe");
 
-            //// Subscribe to logs
-            //muxer.FfmpegErrorDataReceived += (s, e) => Trace.WriteLine($"FFMPEG: {e}");
-            //muxer.FfplayErrorDataReceived += (s, e) => Trace.WriteLine($"FFPLAY: {e}");
+            // Subscribe to logs
+            muxer.FfmpegErrorDataReceived += (s, e) => Trace.WriteLine($"FFMPEG: {e}");
+            muxer.FfplayErrorDataReceived += (s, e) => Trace.WriteLine($"FFPLAY: {e}");
 
             //// Subscribe to depacketizer outputs
             videoDepacketizer.NalUnitReady += async (s, nalUnit) => {
                 // Assuming NAL units come one by one, collect them into frames if needed
                 // For simplicity here, processing individually (adjust if needed)
-                //await muxer.ProcessVideoFrameNalUnitsAsync(new List<byte[]> { nalUnit });
+                await muxer.ProcessVideoFrameNalUnitsAsync(new List<byte[]> { nalUnit });
 
-                byte[] annexedArray = new byte[nalUnit.Length + AnnexBStartCode.Length];
-                Array.Copy(AnnexBStartCode, 0, annexedArray, 0, AnnexBStartCode.Length);
-                Array.Copy(nalUnit, 0, annexedArray, AnnexBStartCode.Length, AnnexBStartCode.Length);
+                //byte[] annexedArray = new byte[nalUnit.Length + AnnexBStartCode.Length];
+                //Array.Copy(AnnexBStartCode, 0, annexedArray, 0, AnnexBStartCode.Length);
+                //Array.Copy(nalUnit, 0, annexedArray, AnnexBStartCode.Length, AnnexBStartCode.Length);
 
-                videoForm.videoDecoder.DecodeNalUnits(annexedArray, annexedArray.Length, ffmpeg.AV_NOPTS_VALUE);
+                //videoForm.videoDecoder.DecodeNalUnits(annexedArray, annexedArray.Length, ffmpeg.AV_NOPTS_VALUE);
             };
-            //audioDepacketizer.AudioDataReady += async (s, audioFrame) => { // Assuming NalUnitReady for audio too
-            //    await muxer.ProcessAudioDataAsync(audioFrame);
-            //};
+            audioDepacketizer.AudioDataReady += async (s, audioFrame) => { // Assuming NalUnitReady for audio too
+                await muxer.ProcessAudioDataAsync(audioFrame);
+            };
 
-            videoForm.Visible = true;
-
-
-
+            // --- Start Playback ---
+            if (!muxer.Start()) {
+                Console.WriteLine("Failed to start muxer processes.");
+                return;
+            }
 
             ////nalHandler = new NalUnitHandling.Pipe.NalUnitPipeHandler(ffmpegPath, ffmpegArgs);
             //nalHandler = new NalUnitHandling.Pipe.NalUnitPipeHandler(ffplayPath, ffplayArgs);
@@ -583,7 +585,7 @@ namespace SoftSled.Components.RTSP {
                     // Copy the RTP Payload to the Byte Array
                     Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length);
                     // Process the WMRPT PayLoad
-                    //audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number);
+                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number);
                     return;
                 }
 

@@ -5,6 +5,7 @@ using SoftSled.Components.RTSP;
 using SoftSled.Components.Utility;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace SoftSled.Components.VirtualChannel {
     class VirtualChannelAvCtrlHandler {
@@ -34,8 +35,12 @@ namespace SoftSled.Components.VirtualChannel {
         private static Guid RegisterTransmitterServiceClassID = new Guid("b707af79-ca99-42d1-8c60-469fe112001e");
         private static Guid RegisterTransmitterServiceServiceID = new Guid("acb96f70-e61f-45cb-9745-86c47dcbb156");
 
+        //H264DecoderView decoder;
+
+
         public VirtualChannelAvCtrlHandler(Logger m_logger) {
             this.m_logger = m_logger;
+            //this.decoder = decoder;
         }
 
 
@@ -190,7 +195,7 @@ namespace SoftSled.Components.VirtualChannel {
                         m_logger.LogDebug($"AVCTRL: OpenMedia ({OpenMediaPayloadURL})");
 
                         DMCTOpenMediaURL = OpenMediaPayloadURL;
-                        //Debug.WriteLine(DMCTOpenMediaURL);
+                        Debug.WriteLine(DMCTOpenMediaURL);
 
                         rtspClient = new RTSPClient();
                         rtspClient.Connect(DMCTOpenMediaURL, RTSPClient.RTP_TRANSPORT.UDP, RTSPClient.MEDIA_REQUEST.VIDEO_AND_AUDIO);
@@ -237,7 +242,7 @@ namespace SoftSled.Components.VirtualChannel {
 
                         m_logger.LogDebug($"AVCTRL: Start - StartTime ({StartPayloadStartTime}) UseOptimisedPreroll ({StartPayloadUseOptimisedPreroll}) PlayRate ({StartPayloadRequestedPlayRate}) AvailableBandwidth ({StartPayloadAvailableBandwidth})");
 
-                        rtspClient.Play(StartPayloadStartTime);
+                        //rtspClient.Play(StartPayloadStartTime);
 
                         // Initialise Start Response
                         byte[] response = DSLRCommunication.StartResponse(
