@@ -2,6 +2,7 @@
 // Intel Device Builder Build#1.0.2777.24761
 
 using Intel.UPNP;
+using SoftSled.Components.Configuration;
 using SoftSled.Components.Diagnostics;
 using System;
 using System.Collections.Generic;
@@ -259,7 +260,7 @@ namespace SoftSled.Components.Extender {
             // 2. Save Parameters
             //   _HostID, _HostCertificate, and _HostConfirmAuthenticator
             _HostID = HostID;
-            _HostCertificate = Utility.ConvertBase64StringToCert(HostCertificate); // Just because
+            _HostCertificate = Utility.Utility.ConvertBase64StringToCert(HostCertificate); // Just because
             _HostCertificateString = HostCertificate;
             _HostConfirmAuthenticator = HostConfirmAuthenticator;
             _Iterations = IterationsRequired;

@@ -6,6 +6,9 @@ using SoftSled.Components.Diagnostics;
 using SoftSled.Components.Extender;
 using SoftSled.Components.VirtualChannel;
 using System;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Windows;
 
 namespace SoftSledWPF {
@@ -75,6 +78,7 @@ namespace SoftSledWPF {
             // Must cast the Child back to the specific type
             ((System.ComponentModel.ISupportInitialize)(this.rdpClient)).BeginInit();
             this.rdpClient.Enabled = true;
+            this.rdpClient.Visible = false;
             // Add any other initialization properties here if needed
             ((System.ComponentModel.ISupportInitialize)(this.rdpClient)).EndInit();
 
@@ -109,39 +113,116 @@ namespace SoftSledWPF {
             }
         }
 
+        private void On_VirtualChannelSend(object sender, VirtualChannelSendArgs e) {
+            rdpVCInterface.SendOnVirtualChannel(e.channelName, e.data);
+        }
+
+        private void McxSessHandler_StatusChanged(object sender, StatusChangedArgs e) {
+
+            // Set Status
+            //SetStatus(e.statusText);
+
+            // If the Shell is open
+            if (e.shellOpen) {
+                //SetPanOverlayVisible(false);
+                SetRdpClientVisible(true);
+                // Play Opening Music
+                //PlayOpening();
+            } else if (e.shellOpen && rdpClient.Visible == true) {
+                //SetPanOverlayVisible(false);
+                SetRdpClientVisible(true);
+            } else {
+                //SetPanOverlayVisible(true);
+                SetRdpClientVisible(false);
+            }
+
+        }
+
+
         private void BtnConnect_Click(object sender, RoutedEventArgs e) {
-            if (this.rdpClient == null || string.IsNullOrWhiteSpace(txtServer.Text)) {
-                MessageBox.Show("RDP client not initialized or server name is missing.");
+
+            IPAddress localhost = null;
+            var host = Dns.GetHostEntry(Dns.GetHostName());
+
+            // Get IPv4 Address
+            var IPv4Address = host.AddressList.FirstOrDefault(xx => xx.AddressFamily == AddressFamily.InterNetwork);
+            // Check if there is an IPv4 Address
+            if (IPv4Address != null) {
+                localhost = IPv4Address;
+            } else {
+                throw new Exception("No network adapters with an IPv4 address in the system!");
+            }
+
+            if (m_device != null) {
+                m_device.Stop();
+            }
+
+            SoftSledConfig currConfig = SoftSledConfigManager.ReadConfig();
+            if (!currConfig.IsPaired) {
+                MessageBox.Show("SoftSled is currently not paired with Windows Media Center. Enter the 'Extender Setup' mode to pair.");
                 return;
             }
 
-            try {
-                // Basic connection settings
-                this.rdpClient.Server = txtServer.Text;
-                // NOTE: Avoid hardcoding usernames/passwords. Prompt user securely or use SSO.
-                // this.rdpClient.UserName = "YourUsername";
+            loggerTextBox.Text = "";
 
-                // Example of advanced settings (use the correct AdvancedSettings object, e.g., 7, 8, 9)
-                IMsRdpClientAdvancedSettings7 advancedSettings =
-                    (IMsRdpClientAdvancedSettings7)this.rdpClient.AdvancedSettings7;
+            m_device = new ExtenderDevice(m_logger);
+            m_device.Start();
 
-                // !! SECURITY WARNING !! Avoid ClearTextPassword in production!
-                // advancedSettings.ClearTextPassword = "YourPassword";
-
-                // Recommended: Use CredSSP (Network Level Authentication) if available
-                advancedSettings.EnableCredSspSupport = true;
-
-                // Other common settings
-                // advancedSettings.RedirectDrives = true;
-                // advancedSettings.RedirectPrinters = false;
-                // this.rdpClient.DesktopWidth = 1024;
-                // this.rdpClient.DesktopHeight = 768;
-                // this.rdpClient.ColorDepth = 24;
-
-                this.rdpClient.Connect();
-            } catch (Exception ex) {
-                MessageBox.Show($"Error connecting: {ex.Message}");
+            // If RDP not Initialised
+            if (!rdpInitialised) {
+                // Initialise RDP
+                InitialiseRdpClient();
             }
+
+            // Set RDP Server Address
+            rdpClient.Server = currConfig.RdpLoginHost;
+            // Set RDP Username
+            rdpClient.UserName = currConfig.RdpLoginUserName;
+            // Set RDP Password
+            rdpClient.AdvancedSettings2.ClearTextPassword = currConfig.RdpLoginPassword;
+            // Set RDP Color Depth
+            rdpClient.ColorDepth = 32;
+            rdpClient.AdvancedSettings7.AudioRedirectionMode = 0;
+            // Connect RDP
+            rdpClient.Connect();
+
+            //SetStatus("Remote Desktop Connecting...");
+            isConnecting = true;
+
+
+
+            //if (this.rdpClient == null || string.IsNullOrWhiteSpace(txtServer.Text)) {
+            //    MessageBox.Show("RDP client not initialized or server name is missing.");
+            //    return;
+            //}
+
+            //try {
+            //    // Basic connection settings
+            //    this.rdpClient.Server = txtServer.Text;
+            //    // NOTE: Avoid hardcoding usernames/passwords. Prompt user securely or use SSO.
+            //    // this.rdpClient.UserName = "YourUsername";
+
+            //    // Example of advanced settings (use the correct AdvancedSettings object, e.g., 7, 8, 9)
+            //    IMsRdpClientAdvancedSettings7 advancedSettings =
+            //        (IMsRdpClientAdvancedSettings7)this.rdpClient.AdvancedSettings7;
+
+            //    // !! SECURITY WARNING !! Avoid ClearTextPassword in production!
+            //    // advancedSettings.ClearTextPassword = "YourPassword";
+
+            //    // Recommended: Use CredSSP (Network Level Authentication) if available
+            //    advancedSettings.EnableCredSspSupport = true;
+
+            //    // Other common settings
+            //    // advancedSettings.RedirectDrives = true;
+            //    // advancedSettings.RedirectPrinters = false;
+            //    // this.rdpClient.DesktopWidth = 1024;
+            //    // this.rdpClient.DesktopHeight = 768;
+            //    // this.rdpClient.ColorDepth = 24;
+
+            //    this.rdpClient.Connect();
+            //} catch (Exception ex) {
+            //    MessageBox.Show($"Error connecting: {ex.Message}");
+            //}
         }
 
         private void BtnDisconnect_Click(object sender, RoutedEventArgs e) {
@@ -160,6 +241,64 @@ namespace SoftSledWPF {
             }
         }
 
+        #region RDPClient ActiveX Events ######################################
+
+        private void InitialiseRdpClient() {
+
+            // Add EventHandlers
+            rdpClient.OnConnected += new EventHandler(RdpClient_OnConnected);
+            rdpClient.OnDisconnected += new AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEventHandler(RdpClient_OnDisconnected);
+
+            // Set Port
+            rdpClient.AdvancedSettings3.RDPPort = 3390;
+            //rdpClient.AdvancedSettings3.RDPPort = 3389;
+            rdpClient.AdvancedSettings7.PluginDlls = "RDPVCManager.dll";
+            rdpClient.AdvancedSettings7.RedirectClipboard = false;
+            rdpClient.AdvancedSettings7.RedirectPrinters = false;
+            //rdpClient.ColorDepth = 16;
+
+
+            // McxSess - Used by McrMgr for Extender Session Control
+            // MCECaps - not known where used
+            // devcaps - Used by EhShell to determine Extender capabilities
+            // avctrl - Used for AV Signalling
+            // VCHD - something to do with av signalling
+            // splash - appears to be used with both the RUI and BIG DevCaps options, but only when both capabilities are enabled (Big-Endian Remote Rendering). Likely no use for this project.
+
+            // NOTICE, if you want ehshell.exe to start up in normal Remote Desktop mode, remove the devcaps channel definition bellow. 
+            //rdpClient.CreateVirtualChannels("McxSess,MCECaps,avctrl,VCHD");
+            //rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD");
+            //rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD,splash");
+
+            // Set RDP Initialised
+            rdpInitialised = true;
+        }
+
+        void RdpClient_OnDisconnected(object sender, AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEvent e) {
+            btnConnect.IsEnabled = true;
+            btnDisconnect.IsEnabled = false;
+
+            //// Stop playing Media
+            //_mp.Stop();
+
+            m_logger.LogInfo($"RDP: Disconnected ({e.discReason})");
+            if (isConnecting == true) {
+                //SetStatus("Forcibly disconnected from Remote Desktop Host");
+                isConnecting = false;
+            }
+
+        }
+
+        void RdpClient_OnConnected(object sender, EventArgs e) {
+            m_logger.LogInfo("RDP: Connected");
+            //SetStatus("Remote Desktop Connected! Waiting for Media Center...");
+
+            btnConnect.IsEnabled = false;
+            btnDisconnect.IsEnabled = true;
+        }
+
+        #endregion ############################################################
+
 
         // --- Event Handlers ---
 
@@ -168,12 +307,12 @@ namespace SoftSledWPF {
             System.Diagnostics.Debug.WriteLine("RDP Login Complete.");
         }
 
-        private void RdpClient_OnDisconnected(object sender, IMsTscAxEvents_OnDisconnectedEvent e) {
-            // Handle disconnection (runs on UI thread)
-            // e.discReason provides details about why the disconnect happened
-            MessageBox.Show($"Disconnected from RDP session. Reason code: {e.discReason}");
-            System.Diagnostics.Debug.WriteLine($"RDP Disconnected. Reason: {e.discReason}");
-        }
+        //private void RdpClient_OnDisconnected(object sender, IMsTscAxEvents_OnDisconnectedEvent e) {
+        //    // Handle disconnection (runs on UI thread)
+        //    // e.discReason provides details about why the disconnect happened
+        //    MessageBox.Show($"Disconnected from RDP session. Reason code: {e.discReason}");
+        //    System.Diagnostics.Debug.WriteLine($"RDP Disconnected. Reason: {e.discReason}");
+        //}
 
 
         // --- Cleanup ---
@@ -200,6 +339,16 @@ namespace SoftSledWPF {
 
         private void btnPair_Click(object sender, RoutedEventArgs e) {
 
+        }
+
+        delegate void dRdpClientVisible(bool show);
+        void SetRdpClientVisible(bool show) {
+            if (!Dispatcher.CheckAccess()) {
+                dRdpClientVisible d = new dRdpClientVisible(SetRdpClientVisible);
+                Dispatcher.Invoke(d, new object[] { show });
+            } else {
+                rdpClient.Visible = show;
+            }
         }
 
 

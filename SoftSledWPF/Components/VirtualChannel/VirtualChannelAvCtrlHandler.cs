@@ -195,27 +195,6 @@ namespace SoftSled.Components.VirtualChannel {
                         rtspClient = new RTSPClient();
                         rtspClient.Connect(DMCTOpenMediaURL, RTSPClient.RTP_TRANSPORT.UDP, RTSPClient.MEDIA_REQUEST.VIDEO_AND_AUDIO);
 
-                        
-
-
-                        //RTSPHandler.StartRtsp(DMCTOpenMediaURL);
-
-
-                        //iWMPMedia = wmp.newMedia(DMCTOpenMediaURL);
-                        //wmp.currentMedia = iWMPMedia;
-
-                        //wmp.launchURL(DMCTOpenMediaURL);
-                        //wmp.openPlayer(DMCTOpenMediaURL);
-
-                        //// Create Media Object
-                        //currentMedia = new Media(_libVLC, new Uri(DMCTOpenMediaURL));
-                        //currentMedia.Parse();
-
-                        //_mp.NetworkCaching = 1000;
-                        //_mp.Media = currentMedia;
-
-
-
                         // Initialise OpenMedia Response
                         byte[] response = DSLRCommunication.OpenMediaResponse(
                             dispatchRequestHandleArray
@@ -232,8 +211,6 @@ namespace SoftSled.Components.VirtualChannel {
 
                         m_logger.LogDebug("AVCTRL: CloseMedia");
 
-                        //_mp.Stop();
-                        //wmp.Ctlcontrols.stop();
                         rtspClient.Stop();
 
                         // Initialise CloseMedia Response
@@ -258,10 +235,9 @@ namespace SoftSled.Components.VirtualChannel {
                         int StartPayloadRequestedPlayRate = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 8 + 8);
                         long StartPayloadAvailableBandwidth = DataUtilities.Get8ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 8 + 8 + 4);
 
-                        m_logger.LogDebug("AVCTRL: Start");
+                        m_logger.LogDebug($"AVCTRL: Start - StartTime ({StartPayloadStartTime}) UseOptimisedPreroll ({StartPayloadUseOptimisedPreroll}) PlayRate ({StartPayloadRequestedPlayRate}) AvailableBandwidth ({StartPayloadAvailableBandwidth})");
 
-                        //_mp.Play(currentMedia);
-                        //wmp.Ctlcontrols.play();
+                        rtspClient.Play(StartPayloadStartTime);
 
                         // Initialise Start Response
                         byte[] response = DSLRCommunication.StartResponse(
@@ -279,6 +255,8 @@ namespace SoftSled.Components.VirtualChannel {
                     else if (dispatchFunctionHandle == 3) {
 
                         m_logger.LogDebug("AVCTRL: Pause");
+
+                        rtspClient.Pause();
 
                         //_mp.Pause();
                         //wmp.Ctlcontrols.pause();

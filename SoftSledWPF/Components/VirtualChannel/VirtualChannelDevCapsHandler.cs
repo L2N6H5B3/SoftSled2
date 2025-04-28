@@ -15,7 +15,7 @@ namespace SoftSled.Components.VirtualChannel {
         private int DSPAServiceHandle;
         private string channelName = "devcaps";
         private List<string> DevCapsEnabledCapabilities = new List<string> {
-            //"2DA", // 2DA - Is 2D animation allowed?
+            "2DA", // 2DA - Is 2D animation allowed?
             //"ANI", // ANI - Is intensive animation allowed?
             //"APP", // APP - Is tray applet allowed?
             //"ARA", // ARA - Is auto restart allowed?
