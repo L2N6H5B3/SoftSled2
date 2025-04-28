@@ -59,12 +59,16 @@
     <Reference Include="AxInterop.MSTSCLib">
       <HintPath>..\SoftSled\obj\x86\Debug\AxInterop.MSTSCLib.dll</HintPath>
     </Reference>
+    <Reference Include="ffme.win, Version=4.4.350.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\FFME.Windows.4.4.350\lib\net461\ffme.win.dll</HintPath>
+    </Reference>
     <Reference Include="FFmpeg.AutoGen, Version=7.1.1.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\FFmpeg.AutoGen.7.1.1\lib\netstandard2.0\FFmpeg.AutoGen.dll</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Data" />
     <Reference Include="System.Drawing" />
+    <Reference Include="System.Web" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
     <Reference Include="Microsoft.CSharp" />
