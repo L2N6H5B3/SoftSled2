@@ -82,6 +82,9 @@ namespace SoftSled.Components.RTSP {
         Rtsp.G711Payload g711Payload = new Rtsp.G711Payload();
         Rtsp.AMRPayload amrPayload = new Rtsp.AMRPayload();
         Rtsp.AACPayload aacPayload = null;
+
+        Dictionary<int, WMFPayloadData> wmfPayloadDataDict = new Dictionary<int, WMFPayloadData>();
+
         //M2TsHandling.Pipe.RtpPipeHandler m2tsPipeHandler = null;
         //NalUnitHandling.Pipe.NalUnitPipeHandler nalHandler = null;
         //AudioPipeHandler audioPipeHandler = null;
@@ -551,17 +554,17 @@ namespace SoftSled.Components.RTSP {
                     rtp_payload_start += 4 + (int)rtp_extension_size;  // extension header and extension payload
                 }
 
-                //System.Diagnostics.Debug.WriteLine("RTP Data"
-                //                   + " V=" + rtp_version
-                //                   + " P=" + rtp_padding
-                //                   + " X=" + rtp_extension
-                //                   + " CC=" + rtp_csrc_count
-                //                   + " M=" + rtp_marker
-                //                   + " PT=" + rtp_payload_type
-                //                   + " Seq=" + rtp_sequence_number
-                //                   + " Time (MS)=" + rtp_timestamp / 90 // convert from 90kHZ clock to ms
-                //                   + " SSRC=" + rtp_ssrc
-                //                   + " Size=" + e.Message.Data.Length);
+                System.Diagnostics.Debug.WriteLine("RTP Data"
+                                   + " V=" + rtp_version
+                                   + " P=" + rtp_padding
+                                   + " X=" + rtp_extension
+                                   + " CC=" + rtp_csrc_count
+                                   + " M=" + rtp_marker
+                                   + " PT=" + rtp_payload_type
+                                   + " Seq=" + rtp_sequence_number
+                                   + " Time (MS)=" + rtp_timestamp / 90 // convert from 90kHZ clock to ms
+                                   + " SSRC=" + rtp_ssrc
+                                   + " Size=" + e.Message.Data.Length);
 
                 // Handle Video with X-WMF-PF Payload
                 // If the payload type in the RTP packet matches the Video X-WMF-PF value from the SDP
@@ -571,7 +574,7 @@ namespace SoftSled.Components.RTSP {
                     // Copy the RTP Payload to the Byte Array
                     Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length);
                     // Process the WMRPT PayLoad
-                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number);
+                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp);
                     return;
                 }
 
@@ -583,7 +586,7 @@ namespace SoftSled.Components.RTSP {
                     // Copy the RTP Payload to the Byte Array
                     Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length);
                     // Process the WMRPT PayLoad
-                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number);
+                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp);
                     return;
                 }
 
@@ -777,40 +780,40 @@ namespace SoftSled.Components.RTSP {
                     return;
                 }
 
-                // Check if the Reply has an Authenticate header.
-                if (message.ReturnCode == 401 && message.Headers.ContainsKey(RtspHeaderNames.WWWAuthenticate)) {
+                //// Check if the Reply has an Authenticate header.
+                //if (message.ReturnCode == 401 && message.Headers.ContainsKey(RtspHeaderNames.WWWAuthenticate)) {
 
-                    // Process the WWW-Authenticate header
-                    // EG:   Basic realm="AProxy"
-                    // EG:   Digest realm="AXIS_WS_ACCC8E3A0A8F", nonce="000057c3Y810622bff50b36005eb5efeae118626a161bf", stale=FALSE
-                    // EG:   Digest realm="IP Camera(21388)", nonce="534407f373af1bdff561b7b4da295354", stale="FALSE"
+                //    // Process the WWW-Authenticate header
+                //    // EG:   Basic realm="AProxy"
+                //    // EG:   Digest realm="AXIS_WS_ACCC8E3A0A8F", nonce="000057c3Y810622bff50b36005eb5efeae118626a161bf", stale=FALSE
+                //    // EG:   Digest realm="IP Camera(21388)", nonce="534407f373af1bdff561b7b4da295354", stale="FALSE"
 
-                    string www_authenticate = message.Headers[RtspHeaderNames.WWWAuthenticate];
-                    string auth_params = "";
+                //    string www_authenticate = message.Headers[RtspHeaderNames.WWWAuthenticate];
+                //    string auth_params = "";
 
-                    if (www_authenticate.StartsWith("basic", StringComparison.InvariantCultureIgnoreCase)) {
-                        auth_type = "Basic";
-                        auth_params = www_authenticate.Substring(5);
-                    }
-                    if (www_authenticate.StartsWith("digest", StringComparison.InvariantCultureIgnoreCase)) {
-                        auth_type = "Digest";
-                        auth_params = www_authenticate.Substring(6);
-                    }
+                //    if (www_authenticate.StartsWith("basic", StringComparison.InvariantCultureIgnoreCase)) {
+                //        auth_type = "Basic";
+                //        auth_params = www_authenticate.Substring(5);
+                //    }
+                //    if (www_authenticate.StartsWith("digest", StringComparison.InvariantCultureIgnoreCase)) {
+                //        auth_type = "Digest";
+                //        auth_params = www_authenticate.Substring(6);
+                //    }
 
-                    string[] items = auth_params.Split(new char[] { ',' }); // NOTE, does not handle Commas in Quotes
+                //    string[] items = auth_params.Split(new char[] { ',' }); // NOTE, does not handle Commas in Quotes
 
-                    foreach (string item in items) {
-                        // Split on the = symbol and update the realm and nonce
-                        string[] parts = item.Trim().Split(new char[] { '=' }, 2); // max 2 parts in the results array
-                        if (parts.Count() >= 2 && parts[0].Trim().Equals("realm")) {
-                            realm = parts[1].Trim(new char[] { ' ', '\"' }); // trim space and quotes
-                        } else if (parts.Count() >= 2 && parts[0].Trim().Equals("nonce")) {
-                            nonce = parts[1].Trim(new char[] { ' ', '\"' }); // trim space and quotes
-                        }
-                    }
+                //    foreach (string item in items) {
+                //        // Split on the = symbol and update the realm and nonce
+                //        string[] parts = item.Trim().Split(new char[] { '=' }, 2); // max 2 parts in the results array
+                //        if (parts.Count() >= 2 && parts[0].Trim().Equals("realm")) {
+                //            realm = parts[1].Trim(new char[] { ' ', '\"' }); // trim space and quotes
+                //        } else if (parts.Count() >= 2 && parts[0].Trim().Equals("nonce")) {
+                //            nonce = parts[1].Trim(new char[] { ' ', '\"' }); // trim space and quotes
+                //        }
+                //    }
 
-                    System.Diagnostics.Debug.WriteLine("WWW Authorize parsed for " + auth_type + " " + realm + " " + nonce);
-                }
+                //    System.Diagnostics.Debug.WriteLine("WWW Authorize parsed for " + auth_type + " " + realm + " " + nonce);
+                //}
 
                 RtspMessage resend_message = message.OriginalRequest.Clone() as RtspMessage;
 
@@ -847,7 +850,7 @@ namespace SoftSled.Components.RTSP {
                     keepalive_timer.Enabled = true;
 
                     // Send DESCRIBE
-                    Rtsp.Messages.RtspRequest describe_message = new Rtsp.Messages.RtspRequestDescribe();
+                    RtspRequest describe_message = new Rtsp.Messages.RtspRequestDescribe();
                     describe_message.RtspUri = new Uri(url);
                     describe_message.AddHeader("Accept: application/sdp");
                     describe_message.AddHeader("Accept-Language: en-us, *;q=0.1");
@@ -871,7 +874,7 @@ namespace SoftSled.Components.RTSP {
 
                 // Got a reply for DESCRIBE
                 if (message.IsOk == false) {
-                    System.Diagnostics.Debug.WriteLine("Got Error in DESCRIBE Reply " + message.ReturnCode + " " + message.ReturnMessage);
+                    Debug.WriteLine("Got Error in DESCRIBE Reply " + message.ReturnCode + " " + message.ReturnMessage);
                     return;
                 }
 
@@ -977,28 +980,54 @@ namespace SoftSled.Components.RTSP {
                             }
                             if (attrib.Key.Equals("fmtp")) {
                                 fmtp = attrib as Rtsp.Sdp.AttributFmtp;
+                                if (wmfPayloadDataDict.ContainsKey(fmtp.PayloadNumber)) {
+                                    wmfPayloadDataDict[fmtp.PayloadNumber].FormatParameter = fmtp.FormatParameter;
+                                } else {
+                                    wmfPayloadDataDict.Add(fmtp.PayloadNumber, new WMFPayloadData {
+                                        PayloadNumber = fmtp.PayloadNumber,
+                                        FormatParameter = fmtp.FormatParameter
+                                    });
+                                }
+                                
                             }
                             if (attrib.Key.Equals("rtpmap")) {
                                 Rtsp.Sdp.AttributRtpMap rtpmap = attrib as Rtsp.Sdp.AttributRtpMap;
 
                                 // Check if the Codec Used (EncodingName) is one we support
-                                String[] valid_video_codecs = { "H264", "H265", "X-WMF-PF" };
-                                //String[] valid_video_codecs = { "H264", "H265", "VND.MS.WM-MPV", "X-WMF-PF" };
-                                String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "X-WMF-PF" /* for aac */}; // Note some are "mpeg4-generic" lower case
-                                //String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "VND.MS.WM-MPA", "X-WMF-PF" /* for aac */}; // Note some are "mpeg4-generic" lower case
+                                //String[] valid_video_codecs = { "H264", "H265", "X-WMF-PF" };
+                                String[] valid_video_codecs = { "H264", "H265", "VND.MS.WM-MPV", "X-WMF-PF" };
+                                //String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "X-WMF-PF" /* for aac */}; // Note some are "mpeg4-generic" lower case
+                                String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "VND.MS.WM-MPA", "X-WMF-PF" /* for aac */}; // Note some are "mpeg4-generic" lower case
 
                                 if (video && video_payload == -1 && Array.IndexOf(valid_video_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
-                                    // found a valid codec
+                                    if (wmfPayloadDataDict.ContainsKey(fmtp.PayloadNumber)) {
+                                        wmfPayloadDataDict[rtpmap.PayloadNumber].Type = MediaType.Video;
+                                        wmfPayloadDataDict[rtpmap.PayloadNumber].Codec = rtpmap.EncodingName.ToUpper();
+                                    } else {
+                                        wmfPayloadDataDict.Add(rtpmap.PayloadNumber, new WMFPayloadData {
+                                            Type = MediaType.Video,
+                                            Codec = rtpmap.EncodingName.ToUpper(),
+                                            PayloadNumber = rtpmap.PayloadNumber
+                                        });
+                                    }
                                     video_codec = rtpmap.EncodingName.ToUpper();
                                     //video_payload = sdp_data.Medias[x].PayloadType;
                                     video_payload = rtpmap.PayloadNumber;
                                 }
-                                if (audio) {
-                                    if (audio && audio_payload == -1 && Array.IndexOf(valid_audio_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
-                                        audio_codec = rtpmap.EncodingName.ToUpper();
-                                        audio_payload = sdp_data.Medias[x].PayloadType;
-                                        //audio_payload = rtpmap.PayloadNumber;
+                                if (audio && audio_payload == -1 && Array.IndexOf(valid_audio_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
+                                    if (wmfPayloadDataDict.ContainsKey(fmtp.PayloadNumber)) {
+                                        wmfPayloadDataDict[rtpmap.PayloadNumber].Type = MediaType.Audio;
+                                        wmfPayloadDataDict[rtpmap.PayloadNumber].Codec = rtpmap.EncodingName.ToUpper();
+                                    } else {
+                                        wmfPayloadDataDict.Add(rtpmap.PayloadNumber, new WMFPayloadData {
+                                            Type = MediaType.Audio,
+                                            Codec = rtpmap.EncodingName.ToUpper(),
+                                            PayloadNumber = rtpmap.PayloadNumber
+                                        });
                                     }
+                                    audio_codec = rtpmap.EncodingName.ToUpper();
+                                    //audio_payload = sdp_data.Medias[x].PayloadType;
+                                    audio_payload = rtpmap.PayloadNumber;
                                 }
                             }
                         }
@@ -1154,11 +1183,11 @@ namespace SoftSled.Components.RTSP {
             if (message.OriginalRequest != null && message.OriginalRequest is Rtsp.Messages.RtspRequestSetup) {
                 // Got Reply to SETUP
                 if (message.IsOk == false) {
-                    System.Diagnostics.Debug.WriteLine("Got Error in SETUP Reply " + message.ReturnCode + " " + message.ReturnMessage);
+                    Debug.WriteLine("Got Error in SETUP Reply " + message.ReturnCode + " " + message.ReturnMessage);
                     return;
                 }
 
-                System.Diagnostics.Debug.WriteLine("Got reply from Setup. Session is " + message.Session);
+                Debug.WriteLine("Got reply from Setup. Session is " + message.Session);
 
                 session = message.Session; // Session value used with Play, Pause, Teardown and and additional Setups
                 if (message.Timeout > 0 && message.Timeout > keepalive_timer.Interval / 1000) {
@@ -1203,7 +1232,7 @@ namespace SoftSled.Components.RTSP {
                 // Check if we have another SETUP command to send, then remote it from the list
                 if (setup_messages.Count > 0) {
                     // send the next SETUP message, after adding in the 'session'
-                    Rtsp.Messages.RtspRequestSetup next_setup = setup_messages[0];
+                    RtspRequestSetup next_setup = setup_messages[0];
                     next_setup.Session = session;
                     next_setup.AddHeader("Accept-Language: en-us, *;q=0.1");
                     next_setup.AddHeader("Buffer-Info.dlna.org: dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0");
@@ -1215,7 +1244,7 @@ namespace SoftSled.Components.RTSP {
                     setup_messages.RemoveAt(0);
                 } else {
                     // Send PLAY
-                    Rtsp.Messages.RtspRequest play_message = new Rtsp.Messages.RtspRequestPlay();
+                    RtspRequest play_message = new Rtsp.Messages.RtspRequestPlay();
                     play_message.RtspUri = new Uri(url);
                     play_message.Session = session;
                     play_message.AddHeader("Accept-Language: en-us, *;q=0.1");
@@ -1233,7 +1262,7 @@ namespace SoftSled.Components.RTSP {
             if (message.OriginalRequest != null && message.OriginalRequest is Rtsp.Messages.RtspRequestPlay) {
                 // Got Reply to PLAY
                 if (message.IsOk == false) {
-                    System.Diagnostics.Debug.WriteLine("Got Error in PLAY Reply " + message.ReturnCode + " " + message.ReturnMessage);
+                    Debug.WriteLine("Got Error in PLAY Reply " + message.ReturnCode + " " + message.ReturnMessage);
                     return;
                 }
 
@@ -1340,5 +1369,19 @@ namespace SoftSled.Components.RTSP {
             return output.ToString();
         }
 
+        //public void AddWMFPayloadData()
+
+    }
+
+    public class WMFPayloadData {
+        public MediaType Type { get; set; }
+        public string Codec { get; set; }
+        public int PayloadNumber { get; set; }
+        public string FormatParameter { get; set; }
+    }
+
+    public enum MediaType {
+        Video,
+        Audio
     }
 }

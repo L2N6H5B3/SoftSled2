@@ -58,7 +58,8 @@ namespace SoftSled.Components.AudioVisual {
         /// <param name="rtpPayloadLength">The length of the data in rtpPayload.</param>
         /// <param name="rtpSsrc">The SSRC from the RTP header (used for fragment buffering).</param>
         /// <param name="rtpSequenceNumber">The sequence number from the RTP header (for logging/debugging).</param>
-        public void ProcessWmrptPayload(byte[] rtpPayload, int rtpPayloadLength, uint rtpSsrc, ushort rtpSequenceNumber) {
+        /// <param name="rtpTimestamp">The Timestamp from the RTP header (for sync).</param>
+        public void ProcessWmrptPayload(byte[] rtpPayload, int rtpPayloadLength, uint rtpSsrc, ushort rtpSequenceNumber, uint rtpTimestamp) {
             if (rtpPayload == null || rtpPayloadLength < 1) {
                 // Trace.WriteLine($"WMRTP Video Depack: Received empty or null payload for SN {rtpSequenceNumber}.");
                 return;
