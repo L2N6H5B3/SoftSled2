@@ -52,7 +52,7 @@ namespace SoftSled.Components.AudioVisual {
         /// Event raised when a complete audio frame/chunk has been reassembled or received.
         /// The byte array contains the raw audio data (e.g., PCM samples).
         /// </summary>
-        public event EventHandler<byte[]> AudioDataReady; // Renamed event
+        public event EventHandler<EventData> AudioDataReady; // Renamed event
 
         /// <summary>
         /// Processes the payload of a received RTP packet (containing WMRTP data).
@@ -246,7 +246,7 @@ namespace SoftSled.Components.AudioVisual {
                         Trace.WriteLine($"WMRTP Audio Warning SN {rtpSequenceNumber}: Received complete chunk (F=3) for SSRC {rtpSsrc}, discarding previous fragments.");
                         _fragmentBuffers.Remove(rtpSsrc);
                     }
-                    OnAudioDataReady(currentPayloadData);
+                    OnAudioDataReady(currentPayloadData, rtpTimestamp);
                     break;
 
                 case 1: // First Fragment
@@ -273,7 +273,7 @@ namespace SoftSled.Components.AudioVisual {
                         buffer.Add(currentPayloadData);
                         try {
                             byte[] completeAudioChunk = ReassembleFragments(buffer);
-                            OnAudioDataReady(completeAudioChunk);
+                            OnAudioDataReady(completeAudioChunk, rtpTimestamp);
                         } catch (Exception ex) {
                             Trace.WriteLine($"WMRTP Audio Error SN {rtpSequenceNumber}: Failed to reassemble fragments for SSRC {rtpSsrc}: {ex.Message}");
                         } finally {
@@ -309,7 +309,7 @@ namespace SoftSled.Components.AudioVisual {
         /// <summary>
         /// Safely raises the AudioDataReady event.
         /// </summary>
-        protected virtual void OnAudioDataReady(byte[] audioData) // Renamed method
+        protected virtual void OnAudioDataReady(byte[] audioData, uint rtpTimestamp) // Renamed method
         {
             if (audioData != null && audioData.Length > 0) {
                 // --- Added Logging ---
@@ -322,7 +322,7 @@ namespace SoftSled.Components.AudioVisual {
                 }
                 // --- End Added Logging ---
 
-                AudioDataReady?.Invoke(this, audioData); // Raise renamed event
+                AudioDataReady?.Invoke(this, new EventData { data = audioData, timestamp = rtpTimestamp }); // Raise renamed event
             }
         }
 
@@ -334,5 +334,10 @@ namespace SoftSled.Components.AudioVisual {
             _fragmentBuffers.Clear();
             Trace.WriteLine("WMRTP Audio Depacketizer buffers cleared.");
         }
+    }
+
+    public class EventData {
+        public byte[] data { get; set; }
+        public uint timestamp { get; set; }
     }
 }

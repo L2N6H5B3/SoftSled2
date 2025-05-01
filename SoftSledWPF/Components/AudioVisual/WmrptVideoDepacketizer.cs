@@ -49,7 +49,7 @@ namespace SoftSled.Components.AudioVisual {
         /// Event raised when a complete NAL unit has been reassembled or received.
         /// The byte array contains the raw NAL unit data (without Annex B start code).
         /// </summary>
-        public event EventHandler<byte[]> NalUnitReady; // Renamed event
+        public event EventHandler<EventData> NalUnitReady; // Renamed event
 
         /// <summary>
         /// Processes the payload of a received RTP packet (containing WMRTP data).
@@ -211,7 +211,7 @@ namespace SoftSled.Components.AudioVisual {
                         Trace.WriteLine($"WMRTP Video Warning SN {rtpSequenceNumber}: Received complete NAL (F=3) for SSRC {rtpSsrc}, discarding previous fragments.");
                         _fragmentBuffers.Remove(rtpSsrc);
                     }
-                    OnNalUnitReady(currentPayloadData); // Raise event
+                    OnNalUnitReady(currentPayloadData, rtpTimestamp); // Raise event
                     break;
                 case 1: // First Fragment
                     if (bufferExisted) {
@@ -235,7 +235,7 @@ namespace SoftSled.Components.AudioVisual {
                         buffer.Add(currentPayloadData);
                         try {
                             byte[] completeNalUnit = ReassembleFragments(buffer);
-                            OnNalUnitReady(completeNalUnit); // Raise event
+                            OnNalUnitReady(completeNalUnit, rtpTimestamp); // Raise event
                         } catch (Exception ex) {
                             Trace.WriteLine($"WMRTP Video Error SN {rtpSequenceNumber}: Failed to reassemble fragments for SSRC {rtpSsrc}: {ex.Message}");
                         } finally {
@@ -270,12 +270,12 @@ namespace SoftSled.Components.AudioVisual {
         /// <summary>
         /// Safely raises the NalUnitReady event.
         /// </summary>
-        protected virtual void OnNalUnitReady(byte[] nalUnit) // Renamed method
+        protected virtual void OnNalUnitReady(byte[] nalUnit, uint rtpTimestamp) // Renamed method
         {
             if (nalUnit != null && nalUnit.Length > 0) {
                 // Trace.WriteLine($"WMRTP Video Depack: Outputting complete NAL unit, Length={nalUnit.Length}"); // Optional detailed log
                 // Removed audio alignment check
-                NalUnitReady?.Invoke(this, nalUnit); // Raise renamed event
+                NalUnitReady?.Invoke(this, new EventData { data = nalUnit, timestamp = rtpTimestamp }); // Raise renamed event
             }
         }
 
