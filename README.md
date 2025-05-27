@@ -37,6 +37,16 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 ### Prerequisites
 * Windows 7 OR Windows 8 with Media Center (yes, SoftSled2 works with WMC8)
 
+## Notes
+### Certificates
+Multiple certificates have been found to work with SoftSled - these being:
+* Linksys2200.cer
+* Xbox360.cer
+
+Work is currently ongoing around a certificate generation process to build certificates upon SoftSled provisioning / setup.
+
+The device certificate selected seems to be required to be installed into the Other People store of the Current User running the Extender setup.  This might be required to be in the Local Machine store at a later point in time, but work still needs to be done to confirm.
+
 ### Configuration
 (If using Linksys2200.cer)
 1. Copy Linksys2200.cer to the Host Machine and let Windows install the certificate into the default store.
