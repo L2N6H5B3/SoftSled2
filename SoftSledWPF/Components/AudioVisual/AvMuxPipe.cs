@@ -601,8 +601,12 @@ namespace SoftSled.Components.AudioVisual {
         // as they interact with Process streams which support async well.
 
         private string GetPlatformPipePath(string pipeName) {
-            // Same as before
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) {
+            // Avoid System.Runtime.InteropServices.RuntimeInformation here — the
+            // NuGet package of that name (4.3.0, pulled transitively) collides
+            // with mscorlib's built-in copy on .NET Framework 4.7.2 and triggers
+            // CS0433. Environment.OSVersion is in mscorlib only and unambiguous.
+            var p = Environment.OSVersion.Platform;
+            if (p == PlatformID.Win32NT || p == PlatformID.Win32Windows || p == PlatformID.Win32S) {
                 return $@"\\.\pipe\{pipeName}";
             } else {
                 return Path.Combine("/tmp", pipeName);

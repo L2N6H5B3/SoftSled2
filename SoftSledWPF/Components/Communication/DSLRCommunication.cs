@@ -8,20 +8,24 @@ namespace SoftSled.Components.Communication {
 
         #region Shared Functions ##############################################
 
+        // RDP static virtual channel CHANNEL_PDU_HEADER ([MS-RDPBCGR] 2.2.6.1.1):
+        // CHANNEL_FLAG_FIRST (0x01) | CHANNEL_FLAG_LAST (0x02) | CHANNEL_FLAG_SHOW_PROTOCOL (0x10).
+        private const int CHANNEL_PDU_FLAGS = 0x00000013;
+
         public static byte[] Encapsulate(byte[] byteArray) {
 
-            byte[] segment1 = GetByteArrayFromInt(byteArray.Length);
-            byte[] segment2 = new byte[] { 0, 0, 0, 0 };
+            byte[] pduLength = GetByteArrayFromInt(byteArray.Length);
+            byte[] pduFlags = GetByteArrayFromInt(CHANNEL_PDU_FLAGS);
 
             // Create Base Byte Array
             byte[] baseArray = new byte[0];
             // Formulate Encapsulated Array
             IEnumerable<byte> encapsulated = baseArray
-                // Add Segment 1
-                .Concat(segment1)
-                // Add Segment 2
-                .Concat(segment2)
-                // Add Byte Array 
+                // Add CHANNEL_PDU_HEADER length
+                .Concat(pduLength)
+                // Add CHANNEL_PDU_HEADER flags
+                .Concat(pduFlags)
+                // Add Byte Array
                 .Concat(byteArray);
 
             // Return the created byte array

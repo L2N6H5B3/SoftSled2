@@ -1,6 +1,4 @@
-﻿using AxMSTSCLib;
-using MSTSCLib;
-using SoftSled.Components.Communication;
+﻿using SoftSled.Components.Communication;
 using SoftSled.Components.Configuration;
 using SoftSled.Components.Diagnostics;
 using SoftSled.Components.Extender;
@@ -9,7 +7,9 @@ using System;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Input;
 
 namespace SoftSledWPF {
     /// <summary>
@@ -21,96 +21,133 @@ namespace SoftSledWPF {
         private Logger m_logger;
         private ExtenderDevice m_device;
         private bool isConnecting = false;
-        private bool rdpInitialised = false;
 
-        public AxMsRdpClient7NotSafeForScripting rdpClient;
-        public System.Windows.Forms.Panel testPanel;
-
-        private RDPVCInterface rdpVCInterface;
+        // In-process FreeRDP transport (softsled-rdp.dll + freerdp3.dll under
+        // native/x64/). Replaces the mstscax + RDPVCManager.dll + named-pipe
+        // bridge that earlier revisions used. Provides both virtual-channel
+        // I/O and a software framebuffer surfaced via WriteableBitmap.
+        private FreeRdpClient freeRdpClient;
 
         private VirtualChannelAvCtrlHandler AvCtrlHandler;
         private VirtualChannelDevCapsHandler DevCapsHandler;
         private VirtualChannelMcxSessHandler McxSessHandler;
 
-        //public H264DecoderView _decoderView;
+        // WMC's MCX-specific 0x0D fast-path audio. Player is always-on and
+        // produces live output via NAudio. Dumper is opt-in via the
+        // SOFTSLED_AUDIO_DUMP env var (writes per-sound PCM .wav files for
+        // RE / debugging). Held in fields so the bound delegates stay alive
+        // for as long as native code holds the function pointer.
+        private SoftSled.Components.AudioVisual.WmcFastpathAudioPlayer _audioPlayer;
+        private SoftSled.Components.AudioVisual.WmcFastpathAudioDumper _audioDumper;
+        private SoftSledNative.FastpathCallback _fastpathDispatcher;
 
         public MainWindow() {
             InitializeComponent();
             this.Loaded += MainWindow_Loaded;
-            this.Closed += MainWindow_Closed; // Add handler for cleanup
+            this.Closed += MainWindow_Closed;
+
+            // Tunnel-phase keyboard hooks at the Window level so we catch
+            // arrow/Enter/Escape regardless of which control technically has
+            // focus. While ACTIVE we forward to FreeRDP and mark Handled to
+            // suppress WPF's own use of the keys.
+            this.PreviewKeyDown += MainWindow_PreviewKeyDown;
+            this.PreviewKeyUp   += MainWindow_PreviewKeyUp;
 
             Unosquare.FFME.Library.FFmpegDirectory = @"C:\ffmpeg\x86\bin";
         }
 
+        // Track session liveness so we only forward keys after ACTIVE and
+        // before DISCONNECT — sending into a closed input pipe is harmless
+        // but pollutes logs.
+        private volatile bool _sessionActive;
+
+        // ------- WPF -> RDP keyboard glue -------------------------------------
+
+        private const uint MAPVK_VK_TO_VSC_EX = 4;
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
+        private void ForwardKey(KeyEventArgs e, bool release) {
+            if (!_sessionActive || freeRdpClient == null) return;
+
+            // Alt-modified keys arrive as Key.System with the actual key in
+            // SystemKey. Use whichever is meaningful.
+            Key k = (e.Key == Key.System) ? e.SystemKey : e.Key;
+            if (k == Key.None) return;
+
+            int vk = KeyInterop.VirtualKeyFromKey(k);
+            if (vk == 0) return;
+
+            uint sc = MapVirtualKey((uint)vk, MAPVK_VK_TO_VSC_EX);
+            if (sc == 0) return;
+
+            byte scancode = (byte)(sc & 0xFF);
+            bool extended = ((sc >> 8) & 0xFF) == 0xE0;
+
+            freeRdpClient.SendKey(scancode, extended, release);
+            e.Handled = true;
+        }
+
+        private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e) =>
+            ForwardKey(e, release: false);
+
+        private void MainWindow_PreviewKeyUp(object sender, KeyEventArgs e) =>
+            ForwardKey(e, release: true);
+
         private void MainWindow_Loaded(object sender, RoutedEventArgs e) {
             InitialiseLogger();
 
-            //_decoderView = new H264DecoderView(Application.Current.Dispatcher);
+            // Create the FreeRDP client. DataReceived/StateChanged signatures
+            // match the legacy RDPVCInterface, so the existing channel
+            // handlers plug in unchanged. FrameReady fires once the GDI
+            // framebuffer is allocated and the WriteableBitmap is ready.
+            freeRdpClient = new FreeRdpClient();
+            freeRdpClient.DataReceived += RdpVCInterface_DataReceived;
+            freeRdpClient.StateChanged += FreeRdpClient_StateChanged;
+            freeRdpClient.FrameReady   += FreeRdpClient_FrameReady;
+            foreach (var ch in new[] { "McxSess", "MCECaps", "devcaps", "avctrl", "VCHD", "splash" })
+                freeRdpClient.RegisterChannel(ch);
 
-            //int videoWidth = 1280;
-            //int videoHeight = 720;
-
-            //if (_decoderView.Initialize(videoWidth, videoHeight)) {
-            //    // Bind the Image source to the decoder's output
-            //    VideoImageDisplay.Source = _decoderView.VideoSource;
-            //    _decoderView.Start();
-
-            //    // === Example: Start feeding NAL units (replace with your actual source) ===
-            //    // Start a background task or event handler that calls:
-            //    // _decoderView.ReceiveNalUnit(your_nal_byte_array);
-            //    // ExampleTimerFeed(); // Call a method that simulates receiving NALs
-            //    // =========================================================================
-            //} else {
-            //    MessageBox.Show("Failed to initialize video decoder.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-            //}
-
-            // Create RDPVCInterface to handle Virtual Channel Communications
-            //rdpVCInterface = new RDPVCInterface(m_logger);
-            rdpVCInterface = new RDPVCInterface();
-            rdpVCInterface.DataReceived += RdpVCInterface_DataReceived;
-
-            //Media.
+            // WMC fast-path 0x0D audio. Always wire the live player; if
+            // SOFTSLED_AUDIO_DUMP=<dir> is also set, fan the same bytes
+            // out to the WAV dumper for offline analysis. We register a
+            // single dispatcher with the shim and route to whichever
+            // consumer(s) are active.
+            _audioPlayer = new SoftSled.Components.AudioVisual.WmcFastpathAudioPlayer(m_logger);
+            string audioDumpDir = Environment.GetEnvironmentVariable("SOFTSLED_AUDIO_DUMP");
+            if (!string.IsNullOrWhiteSpace(audioDumpDir)) {
+                _audioDumper = new SoftSled.Components.AudioVisual.WmcFastpathAudioDumper(
+                    m_logger, audioDumpDir);
+            }
+            _fastpathDispatcher = (user, code, data, length) => {
+                _audioPlayer?.OnFastpath(user, code, data, length);
+                _audioDumper?.OnFastpath(user, code, data, length);
+            };
+            freeRdpClient.SetFastpathCallback(_fastpathDispatcher);
 
             // Create VirtualChannel Handlers
             McxSessHandler = new VirtualChannelMcxSessHandler(m_logger);
             DevCapsHandler = new VirtualChannelDevCapsHandler(m_logger);
-            //AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger, _decoderView);
-            AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger);
+            AvCtrlHandler  = new VirtualChannelAvCtrlHandler(m_logger);
             McxSessHandler.VirtualChannelSend += On_VirtualChannelSend;
             DevCapsHandler.VirtualChannelSend += On_VirtualChannelSend;
-            AvCtrlHandler.VirtualChannelSend += On_VirtualChannelSend;
+            AvCtrlHandler.VirtualChannelSend  += On_VirtualChannelSend;
 
-            // Create VirtualChannel Handlers EventHandlers
             McxSessHandler.StatusChanged += McxSessHandler_StatusChanged;
 
             SoftSledConfig config = SoftSledConfigManager.ReadConfig();
             if (!config.IsPaired) {
                 m_logger.LogInfo("Extender is not paired!");
-                //SetStatus("Extender is not paired");
             } else {
                 m_logger.LogInfo("Extender is paired with " + config.RdpLoginHost);
-                //SetStatus("Extender ready to connect");
             }
+        }
 
-
-            // Create the RDP Client ActiveX control.
-            this.rdpClient = new AxMsRdpClient7NotSafeForScripting();
-
-            // Important: Add the control to the WindowsFormsHost element's Child property
-            this.rdpHost.Child = this.rdpClient;
-
-            // Initialize the control (optional, but recommended)
-            // Must cast the Child back to the specific type
-            ((System.ComponentModel.ISupportInitialize)(this.rdpClient)).BeginInit();
-            this.rdpClient.Enabled = true;
-            this.rdpClient.Visible = false;
-            // Add any other initialization properties here if needed
-            ((System.ComponentModel.ISupportInitialize)(this.rdpClient)).EndInit();
-
-            // Optional: Subscribe to RDP events
-            this.rdpClient.OnDisconnected += RdpClient_OnDisconnected;
-            this.rdpClient.OnLoginComplete += RdpClient_OnLoginComplete;
-            // Add other event handlers as needed...
+        private void FreeRdpClient_FrameReady(object sender, EventArgs e) {
+            // FrameReady is raised on the UI thread once the WriteableBitmap
+            // has been allocated and primed with the initial framebuffer.
+            rdpDisplay.Source = freeRdpClient.Bitmap;
+            m_logger.LogInfo($"RDP framebuffer ready: {freeRdpClient.Bitmap.PixelWidth}x{freeRdpClient.Bitmap.PixelHeight}");
         }
 
         void InitialiseLogger() {
@@ -139,28 +176,30 @@ namespace SoftSledWPF {
         }
 
         private void On_VirtualChannelSend(object sender, VirtualChannelSendArgs e) {
-            rdpVCInterface.SendOnVirtualChannel(e.channelName, e.data);
+            freeRdpClient.SendOnVirtualChannel(e.channelName, e.data);
+        }
+
+        private void FreeRdpClient_StateChanged(object sender, StateChangedEventArgs e) {
+            m_logger.LogInfo($"FreeRDP: state={e.State} detail=0x{e.Detail:X8}");
+            // Gate keyboard forwarding on session liveness. Set on the
+            // worker thread so KeyDown handlers see it without round-tripping
+            // through the dispatcher.
+            _sessionActive = (e.State == SoftSledNative.State.Active);
+            // Mirror the mstscax button behaviour so the UI reflects the
+            // FreeRDP-driven session state.
+            Dispatcher.BeginInvoke(new Action(() => {
+                if (e.State == SoftSledNative.State.Active) {
+                    btnConnect.IsEnabled = false;
+                    btnDisconnect.IsEnabled = true;
+                } else if (e.State == SoftSledNative.State.Disconnected || e.State == SoftSledNative.State.Failed) {
+                    btnConnect.IsEnabled = true;
+                    btnDisconnect.IsEnabled = false;
+                }
+            }));
         }
 
         private void McxSessHandler_StatusChanged(object sender, StatusChangedArgs e) {
-
-            // Set Status
-            //SetStatus(e.statusText);
-
-            // If the Shell is open
-            if (e.shellOpen) {
-                //SetPanOverlayVisible(false);
-                SetRdpClientVisible(true);
-                // Play Opening Music
-                //PlayOpening();
-            } else if (e.shellOpen && rdpClient.Visible == true) {
-                //SetPanOverlayVisible(false);
-                SetRdpClientVisible(true);
-            } else {
-                //SetPanOverlayVisible(true);
-                SetRdpClientVisible(false);
-            }
-
+            // TODO: drive a status indicator / shell-open visual state from this.
         }
 
 
@@ -193,61 +232,34 @@ namespace SoftSledWPF {
             m_device = new ExtenderDevice(m_logger);
             m_device.Start();
 
-            // If RDP not Initialised
-            if (!rdpInitialised) {
-                // Initialise RDP
-                InitialiseRdpClient();
-            }
+            // FreeRDP path. Port 3390 + RDP-only security match the MCX
+            // protocol requirements; for vanilla-RDP smoke tests against a
+            // standard Windows host, override the port to 3389 and (if your
+            // host requires it) flip rdpOnlySecurity off.
+            const ushort port = 3390;
+            const bool isMcxPort = (port == 3391    );
 
-            // Set RDP Server Address
-            rdpClient.Server = currConfig.RdpLoginHost;
-            // Set RDP Username
-            rdpClient.UserName = currConfig.RdpLoginUserName;
-            // Set RDP Password
-            rdpClient.AdvancedSettings2.ClearTextPassword = currConfig.RdpLoginPassword;
-            // Set RDP Color Depth
-            rdpClient.ColorDepth = 32;
-            rdpClient.AdvancedSettings7.AudioRedirectionMode = 0;
-            // Connect RDP
-            rdpClient.Connect();
+            // For MCX, libfreerdp's primary-order dispatcher hits proprietary
+            // "super blt" orders ~1s after WMC starts initialising its UI; an
+            // unknown order returns FALSE up the chain and tears the session
+            // down. Until we land a non-fatal-on-unknown-order patch in
+            // libfreerdp, decoding stays off for MCX (preserves the existing
+            // headless behaviour the channel handlers rely on). Vanilla RDP
+            // (port 3389 etc.) keeps decoding enabled so you get a visible
+            // framebuffer.
+            freeRdpClient.SetDecodeEnabled(!isMcxPort);
+            m_logger.LogInfo($"FreeRDP: graphics decoding {(isMcxPort ? "DISABLED (MCX)" : "ENABLED")}");
 
-            //SetStatus("Remote Desktop Connecting...");
+            freeRdpClient.Configure(
+                currConfig.RdpLoginHost,
+                port: port,
+                user: currConfig.RdpLoginUserName,
+                password: currConfig.RdpLoginPassword,
+                rdpOnlySecurity: true,
+                ignoreCertificate: true);
+            freeRdpClient.Connect();
+
             isConnecting = true;
-
-
-
-            //if (this.rdpClient == null || string.IsNullOrWhiteSpace(txtServer.Text)) {
-            //    MessageBox.Show("RDP client not initialized or server name is missing.");
-            //    return;
-            //}
-
-            //try {
-            //    // Basic connection settings
-            //    this.rdpClient.Server = txtServer.Text;
-            //    // NOTE: Avoid hardcoding usernames/passwords. Prompt user securely or use SSO.
-            //    // this.rdpClient.UserName = "YourUsername";
-
-            //    // Example of advanced settings (use the correct AdvancedSettings object, e.g., 7, 8, 9)
-            //    IMsRdpClientAdvancedSettings7 advancedSettings =
-            //        (IMsRdpClientAdvancedSettings7)this.rdpClient.AdvancedSettings7;
-
-            //    // !! SECURITY WARNING !! Avoid ClearTextPassword in production!
-            //    // advancedSettings.ClearTextPassword = "YourPassword";
-
-            //    // Recommended: Use CredSSP (Network Level Authentication) if available
-            //    advancedSettings.EnableCredSspSupport = true;
-
-            //    // Other common settings
-            //    // advancedSettings.RedirectDrives = true;
-            //    // advancedSettings.RedirectPrinters = false;
-            //    // this.rdpClient.DesktopWidth = 1024;
-            //    // this.rdpClient.DesktopHeight = 768;
-            //    // this.rdpClient.ColorDepth = 24;
-
-            //    this.rdpClient.Connect();
-            //} catch (Exception ex) {
-            //    MessageBox.Show($"Error connecting: {ex.Message}");
-            //}
         }
 
         private void BtnDisconnect_Click(object sender, RoutedEventArgs e) {
@@ -255,15 +267,14 @@ namespace SoftSledWPF {
         }
 
         private void DisconnectRdp() {
-            if (this.rdpClient != null && this.rdpClient.Connected == 1) // Check if connected (1=Connected, 0=Not Connected)
-           {
-                try {
-                    this.rdpClient.Disconnect();
-                } catch (Exception ex) {
-                    // Log or handle disconnection error
-                    System.Diagnostics.Debug.WriteLine($"Error disconnecting: {ex.Message}");
-                }
+            try {
+                freeRdpClient?.Disconnect();
+            } catch (Exception ex) {
+                System.Diagnostics.Debug.WriteLine($"FreeRDP disconnect error: {ex.Message}");
             }
+            // Drop the bitmap binding so WPF releases its reference; the
+            // FreeRdpClient nulls its internal _bitmap on Dispose anyway.
+            rdpDisplay.Source = null;
         }
 
         private void BtnExtenderSetup_Click(object sender, EventArgs e) {
@@ -278,274 +289,21 @@ namespace SoftSledWPF {
             MessageBox.Show("SoftSled is broadcasting! Use the key 1234-3706 to pair the device");
         }
 
-        #region RDPClient ActiveX Events ######################################
-
-        private void InitialiseRdpClient() {
-
-            // Add EventHandlers
-            rdpClient.OnConnected += new EventHandler(RdpClient_OnConnected);
-            rdpClient.OnDisconnected += new AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEventHandler(RdpClient_OnDisconnected);
-
-            // Set Port
-            rdpClient.AdvancedSettings3.RDPPort = 3390;
-            //rdpClient.AdvancedSettings3.RDPPort = 3389;
-            rdpClient.AdvancedSettings7.PluginDlls = "RDPVCManager.dll";
-            rdpClient.AdvancedSettings7.RedirectClipboard = false;
-            rdpClient.AdvancedSettings7.RedirectPrinters = false;
-            //rdpClient.ColorDepth = 16;
-
-
-            // McxSess - Used by McrMgr for Extender Session Control
-            // MCECaps - not known where used
-            // devcaps - Used by EhShell to determine Extender capabilities
-            // avctrl - Used for AV Signalling
-            // VCHD - something to do with av signalling
-            // splash - appears to be used with both the RUI and BIG DevCaps options, but only when both capabilities are enabled (Big-Endian Remote Rendering). Likely no use for this project.
-
-            // NOTICE, if you want ehshell.exe to start up in normal Remote Desktop mode, remove the devcaps channel definition bellow. 
-            //rdpClient.CreateVirtualChannels("McxSess,MCECaps,avctrl,VCHD");
-            //rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD");
-            //rdpClient.CreateVirtualChannels("McxSess,MCECaps,devcaps,avctrl,VCHD,splash");
-
-            // Set RDP Initialised
-            rdpInitialised = true;
-        }
-
-        void RdpClient_OnDisconnected(object sender, AxMSTSCLib.IMsTscAxEvents_OnDisconnectedEvent e) {
-            btnConnect.IsEnabled = true;
-            btnDisconnect.IsEnabled = false;
-
-            //// Stop playing Media
-            //_mp.Stop();
-
-            m_logger.LogInfo($"RDP: Disconnected ({e.discReason})");
-            if (isConnecting == true) {
-                //SetStatus("Forcibly disconnected from Remote Desktop Host");
-                isConnecting = false;
-            }
-
-        }
-
-        void RdpClient_OnConnected(object sender, EventArgs e) {
-            m_logger.LogInfo("RDP: Connected");
-            //SetStatus("Remote Desktop Connected! Waiting for Media Center...");
-
-            btnConnect.IsEnabled = false;
-            btnDisconnect.IsEnabled = true;
-        }
-
-        #endregion ############################################################
-
-
-        // --- Event Handlers ---
-
-        private void RdpClient_OnLoginComplete(object sender, EventArgs e) {
-            // Handle successful login (runs on UI thread)
-            System.Diagnostics.Debug.WriteLine("RDP Login Complete.");
-        }
-
-        //private void RdpClient_OnDisconnected(object sender, IMsTscAxEvents_OnDisconnectedEvent e) {
-        //    // Handle disconnection (runs on UI thread)
-        //    // e.discReason provides details about why the disconnect happened
-        //    MessageBox.Show($"Disconnected from RDP session. Reason code: {e.discReason}");
-        //    System.Diagnostics.Debug.WriteLine($"RDP Disconnected. Reason: {e.discReason}");
-        //}
-
-
         // --- Cleanup ---
 
         private void MainWindow_Closed(object sender, EventArgs e) {
-            // Ensure disconnection and proper disposal on window close
             DisconnectRdp();
-
-            if (this.rdpClient != null) {
-                // Unsubscribe from events to prevent memory leaks
-                this.rdpClient.OnDisconnected -= RdpClient_OnDisconnected;
-                this.rdpClient.OnLoginComplete -= RdpClient_OnLoginComplete;
-                // Unsubscribe others...
-
-                this.rdpClient.Dispose(); // Dispose the ActiveX control
-                this.rdpClient = null;
-            }
-
-            if (this.rdpHost != null) {
-                this.rdpHost.Dispose(); // Dispose the host control
-                this.rdpHost = null;
-            }
+            try {
+                freeRdpClient?.Dispose();
+            } catch { /* ignored */ }
+            freeRdpClient = null;
+            try { _audioPlayer?.Dispose(); } catch { }
+            _audioPlayer = null;
+            _audioDumper = null;
+            _fastpathDispatcher = null;
         }
 
         private void btnPair_Click(object sender, RoutedEventArgs e) {
-
         }
-
-        delegate void dRdpClientVisible(bool show);
-        void SetRdpClientVisible(bool show) {
-            if (!Dispatcher.CheckAccess()) {
-                dRdpClientVisible d = new dRdpClientVisible(SetRdpClientVisible);
-                Dispatcher.Invoke(d, new object[] { show });
-            } else {
-                rdpClient.Visible = show;
-            }
-        }
-
-
-        //private void MainWindow_Loaded(object sender, RoutedEventArgs e) {
-        //    //// Delay the call slightly using the dispatcher
-        //    //// Use Loaded priority first, if that still fails, try Background
-        //    //Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
-        //    //    new Action(() => ApplyTransparencyToHostedControl()));
-        //}
-
-        //// You could also call this from a Button Click event handler
-        //private void ApplyTransparencyToHostedControl() {
-        //    if (testPanel == null || !testPanel.IsHandleCreated) {
-        //        MessageBox.Show("Hosted control or its handle is not ready yet.");
-        //        return;
-        //    }
-
-
-
-        //    IntPtr hwnd = testPanel.Handle;
-        //    if (hwnd == IntPtr.Zero) {
-        //        MessageBox.Show("Failed to get HWND handle for the hosted control.");
-        //        return;
-        //    }
-
-        //    System.Diagnostics.Debug.WriteLine($"ApplyTransparency - HWND: {hwnd.ToInt64()}, IsHandleCreated: {testPanel.IsHandleCreated}"); // Debug output
-
-        //    try {
-
-        //        // 1. Get current extended window styles USING THE HELPER
-        //        IntPtr currentExStyle = NativeMethods.GetWindowLongPtrHelper(hwnd, NativeMethods.GWL_EXSTYLE); // Use Helper!
-
-        //        // Check for error from GetWindowLongPtrHelper (optional but good)
-        //        if (currentExStyle == IntPtr.Zero && Marshal.GetLastWin32Error() != 0) {
-        //            MessageBox.Show($"Failed to get window extended style. Error code: {Marshal.GetLastWin32Error()}");
-        //            return;
-        //        }
-
-        //        // 2. Add the WS_EX_LAYERED style
-        //        IntPtr newExStyle = new IntPtr(currentExStyle.ToInt64() | NativeMethods.WS_EX_LAYERED);
-
-        //        // 3. Set the new extended window styles USING THE HELPER
-        //        IntPtr resultSetStyle = NativeMethods.SetWindowLongPtrHelper(hwnd, NativeMethods.GWL_EXSTYLE, newExStyle); // Use Helper!
-        //        if (resultSetStyle == IntPtr.Zero && Marshal.GetLastWin32Error() != 0) {
-        //            MessageBox.Show($"Failed to set WS_EX_LAYERED style. Error code: {Marshal.GetLastWin32Error()}");
-        //            return;
-        //        }
-
-        //        IntPtr checkExStyle = NativeMethods.GetWindowLongPtrHelper(hwnd, NativeMethods.GWL_EXSTYLE);
-        //        if ((checkExStyle.ToInt64() & NativeMethods.WS_EX_LAYERED) == 0) {
-        //            MessageBox.Show("Error: WS_EX_LAYERED style check failed AFTER setting it.");
-        //            return; // Don't proceed if style isn't confirmed
-        //        }
-        //        System.Diagnostics.Debug.WriteLine("Style check PASSED. WS_EX_LAYERED is present.");
-        //        // *** END VERIFICATION STEP ***
-
-        //        //// 1. Get current extended window styles
-        //        //IntPtr currentExStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
-
-        //        //// 2. Add the WS_EX_LAYERED style
-        //        //IntPtr newExStyle = new IntPtr(currentExStyle.ToInt64() | NativeMethods.WS_EX_LAYERED);
-
-        //        //// 3. Set the new extended window styles
-        //        //IntPtr resultSetStyle = NativeMethods.SetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE, newExStyle);
-        //        //if (resultSetStyle == IntPtr.Zero && Marshal.GetLastWin32Error() != 0) {
-        //        //    MessageBox.Show($"Failed to set WS_EX_LAYERED style. Error code: {Marshal.GetLastWin32Error()}");
-        //        //    return;
-        //        //}
-
-        //        // 4. Define the color key (e.g., Magenta)
-        //        System.Drawing.Color keyColor = System.Drawing.Color.Black; // Change this to your desired transparent color
-        //        uint keyColorWin32 = NativeMethods.ToWin32Color(keyColor);
-
-        //        // 5. Set the layered window attributes for color keying
-        //        bool setResult = NativeMethods.SetLayeredWindowAttributes(hwnd, keyColorWin32, 0, NativeMethods.LWA_COLORKEY);
-        //        if (!setResult) {
-        //            MessageBox.Show($"Failed to set layered window attributes. Error code: {Marshal.GetLastWin32Error()}");
-        //        } else {
-        //            // Optional: Indicate success if desired
-        //             MessageBox.Show("Transparency Key Applied Successfully!");
-        //        }
-        //    } catch (Exception ex) {
-        //        MessageBox.Show($"An error occurred: {ex.Message}");
-        //    }
-        //}
-
-
-        //private void SetupRdpControl() {
-
-        //    //testPanel = new System.Windows.Forms.Panel();
-        //    //testPanel.BackColor = System.Drawing.Color.Blue; // Make it visible
-        //    ////testPanel.Dock = DockStyle.Fill; // Test docking too
-
-        //    //wfHost.Child = testPanel; // Assign the PANEL as the child
-
-
-        //    //rdpControl = new AxMsRdpClient7NotSafeForScripting();
-
-        //    //// Initialize the ActiveX control if needed (often done automatically)
-        //    //((System.ComponentModel.ISupportInitialize)(rdpControl)).BeginInit();
-        //    //rdpControl.Enabled = true;
-        //    //// Assign the ActiveX wrapper control to the WindowsFormsHost
-        //    //wfHost.Child = rdpControl;
-
-        //    //((System.ComponentModel.ISupportInitialize)(rdpControl)).EndInit();
-
-
-        //    //// Initial size sync (optional but can help)
-        //    //SynchronizeRdpSize(wfHost, wfHost.RenderSize);
-
-        //    //// Initialize RDP settings etc.
-        //    //rdpControl.Server = "10.1.1.33";
-        //    //rdpControl.UserName = "BradNet-Admin";
-        //    //rdpControl.AdvancedSettings7.ClearTextPassword = "nesjeorithsA1";
-        //    //rdpControl.AdvancedSettings7.SmartSizing = true;
-
-        //    //rdpControl.Connect();
-        //}
-
-
-        //private void WfHost_SizeChanged(object sender, SizeChangedEventArgs e) {
-        //    SynchronizeRdpSize(sender as System.Windows.Forms.Integration.WindowsFormsHost, e.NewSize);
-        //}
-
-        //private void SynchronizeRdpSize(System.Windows.Forms.Integration.WindowsFormsHost host, Size newSize) {
-        //    if (host?.Child is AxMsRdpClient7NotSafeForScripting childControl) {
-        //        // Check for valid size (prevents issues during load/unload)
-        //        if (newSize.Width > 0 && newSize.Height > 0 &&
-        //            IsFinite(newSize.Width) && IsFinite(newSize.Height)) {
-        //            // Set the size explicitly
-        //            childControl.Width = (int)newSize.Width;
-        //            childControl.Height = (int)newSize.Height;
-
-        //            // -- Optional: Use BeginInvoke for potential timing issues --
-        //            // If the direct setting still seems off, sometimes marshalling
-        //            // the call to the WinForms UI thread helps.
-        //            // childControl.BeginInvoke(new Action(() => {
-        //            //     if (childControl.IsHandleCreated && !childControl.IsDisposed)
-        //            //     {
-        //            //        childControl.Width = (int)newSize.Width;
-        //            //        childControl.Height = (int)newSize.Height;
-        //            //     }
-        //            // }));
-        //        }
-        //    }
-        //}
-
-        //// Helper to check for valid finite numbers
-        //private bool IsFinite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
-
-        //// --- Remember to unsubscribe when the window closes ---
-        //protected override void OnClosed(EventArgs e) {
-        //    if (wfHost != null) {
-        //        wfHost.SizeChanged -= WfHost_SizeChanged;
-        //        // Dispose child properly
-        //        wfHost.Child?.Dispose();
-        //        wfHost.Dispose();
-        //    }
-        //    base.OnClosed(e);
-        //}
-
     }
 }

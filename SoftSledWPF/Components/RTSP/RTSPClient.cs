@@ -121,8 +121,8 @@ namespace SoftSled.Components.RTSP {
 
 
             // --- Configuration ---
-            string ffmpegPath = @"C:\Users\Luke\source\repos\SoftSled2\SoftSled\bin\x86\Debug\ffmpeg.exe";
-            string ffplayPath = @"C:\Users\Luke\source\repos\SoftSled2\SoftSled\bin\x86\Debug\ffplay.exe";
+            string ffmpegPath = @"C:\Windows\ffmpeg.exe";
+            string ffplayPath = @"C:\Windows\ffplay.exe";
 
             // Payload types from SDP
             int videoPayloadType = 4; // Example: H.264 1280x720
@@ -177,19 +177,28 @@ namespace SoftSled.Components.RTSP {
             // Subscribe to logs
             //muxer.FfmpegErrorDataReceived += (s, e) => Trace.WriteLine($"FFMPEG: {e}");
             //muxer.FfplayErrorDataReceived += (s, e) => Trace.WriteLine($"FFPLAY: {e}");
-
-            //// Subscribe to depacketizer outputs
             videoDepacketizer.NalUnitReady += async (s, eventData) => {
-                // Assuming NAL units come one by one, collect them into frames if needed
-                // For simplicity here, processing individually (adjust if needed)
+                // Discard non-sync-point video MAUs after a packet loss until we hit an IDR.
+                // Otherwise the H.264 decoder gets P/B frames with a missing reference.
+                if (eventData.PostLoss && !eventData.SyncPoint)
+                {
+                    Trace.WriteLine($"Skipping post-loss non-keyframe MAU (len={eventData.data.Length})");
+                    return;
+                }
                 muxer.ProcessVideoFrameNalUnits(new List<byte[]> { eventData.data }, eventData.timestamp);
-
-                //byte[] annexedArray = new byte[nalUnit.Length + AnnexBStartCode.Length];
-                //Array.Copy(AnnexBStartCode, 0, annexedArray, 0, AnnexBStartCode.Length);
-                //Array.Copy(nalUnit, 0, annexedArray, AnnexBStartCode.Length, AnnexBStartCode.Length);
-
-                //videoForm.videoDecoder.DecodeNalUnits(annexedArray, annexedArray.Length, ffmpeg.AV_NOPTS_VALUE);
             };
+            ////// Subscribe to depacketizer outputs
+            //videoDepacketizer.NalUnitReady += async (s, eventData) => {
+            //    // Assuming NAL units come one by one, collect them into frames if needed
+            //    // For simplicity here, processing individually (adjust if needed)
+            //    muxer.ProcessVideoFrameNalUnits(new List<byte[]> { eventData.data }, eventData.timestamp);
+
+            //    //byte[] annexedArray = new byte[nalUnit.Length + AnnexBStartCode.Length];
+            //    //Array.Copy(AnnexBStartCode, 0, annexedArray, 0, AnnexBStartCode.Length);
+            //    //Array.Copy(nalUnit, 0, annexedArray, AnnexBStartCode.Length, AnnexBStartCode.Length);
+
+            //    //videoForm.videoDecoder.DecodeNalUnits(annexedArray, annexedArray.Length, ffmpeg.AV_NOPTS_VALUE);
+            //};
             audioDepacketizer.AudioDataReady += async (s, eventData) => { // Assuming NalUnitReady for audio too
                 muxer.ProcessAudioData(eventData.data, eventData.timestamp);
             };
@@ -549,8 +558,10 @@ namespace SoftSled.Components.RTSP {
                 uint rtp_extension_id = 0;
                 uint rtp_extension_size = 0;
                 if (rtp_extension == 1) {
-                    rtp_extension_id = ((uint)e.Message.Data[rtp_payload_start + 0] << 8) + (uint)(e.Message.Data[rtp_payload_start + 1] << 0);
-                    rtp_extension_size = ((uint)e.Message.Data[rtp_payload_start + 2] << 8) + (uint)(e.Message.Data[rtp_payload_start + 3] << 0) * 4; // units of extension_size is 4-bytes
+                    rtp_extension_id = ((uint)e.Message.Data[rtp_payload_start + 0] << 8) | (uint)e.Message.Data[rtp_payload_start + 1];
+                    // RFC 3550 §5.3.1: extension length is 16-bit big-endian and counted in 32-bit words.
+                    // Previous code had operator-precedence bug: `(hi<<8) + lo*4` instead of `((hi<<8)|lo)*4`.
+                    rtp_extension_size = (((uint)e.Message.Data[rtp_payload_start + 2] << 8) | (uint)e.Message.Data[rtp_payload_start + 3]) * 4u;
                     rtp_payload_start += 4 + (int)rtp_extension_size;  // extension header and extension payload
                 }
 
@@ -572,40 +583,36 @@ namespace SoftSled.Components.RTSP {
                 //                   + " Timestamp=" + rtp_timestamp / 90 // convert from 90kHZ clock to ms
                 //                   + " SSRC=" + rtp_ssrc);
 
+                // RFC 3550 §5.1: when the P bit is set, the LAST byte of the packet contains the
+                // padding count (including the count byte itself), and those bytes are NOT payload.
+                // Trim before handing to the depacketizer; otherwise stray bytes leak past BF1.
+                int rtp_payload_end = e.Message.Data.Length;
+                if (rtp_padding == 1) {
+                    int padCount = e.Message.Data[rtp_payload_end - 1];
+                    if (padCount > 0 && rtp_payload_end - padCount >= rtp_payload_start)
+                        rtp_payload_end -= padCount;
+                }
+                int rtp_payload_len = rtp_payload_end - rtp_payload_start;
+
                 // Handle Video with X-WMF-PF Payload
-                // If the payload type in the RTP packet matches the Video X-WMF-PF value from the SDP
                 if (data_received.Channel == video_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
-
-                    //System.Diagnostics.Debug.WriteLine("Video RTP Data"
-                    //               + " V=" + rtp_version
-                    //               + " P=" + rtp_padding
-                    //               + " X=" + rtp_extension
-                    //               + " CC=" + rtp_csrc_count
-                    //               + " M=" + rtp_marker
-                    //               + " PT=" + rtp_payload_type
-                    //               + " Seq=" + rtp_sequence_number
-                    //               + " Timestamp=" + rtp_timestamp
-                    //               + " SSRC=" + rtp_ssrc
-                    //               + " Size=" + e.Message.Data.Length);
-
-                    // Create Byte Array to hold RTP Payload
-                    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start];
-                    // Copy the RTP Payload to the Byte Array
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length);
-                    // Process the WMRPT PayLoad
-                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp);
+                    byte[] rtp_payload = new byte[rtp_payload_len];
+                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
+                    // Marker bit propagated for cross-checking F-field fragmentation completion
+                    // (WMRTP spec line 643).
+                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
+                                                          (ushort)rtp_sequence_number, rtp_timestamp,
+                                                          rtp_marker == 1);
                     return;
                 }
 
                 // Handle Audio with X-WMF-PF Payload
-                // If the payload type in the RTP packet matches the Audio X-WMF-PF value from the SDP
                 if (data_received.Channel == audio_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
-                    // Create Byte Array to hold RTP Payload
-                    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start];
-                    // Copy the RTP Payload to the Byte Array
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length);
-                    // Process the WMRPT PayLoad
-                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp);
+                    byte[] rtp_payload = new byte[rtp_payload_len];
+                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
+                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
+                                                          (ushort)rtp_sequence_number, rtp_timestamp,
+                                                          rtp_marker == 1);
                     return;
                 }
 
@@ -913,8 +920,10 @@ namespace SoftSled.Components.RTSP {
                 uint rtp_extension_id = 0;
                 uint rtp_extension_size = 0;
                 if (rtp_extension == 1) {
-                    rtp_extension_id = ((uint)e.Message.Data[rtp_payload_start + 0] << 8) + (uint)(e.Message.Data[rtp_payload_start + 1] << 0);
-                    rtp_extension_size = ((uint)e.Message.Data[rtp_payload_start + 2] << 8) + (uint)(e.Message.Data[rtp_payload_start + 3] << 0) * 4; // units of extension_size is 4-bytes
+                    rtp_extension_id = ((uint)e.Message.Data[rtp_payload_start + 0] << 8) | (uint)e.Message.Data[rtp_payload_start + 1];
+                    // RFC 3550 §5.3.1: extension length is 16-bit big-endian and counted in 32-bit words.
+                    // Previous code had operator-precedence bug: `(hi<<8) + lo*4` instead of `((hi<<8)|lo)*4`.
+                    rtp_extension_size = (((uint)e.Message.Data[rtp_payload_start + 2] << 8) | (uint)e.Message.Data[rtp_payload_start + 3]) * 4u;
                     rtp_payload_start += 4 + (int)rtp_extension_size;  // extension header and extension payload
                 }
 
@@ -936,40 +945,36 @@ namespace SoftSled.Components.RTSP {
                 //                   + " Timestamp=" + rtp_timestamp / 90 // convert from 90kHZ clock to ms
                 //                   + " SSRC=" + rtp_ssrc);
 
+                // RFC 3550 §5.1: when the P bit is set, the LAST byte of the packet contains the
+                // padding count (including the count byte itself), and those bytes are NOT payload.
+                // Trim before handing to the depacketizer; otherwise stray bytes leak past BF1.
+                int rtp_payload_end = e.Message.Data.Length;
+                if (rtp_padding == 1) {
+                    int padCount = e.Message.Data[rtp_payload_end - 1];
+                    if (padCount > 0 && rtp_payload_end - padCount >= rtp_payload_start)
+                        rtp_payload_end -= padCount;
+                }
+                int rtp_payload_len = rtp_payload_end - rtp_payload_start;
+
                 // Handle Video with X-WMF-PF Payload
-                // If the payload type in the RTP packet matches the Video X-WMF-PF value from the SDP
                 if (data_received.Channel == video_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
-
-                    //System.Diagnostics.Debug.WriteLine("Video RTP Data"
-                    //               + " V=" + rtp_version
-                    //               + " P=" + rtp_padding
-                    //               + " X=" + rtp_extension
-                    //               + " CC=" + rtp_csrc_count
-                    //               + " M=" + rtp_marker
-                    //               + " PT=" + rtp_payload_type
-                    //               + " Seq=" + rtp_sequence_number
-                    //               + " Timestamp=" + rtp_timestamp
-                    //               + " SSRC=" + rtp_ssrc
-                    //               + " Size=" + e.Message.Data.Length);
-
-                    // Create Byte Array to hold RTP Payload
-                    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start];
-                    // Copy the RTP Payload to the Byte Array
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length);
-                    // Process the WMRPT PayLoad
-                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp);
+                    byte[] rtp_payload = new byte[rtp_payload_len];
+                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
+                    // Marker bit propagated for cross-checking F-field fragmentation completion
+                    // (WMRTP spec line 643).
+                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
+                                                          (ushort)rtp_sequence_number, rtp_timestamp,
+                                                          rtp_marker == 1);
                     return;
                 }
 
                 // Handle Audio with X-WMF-PF Payload
-                // If the payload type in the RTP packet matches the Audio X-WMF-PF value from the SDP
                 if (data_received.Channel == audio_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
-                    // Create Byte Array to hold RTP Payload
-                    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start];
-                    // Copy the RTP Payload to the Byte Array
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length);
-                    // Process the WMRPT PayLoad
-                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload.Length, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp);
+                    byte[] rtp_payload = new byte[rtp_payload_len];
+                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
+                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
+                                                          (ushort)rtp_sequence_number, rtp_timestamp,
+                                                          rtp_marker == 1);
                     return;
                 }
 

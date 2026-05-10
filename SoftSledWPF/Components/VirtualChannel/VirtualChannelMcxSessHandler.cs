@@ -218,7 +218,7 @@ namespace SoftSled.Components.VirtualChannel {
                     // Heartbeat Request
                     else if (dispatchFunctionHandle == 1) {
 
-                        //m_logger.LogDebug("MCXSESS: Heartbeat");
+                        m_logger.LogDebug("MCXSESS: Heartbeat");
 
                         // Get Heartbeat Data
                         int HeartbeatPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
