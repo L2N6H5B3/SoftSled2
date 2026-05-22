@@ -1,0 +1,1665 @@
+[MS-DMCT]:
+
+Device Media Control Protocol
+
+Intellectual Property Rights Notice for Open Specifications Documentation
+
+ Technical Documentation. Microsoft publishes Open Specifications documentation ("this
+      documentation") for protocols, file formats, data portability, computer languages, and standards
+      support. Additionally, overview documents cover inter-protocol relationships and interactions.
+
+ Copyrights. This documentation is covered by Microsoft copyrights. Regardless of any other
+      terms that are contained in the terms of use for the Microsoft website that hosts this
+      documentation, you can make copies of it in order to develop implementations of the technologies
+      that are described in this documentation and can distribute portions of it in your implementations
+      that use these technologies or in your documentation as necessary to properly document the
+      implementation. You can also distribute in your implementation, with or without modification, any
+      schemas, IDLs, or code samples that are included in the documentation. This permission also
+      applies to any documents that are referenced in the Open Specifications documentation.
+
+ No Trade Secrets. Microsoft does not claim any trade secret rights in this documentation.
+ Patents. Microsoft has patents that might cover your implementations of the technologies
+
+      described in the Open Specifications documentation. Neither this notice nor Microsoft's delivery of
+      this documentation grants any licenses under those patents or any other Microsoft patents.
+      However, a given Open Specifications document might be covered by the Microsoft Open
+      Specifications Promise or the Microsoft Community Promise. If you would prefer a written license,
+      or if the technologies described in this documentation are not covered by the Open Specifications
+      Promise or Community Promise, as applicable, patent licenses are available by contacting
+      iplg@microsoft.com.
+ License Programs. To see all of the protocols in scope under a specific license program and the
+      associated patents, visit the Patent Map.
+ Trademarks. The names of companies and products contained in this documentation might be
+      covered by trademarks or similar intellectual property rights. This notice does not grant any
+      licenses under those rights. For a list of Microsoft trademarks, visit
+      www.microsoft.com/trademarks.
+ Fictitious Names. The example companies, organizations, products, domain names, email
+      addresses, logos, people, places, and events that are depicted in this documentation are fictitious.
+      No association with any real company, organization, product, domain name, email address, logo,
+      person, place, or event is intended or should be inferred.
+
+Reservation of Rights. All other rights are reserved, and this notice does not grant any rights other
+than as specifically described above, whether by implication, estoppel, or otherwise.
+
+Tools. The Open Specifications documentation does not require the use of Microsoft programming
+tools or programming environments in order for you to develop an implementation. If you have access
+to Microsoft programming tools and environments, you are free to take advantage of them. Certain
+Open Specifications documents are intended for use in conjunction with publicly available standards
+specifications and network programming art and, as such, assume that the reader either is familiar
+with the aforementioned material or has immediate access to it.
+
+Support. For questions and support, please contact dochelp@microsoft.com.
+
+                                        1 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+Revision Summary
+
+Date      Revision  Revision            Comments
+          History   Class
+                    Major               First Release.
+11/6/2009 0.1       Editorial
+                    Editorial           Changed language and formatting in the technical content.
+12/18/2009 0.1.1    Editorial
+                    Editorial           Changed language and formatting in the technical content.
+1/29/2010 0.1.2     Major
+                    Editorial           Changed language and formatting in the technical content.
+3/12/2010 0.1.3     None
+                                        Changed language and formatting in the technical content.
+4/23/2010 0.1.4     None
+                                        Updated and revised the technical content.
+6/4/2010  1.0       None
+                                        Changed language and formatting in the technical content.
+7/16/2010 1.0.1     None
+                                        No changes to the meaning, language, or formatting of the
+8/27/2010 1.0.1     None                technical content.
+
+10/8/2010 1.0.1     None                No changes to the meaning, language, or formatting of the
+                                        technical content.
+11/19/2010 1.0.1    None
+                    Minor               No changes to the meaning, language, or formatting of the
+1/7/2011  1.0.1     None                technical content.
+                    Major
+2/11/2011 1.0.1     None                No changes to the meaning, language, or formatting of the
+                                        technical content.
+3/25/2011 1.0.1     None
+                                        No changes to the meaning, language, or formatting of the
+5/6/2011  1.0.1     None                technical content.
+
+6/17/2011 1.1       None                No changes to the meaning, language, or formatting of the
+                    Major               technical content.
+9/23/2011 1.1       Major
+                    None                No changes to the meaning, language, or formatting of the
+12/16/2011 2.0                          technical content.
+
+3/30/2012 2.0                           Clarified the meaning of the technical content.
+
+7/12/2012 2.0                           No changes to the meaning, language, or formatting of the
+                                        technical content.
+10/25/2012 2.0
+                                        Updated and revised the technical content.
+1/31/2013 2.0
+                                        No changes to the meaning, language, or formatting of the
+8/8/2013  3.0                           technical content.
+
+11/14/2013 4.0                          No changes to the meaning, language, or formatting of the
+                                        technical content.
+2/13/2014 4.0
+                                        No changes to the meaning, language, or formatting of the
+                                        technical content.
+
+                                        No changes to the meaning, language, or formatting of the
+                                        technical content.
+
+                                        Updated and revised the technical content.
+
+                                        Updated and revised the technical content.
+
+                                        No changes to the meaning, language, or formatting of the
+                                        technical content.
+
+                                                                                                                               2 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+Date      Revision  Revision            Comments
+          History   Class
+                    None                No changes to the meaning, language, or formatting of the
+5/15/2014 4.0       None                technical content.
+                    None
+6/30/2015 4.0       None                No changes to the meaning, language, or formatting of the
+                    None                technical content.
+10/16/2015 4.0
+                                        No changes to the meaning, language, or formatting of the
+7/14/2016 4.0                           technical content.
+
+6/1/2017  4.0                           No changes to the meaning, language, or formatting of the
+                                        technical content.
+
+                                        No changes to the meaning, language, or formatting of the
+                                        technical content.
+
+                                        3 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+Table of Contents
+
+   1 Introduction ............................................................................................................ 6
+      1.1 Glossary ........................................................................................................... 6
+      1.2 References ........................................................................................................ 6
+         1.2.1 Normative References ................................................................................... 7
+         1.2.2 Informative References ................................................................................. 7
+      1.3 Overview .......................................................................................................... 7
+      1.4 Relationship to Other Protocols ............................................................................ 8
+         1.4.1 Device Services Lightweight Remoting Protocol ................................................ 9
+         1.4.2 Real Time Streaming Protocol (RTSP) .............................................................. 9
+      1.5 Prerequisites/Preconditions ................................................................................. 9
+      1.6 Applicability Statement ..................................................................................... 11
+      1.7 Versioning and Capability Negotiation ................................................................. 11
+      1.8 Vendor-Extensible Fields ................................................................................... 11
+      1.9 Standards Assignments..................................................................................... 11
+
+   2 Messages............................................................................................................... 12
+      2.1 Transport ........................................................................................................ 12
+      2.2 Message Syntax ............................................................................................... 12
+         2.2.1 Media Controller Service .............................................................................. 12
+            2.2.1.1 OpenMedia ........................................................................................... 12
+               2.2.1.1.1 OpenMedia (request) ....................................................................... 12
+               2.2.1.1.2 OpenMedia (response) ..................................................................... 13
+            2.2.1.2 CloseMedia........................................................................................... 14
+            2.2.1.3 Start ................................................................................................... 14
+               2.2.1.3.1 Start (request) ................................................................................ 14
+               2.2.1.3.2 Start (response).............................................................................. 15
+            2.2.1.4 Pause .................................................................................................. 15
+            2.2.1.5 GetDuration ......................................................................................... 16
+            2.2.1.6 GetPosition........................................................................................... 16
+            2.2.1.7 RegisterMediaEventCallback ................................................................... 17
+               2.2.1.7.1 RegisterMediaEventCallback (request)................................................ 17
+               2.2.1.7.2 RegisterMediaEventCallback (response).............................................. 17
+            2.2.1.8 UnRegisterMediaEventCallback ............................................................... 18
+               2.2.1.8.1 UnRegisterMediaEventCallback(request) ............................................. 18
+               2.2.1.8.2 UnRegisterMediaEventCallback (response) .......................................... 18
+         2.2.2 Media Event Callback .................................................................................. 18
+            2.2.2.1 OnMediaEvent ...................................................................................... 18
+               2.2.2.1.1 OnMediaEvent (request)................................................................... 19
+               2.2.2.1.2 OnMediaEvent (response)................................................................. 19
+                  2.2.2.1.2.1 BUFFERING_STOP ...................................................................... 19
+                  2.2.2.1.2.2 END_OF_MEDIA......................................................................... 19
+                  2.2.2.1.2.3 RTSP_DISCONNECT ................................................................... 19
+                  2.2.2.1.2.4 PTS_ERROR .............................................................................. 19
+                  2.2.2.1.2.5 UNRECOVERABLE_SKEW ............................................................ 19
+                  2.2.2.1.2.6 DRM_LICENSE_ERROR ............................................................... 20
+                  2.2.2.1.2.7 DRM_LICENSE_CLEAR ................................................................ 20
+                  2.2.2.1.2.8 DRM_HDCP_ERROR.................................................................... 20
+                  2.2.2.1.2.9 FIRMWARE_UPDATE ................................................................... 20
+
+   3 Protocol Details ..................................................................................................... 21
+      3.1 Extender Device Details .................................................................................... 21
+         3.1.1 Abstract Data Model.................................................................................... 22
+         3.1.2 Timer 1 ..................................................................................................... 23
+         3.1.3 Initialization ............................................................................................... 23
+         3.1.4 Higher-Layer Triggered Events ..................................................................... 23
+
+                                                                                                                                  4 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+      3.1.5 Processing Events and Sequencing Rules ....................................................... 23
+         3.1.5.1 OpenMedia ........................................................................................... 23
+         3.1.5.2 CloseMedia........................................................................................... 23
+         3.1.5.3 Start ................................................................................................... 24
+         3.1.5.4 Pause .................................................................................................. 24
+         3.1.5.5 GetDuration ......................................................................................... 24
+         3.1.5.6 GetPosition........................................................................................... 24
+         3.1.5.7 RegisterMediaEventCallback ................................................................... 24
+         3.1.5.8 UnRegisterMediaEventCallback ............................................................... 25
+
+      3.1.6 Timer 2 ..................................................................................................... 25
+      3.1.7 Other Local Events...................................................................................... 25
+   3.2 Host Details..................................................................................................... 25
+      3.2.1 Abstract Data Model.................................................................................... 26
+      3.2.2 Timer ........................................................................................................ 27
+      3.2.3 Initialization ............................................................................................... 27
+      3.2.4 Higher-Layer Triggered Events ..................................................................... 27
+      3.2.5 Processing Events and Sequencing Rules ....................................................... 27
+
+         3.2.5.1 END_OF_MEDIA .................................................................................... 27
+         3.2.5.2 RTSP_DISCONNECT .............................................................................. 27
+         3.2.5.3 UNRECOVERABLE_SKEW........................................................................ 27
+         3.2.5.4 DRM_LICENSE_ERROR .......................................................................... 28
+         3.2.5.5 DRM_LICENSE_CLEAR ........................................................................... 28
+         3.2.5.6 DRM_HDCP_ERROR ............................................................................... 28
+         3.2.5.7 DRM_HDCP_CLEAR ............................................................................... 28
+         3.2.5.8 FIRMWARE_UPDATE .............................................................................. 28
+      3.2.6 Timer Events.............................................................................................. 28
+      3.2.7 Other Local Events...................................................................................... 28
+
+4 Protocol Examples ................................................................................................. 29
+
+5 Security ................................................................................................................. 31
+   5.1 Security Considerations for Implementers ........................................................... 31
+   5.2 Index of Security Parameters ............................................................................ 31
+
+6 Appendix A: Product Behavior ............................................................................... 32
+
+7 Change Tracking.................................................................................................... 33
+
+8 Index..................................................................................................................... 34
+
+                                                                                                                                 5 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+1 Introduction
+
+This document specifies the Device Media Control Protocol. This protocol uses the Device Services
+Lightweight Remoting Protocol specified in [MS-DSLR] to enable a computer to control media playback
+in an active device session.
+
+Sections 1.5, 1.8, 1.9, 2, and 3 of this specification are normative. All other sections and examples in
+this specification are informative.
+
+1.1 Glossary
+
+This document uses the following terms:
+
+    big-endian: Multiple-byte values that are byte-ordered with the most significant byte stored in the
+         memory location with the lowest address.
+
+    globally unique identifier (GUID): A term used interchangeably with universally unique
+         identifier (UUID) in Microsoft protocol technical documents (TDs). Interchanging the usage of
+         these terms does not imply or require a specific algorithm or mechanism to generate the value.
+         Specifically, the use of this term does not imply or require that the algorithms described in
+         [RFC4122] or [C706] must be used for generating the GUID. See also universally unique
+         identifier (UUID).
+
+    little-endian: Multiple-byte values that are byte-ordered with the least significant byte stored in
+         the memory location with the lowest address.
+
+    media: Compressed audio, video, and text data that is used by the client to play a presentation.
+
+    playlist: One or more content items that are streamed sequentially.
+
+    proxy: A network node that accepts network traffic originating from one network agent and
+         transmits it to another network agent.
+
+    Real-Time Streaming Protocol (RTSP): A protocol used for transferring real-time multimedia
+         data (for example, audio and video) between a server and a client, as specified in [RFC2326]. It
+         is a streaming protocol; this means that RTSP attempts to facilitate scenarios in which the
+         multimedia data is being simultaneously transferred and rendered (that is, video is displayed
+         and audio is played).
+
+    session: A collection of multimedia senders and receivers and the data streams that flow between
+         them. A multimedia conference is an example of a multimedia session.
+
+    stub: Used as specified in [C706] section 2.1.2.2. A stub that is used on the client is called a
+         "client stub", and a stub that is used on the server is called a "server stub".
+
+    tag: The format of all Device Services Lightweight Remoting Protocol ([MS-DSLR]) messages
+         includes the size of the payload, number of children, and the tag payload itself.
+
+    MAY, SHOULD, MUST, SHOULD NOT, MUST NOT: These terms (in all caps) are used as defined
+         in [RFC2119]. All statements of optional behavior use either MAY, SHOULD, or SHOULD NOT.
+
+1.2 References
+
+Links to a document in the Microsoft Open Specifications library point to the correct section in the
+most recently published version of the referenced document. However, because individual documents
+in the library are not updated at the same time, the section numbers in the documents may not
+match. You can confirm the correct section numbering by checking the Errata.
+
+                                        6 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+1.2.1 Normative References
+
+We conduct frequent surveys of the normative references to assure their continued availability. If you
+have any issue with finding a normative reference, please contact dochelp@microsoft.com. We will
+assist you in finding the relevant information.
+
+[MS-DSLR] Microsoft Corporation, "Device Services Lightweight Remoting Protocol".
+
+[MS-DTYP] Microsoft Corporation, "Windows Data Types".
+
+[MS-RTSP] Microsoft Corporation, "Real-Time Streaming Protocol (RTSP) Windows Media Extensions".
+
+[RFC2119] Bradner, S., "Key words for use in RFCs to Indicate Requirement Levels", BCP 14, RFC
+2119, March 1997, http://www.rfc-editor.org/rfc/rfc2119.txt
+
+[RFC3550] Schulzrinne, H., Casner, S., Frederick, R., and Jacobson, V., "RTP: A Transport Protocol for
+Real-Time Applications", STD 64, RFC 3550, July 2003, http://www.ietf.org/rfc/rfc3550.txt
+
+[RFC3556] Casner, S., "Session Description Protocol (SDP) Bandwidth Modifiers for RTP Control
+Protocol (RTCP) Bandwidth", RFC 3556, July 2003, http://www.ietf.org/rfc/rfc3556.txt
+
+[RFC4566] Handley, M., Jacobson, V., and Perkins, C., "SDP: Session Description Protocol", RFC 4566,
+July 2006, http://www.ietf.org/rfc/rfc4566.txt
+
+1.2.2 Informative References
+
+[MS-DRMND] Microsoft Corporation, "Windows Media Digital Rights Management (WMDRM): Network
+Devices Protocol".
+
+1.3 Overview
+
+The Device Media Control Protocol can be viewed as a set of services implemented and offered
+between the extender device (client) and a computer (host) so that the computer can remotely control
+a media session on an extender device. The computer sends media control operation requests, such
+as OpenMedia and CloseMedia, to the client to control video playback. The client in return sends
+asynchronous events, such as end of file, to the computer. This protocol uses the Device Services
+Lightweight Remoting Protocol specified in [MS-DSLR] to enable the remoting of services between the
+two devices over a reliable point-to-point channel.
+
+The following block diagram shows the relationship between the host device (that is, the computer)
+and the client device (the extender device):
+
+                                        7 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+Figure 1: Device Media Control Protocol block diagram
+
+The Media Controller service is implemented and offered by the extender device (acting in this case as
+the Device Services Lightweight Remoting (DSLR) stub/server while the computer acts as the DSLR
+proxy/client, in DSLR nomenclatures. For a more detailed definition of these roles, see [MS-DSLR]).
+The Media Controller service contains the following functions:
+
+OpenMedia: Opens the streaming media session on an extender device.
+
+CloseMedia: Closes the streaming media session.
+
+Start: Requests the extender device to start streaming media samples and playing them.
+
+Pause: Pauses the streaming media session.
+
+Stop: Stops the streaming media session.
+
+GetDuration: Gets the duration of media.
+
+GetPosition: Gets the current position of media.
+
+RegisterMediaEventCallback: Creates and connects the Media Event Callback Service between the
+      extender device and the computer to get events from the extender device to the host.
+
+UnRegisterMediaEventCallback: Disconnects and releases the current Media Event Callback Service
+      between the extender device and the computer.
+
+      The Media Event Callback service is implemented and offered by the computer (acting in this case
+      as the stub while the extender device acts as the proxy). This service contains following function:
+
+OnMediaEvent: Sends events from an extender device to a computer.
+
+1.4 Relationship to Other Protocols
+
+The Device Media Control Protocol uses the Device Services Lightweight Remoting Protocol to enable
+the remote control of the media session.
+
+                                        8 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+1.4.1 Device Services Lightweight Remoting Protocol
+
+The Device Services Lightweight Remoting Protocol (DSLR) specified in [MS-DSLR] is a COM-like
+protocol that enables remoting of services (for example, function calls, events, and so on) over a
+reliable point-to-point connection. It enables an application to call functions on and/or send events to
+a remote device over the established channel. The service itself is implemented on the local/stub side
+of the connection, and the remote side creates a proxy for that service. DSLR is direction agnostic;
+that is, each side of the connection can act as both a proxy for a remote service and a stub that
+manages calls into a local service. Both the stub and proxy are implemented by the DSLR consumer;
+each side has knowledge of the functions and events exposed by the service, as well as the in/out
+parameters for each. By convention, the request/response calling convention follows COM rules, that
+is:
+
+ The function returns an HRESULT.
+
+ All [in] parameters are serialized in the request tag.
+
+ The returned HRESULT is serialized in the response tag, followed, if successful, by the [out]
+      parameters.
+
+ The caller expects the returned HRESULT to be either one of the values returned by the function,
+      or one of the DSLR failure values.
+
+ The caller does not evaluate any of the [out] parameters if the call returned a failure.
+
+1.4.2 Real Time Streaming Protocol (RTSP)
+
+The Real Time Streaming Protocol (RTSP), specified in [MS-RTSP], is used for transferring real-time
+multimedia data (for example, audio and video) between a server and a client. It is a streaming
+protocol; this means that RTSP attempts to facilitate scenarios in which the multimedia data is being
+simultaneously transferred and rendered (that is, video is displayed and audio is played).
+
+RTSP typically uses a TCP connection for control of the streaming media session, although it is also
+possible to use UDP for this purpose. The entity that sends the RTSP request that initiates the session
+is referred to as the client, and the entity that responds to that request is referred to as the server.
+Typically, multimedia data flows from the server to the client. RTSP also allows multimedia data to
+flow in the opposite direction.
+
+Clients can send RTSP requests to the server requesting information on content before a session is
+established. The information that the server returns is formatted by using a syntax called Session
+Description Protocol (SDP), as specified in [RFC4566]. Clients use RTSP requests to control the session
+and to request that the server perform actions, such as starting or stopping the flow of multimedia
+data. Each request has a corresponding RTSP response that is sent in the opposite direction. Servers
+can also send RTSP requests to clients, for example, to inform them that the session state has
+changed. If TCP is used to exchange RTSP requests and responses, the multimedia data can also be
+transferred over the same TCP connection. Otherwise, the multimedia data is transferred over UDP.
+
+The multimedia data is encapsulated in Real-time Transport Protocol (RTP) packets, as specified in
+[RFC3550]. For each RTP stream, the server and client can also exchange Real-Time Transport Control
+Protocol (RTCP) packets, as specified in [RFC3556].
+
+1.5 Prerequisites/Preconditions
+
+For the Device Media Control Protocol to function properly, the following assumptions are required:
+ A network connection has been established between the host and the client (extender device).
+ The Device Services Lightweight Remoting Protocol modules have been initialized and started on
+
+      both devices. Once completed, the proxy side must call the CreateService message to instantiate
+
+                                        9 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+      the service on the stub side, and create a proxy for that service (that is, an object that
+      implements the proxied service's interfaces). As part of the CreateService request, it allocates a
+      service handle that is sent to the stub side. This handle will subsequently be used when calling
+      functions on the service and to terminate the service via the DeleteService message.
+
+       The following class/service GUIDS are passed in the CreateService message (see [MS-DSLR]
+            section 2.2.2.3) and the DeleteService message (see [MS-DSLR] section 2.2.2.4) messages
+            for the Media Controller service:
+
+            ClassID GUID: 18c7c708-c529-4639-a846-5847f31b1e83.
+
+            ServiceID GUID: 601df477-89b6-43b4-95bc-50e8dfef12eb.
+
+       The following class/service GUIDS are passed in the CreateService and DeleteService
+            messages for the Media Event callback event:
+
+            ClassID GUID: This GUID is newly generated each time.
+
+            ServiceID GUID: 6d72a615-ca26-4420-95ac-4e4695991015.
+
+ RTSP or HTTP server and client engines have been initialized and started on both devices.
+
+ The player and player controller have been initialized and started on both devices.
+
+Figure 2: Relationships between host computer and extender device  10 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+1.6 Applicability Statement
+The Device Media Control Protocol provides a mechanism for two remote devices to control media
+sessions on a remote device over a point-to-point channel. This, of course, requires that the Device
+Services Lightweight Remoting Protocol, RTSP/HTTP and a player/player controller be available and
+running on both devices.
+
+1.7 Versioning and Capability Negotiation
+None.
+
+1.8 Vendor-Extensible Fields
+This protocol uses HRESULT values as defined in [MS-DSLR] section 2.2.2.5, as well as specific
+HRESULT values defined in section 2.2 of this document.
+
+1.9 Standards Assignments
+None.
+
+                                        11 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+2 Messages
+
+This protocol references commonly used data types as defined in [MS-DTYP].
+
+2.1 Transport
+
+Messages are transported over the Device Services Lightweight Remoting Protocol, which can be
+implemented on top of any stream-based or message-based reliable transport.
+
+2.2 Message Syntax
+
+The Device Services Lightweight Remoting Protocol uses a tag-based formatting for its messages; see
+[MS-DSLR] for details of the tag formats.
+
+The Device Media Control Protocol messages MUST follow the Device Services Lightweight Remoting
+Protocol message syntax for requests and responses, as specified in [MS-DSLR] section 2.2.2.
+
+The Device Services Lightweight Remoting Protocol payload for a request is defined by the Device
+Services Lightweight Remoting Protocol Dispatcher Request tag payload, followed by the child payload
+for a given message (that is, the function parameters for the given message). The Request tag
+payload includes the service handle for the specific service (see section 1.5 for how this service handle
+is obtained), the function handle for the specific function being called on that service (defined by the
+service), the calling convention for that function, and a one-time request handle allocated by the client
+for each request. See section 2.2.1 for the format of the Device Services Lightweight Remoting
+Protocol Dispatcher Request tag payload.
+
+The Device Services Lightweight Remoting Protocol payload for a response is defined by the Device
+Services Lightweight Remoting Protocol Dispatcher Response tag payload, followed by the child
+payload a given message (that is, the result and return parameters for the given message). The
+Response tag payload includes the callingConvention and the matching one-time request handle to
+which this response corresponds. See section 2.2.1 for the format of the Device Services Lightweight
+Remoting Protocol Dispatcher Response tag payload.
+
+The format of the data types for input and output parameters for the following functions are defined in
+[MS-DSLR]; see section 2.2.2 for valid input/output parameters and how they are formatted on the
+wire (big-endian or little-endian). All numeric data are big-endian byte-oriented.
+
+For more details on the Device Services Lightweight Remoting Protocol message syntax, see [MS-
+DSLR].
+
+2.2.1 Media Controller Service
+
+The host uses this service to control media sessions on an extender device. The host uses a proxy
+code to send messages to the extender device while the extender device has a stub to receive
+messages.
+
+2.2.1.1 OpenMedia
+
+OpenMedia is a two-way request message.
+
+2.2.1.1.1 OpenMedia (request)
+
+The callingConvention parameter in the Dispatch Request tag MUST be dslrRequest (0x00000001).
+The function handle for the Dispatch Request tag for OpenMedia MUST be 0x00000000.
+
+This message is used to open a streaming media session on an extender device.
+
+                                        12 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+Request payload (input parameters):
+
+                   1                                    2         3
+
+01234567890123456789012345678901
+
+                                        Length of URL
+
+                                        URL (variable)
+
+                                        ...
+
+                                        Surface ID
+
+                                        Time Out
+
+Length of URL (4 bytes): An unsigned 32-bit integer. This is length of the URL.
+
+URL (variable): A byte array of UTF-8 string data of size equal to the length of the URL. It is a URL
+      of the streaming media server. It can be either a local media file URL or a remote URL. If it is a
+      local media file, then the URL will start with "rtsp:" so the URL will play using RTSP streaming. If
+      the URL is web-based, then it will start with "http:" and will play using HTTP streaming.
+
+Surface ID (4 bytes): An unsigned 32-bit integer. It is used to select a rendering surface if the
+      extender device supports simultaneous streams by maintaining an array of Video Producers with
+      each one tied to a different dynamic surface ID.
+
+Time Out (4 bytes): An unsigned 32-bit integer. This is the time that the extender device waits for
+      an RTSP or HTTP response. It MUST be greater than 5 seconds. It is 30 seconds for local streams
+      and 45 second for online streams.
+
+2.2.1.1.2 OpenMedia (response)
+
+Response payload (result and output parameters):
+
+                   1                                    2         3
+
+01234567890123456789012345678901
+
+                                        Result
+
+Result (4 bytes): An unsigned 32-bit integer. An HRESULT returned from the function call (BE). See
+      [MS-DSLR] section 2.2.2.5 for error codes. The following errors are specific to the Device Media
+      Control Protocol.<1>
+
+Value                                   Meaning
+
+E_FILE_NOT_FOUND                        Cannot open the URL.
+0x80070002
+
+E_INVALID_REQUEST                       The extender device is not initialized and not closed.
+0x80004007
+
+E_INVALID_STREAM                        Invalid stream settings.
+0x800DFF01
+
+E_MDM_STREAM_TYPE_NOT_SUPPORTED The extender device does not have a decoder for the input
+
+0xC0000004                              media type.
+
+                                                                                                13 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+Value                                   Meaning
+E_UNSUPPORTED_STREAM_TYPE
+0x800D0003                              The media server does not support the input media format.
+E_FIRMWARE_UPDATE_REQUIRED
+0x80099702                              If the extender device does not have a required codec to decode
+                                        the content, it sends this error saying a new codec pack needs
+E_H264_CODECPACK_REQUIRED               to be downloaded.
+0x80099703
+                                        If the extender device does not have the H.264 codec to decode
+E_RTSP_NO_CONNECTION                    the content, it sends this error saying the H.264 codec pack
+0x800B0000                              needs to be downloaded.
+
+                                        If the extender device takes more than the number of seconds
+                                        specified in the timeout parameter to establish a connection,
+                                        then it sends this error.
+
+2.2.1.2 CloseMedia
+
+CloseMedia is a two-way request message, so the callingConvention parameter in the Dispatch
+Request tag MUST be dslrRequest (0x00000001). The function handle for the Dispatch Request tag for
+CloseMedia MUST be 0x00000001.
+
+This message is called to close the streaming media session.
+
+The message does not take any input parameters.
+
+Response payload (result and output parameters):
+
+1                                                   2  3
+
+01234567890123456789012345678901
+
+                                        Result
+
+Result (4 bytes): An unsigned 32-bit integer. An HRESULT that is returned from the function call.
+      See [MS-DSLR] section 2.2.2.5 for error codes.
+
+2.2.1.3 Start
+Start is a two-way request message.
+
+2.2.1.3.1 Start (request)
+The CallingConvention parameter in the Dispatch Request tag MUST be dslrRequest (0x00000001)
+(see [MS-DSLR] section 2.2.2.1). The function handle for the Dispatch Request tag for Start MUST be
+0x00000002.
+This message is used to request the server to start streaming media samples and playing them.
+Request payload (input parameters):
+
+1                                                   2  3
+
+01234567890123456789012345678901
+
+                                        Start Time
+
+                                                          14 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+                                        ...
+
+                                        Use Optimized Preroll
+
+                                        ...
+
+                                        Requested PlayRate
+
+                                        Available Bandwidth
+
+                                        ...
+
+Start Time (8 bytes): An unsigned 64-bit integer. The value of the field is either a time position in
+      the presentation from which the server starts to stream media samples, specified in milliseconds,
+      or the value 0xFFFFFFFFFFFFFFFF. The field can be set to 0xFFFFFFFFFFFFFFFF when resuming
+      from pause, or if a suitable start time cannot be determined.
+
+Use Optimized Preroll (8 bytes): An unsigned 64-bit integer. It is used to determine whether to
+      use optimized preroll or not. It can be set to either 1 (to use optimized preroll) or 0 (not to use
+      optimized preroll).
+
+Requested PlayRate (4 bytes): An unsigned 32-bit integer. It is a trick-play rate of the content.
+      This parameter MUST NOT be 0. This field is specified as 1 for normal playback. A value greater
+      than 1 requests fast forward, and a negative value requests the server to rewind the presentation.
+
+Available Bandwidth (8 bytes): An unsigned 64-bit integer. It is used to indicate available
+      bandwidth in bits per second. It can be set to 0 to let the client decide the value. Its default value
+      is 22 megabytes per second.
+
+2.2.1.3.2 Start (response)
+
+Response payload (result and output parameters):
+
+1                                                              2  3
+
+01234567890123456789012345678901
+
+                                        Result
+
+                                        Granted Rate
+
+Result (4 bytes): An unsigned 32-bit integer. An HRESULT that is returned from the function call.
+      See [MS-DSLR] section 2.2.2.5 for error codes.
+
+Granted Rate (4 bytes): An unsigned 32-bit integer. It is the play-rate granted by the extender
+      device.
+
+2.2.1.4 Pause
+
+Pause is a two-way request message, so the CallingConvention parameter in the Dispatch Request tag
+MUST be dslrRequest (0x00000001) (see [MS-DSLR] section 2.2.2.1). The function handle for the
+Dispatch Request tag for Pause MUST be 0x00000003.
+
+This message is called to pause the streaming media session.
+
+The message does not take any input parameters.
+
+                                                                     15 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+The response payload (result and output parameters) is as follows:
+
+1                                                 2                 3
+
+01234567890123456789012345678901
+
+                                        Result
+
+Result (4 bytes): An unsigned 32-bit integer. An HRESULT that is returned from the function call.
+      See [MS-DSLR] section 2.2.2.5 for error codes.
+
+2.2.1.5 GetDuration
+
+GetDuration is a two-way request message, so the CallingConvention parameter in the Dispatch
+Request tag MUST be dslrRequest (0x00000001) (see [MS-DSLR]section 2.2.2.1). The function handle
+for the Dispatch Request tag for GetDuration MUST be 0x00000005.
+
+This message is called to get the duration of media.
+
+The message does not take any input parameters.
+
+The Response payload (result and output parameters) is as follows:
+
+1                                                 2                 3
+
+01234567890123456789012345678901
+
+                                        Result
+
+                                        Duration
+
+                                                                               ...
+
+Result (4 bytes): An unsigned 32-bit integer. An HRESULT that is returned from the function call.
+      See [MS-DSLR] section 2.2.2.5 for error codes.
+
+Duration (8 bytes): An unsigned 64-bit integer. It is used to get the duration of media in units of 10
+      milliseconds.
+
+2.2.1.6 GetPosition
+
+GetPosition is a two-way request message, so the CallingConvention parameter in the Dispatch
+Request tag MUST be dslrRequest (0x00000001) (see [MS-DSLR] section 2.2.2.1). The function
+handle for the Dispatch Request tag for GetPosition MUST be 0x00000006.
+
+This message is called to get the current position of media.
+
+The message does not take any input parameters.
+
+The response payload (result and output parameters) is as follows:
+
+1                                                 2                 3
+
+01234567890123456789012345678901
+
+                                        Result
+
+                                        Position
+
+                                                                                              16 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+                                        ...
+
+Result (4 bytes): An unsigned 32-bit integer. An HRESULT that is returned from the function call.
+      See [MS-DSLR] section 2.2.2.5 for error codes.
+
+Position (8 bytes): An unsigned 64-bit integer. It is used to get the current position of media in
+      units of 10 milliseconds.
+
+2.2.1.7 RegisterMediaEventCallback
+
+RegisterMediaEventCallback is a two-way request message.
+
+2.2.1.7.1 RegisterMediaEventCallback (request)
+
+The CallingConvention parameter in the Dispatch Request tag MUST be dslrRequest (0x00000001).
+The function handle for the Dispatch Request tag for RegisterMediaEventCallback MUST be
+0x00000008.
+
+This message is used to create and connect the Media Event Callback Service between the extender
+device and the host computer and to get events from the extender device to the host.
+
+The request payload (input parameters) is as follows:
+
+1                                                              2  3
+
+01234567890123456789012345678901
+
+                                        Class Id (16 bytes)
+
+                                        ...
+
+                                        ...
+
+                                        Service ID (16 bytes)
+
+                                        ...
+
+                                        ...
+
+Class Id (16 bytes): A 16-byte GUID that consists of a DWORD (4 bytes, unsigned 32-bit integer)
+      Data1, WORD (2 bytes, unsigned 16-bit integer) Data2, WORD (2 bytes, unsigned 16-bit integer)
+      Data3, Data4 = 8 bytes field. It MUST be a unique ID per session.
+
+Service ID (16 bytes): A 16-byte GUID that consists of DWORD (4 bytes, unsigned 32-bit integer)
+      Data1, WORD (2 bytes, unsigned 16-bit integer) Data2, WORD (2 bytes, unsigned 16-bit integer)
+      Data3, Data4 = 8 bytes field. It MUST be defined as 6d72a615-ca26-4420-95ac-4e4695991015.
+
+2.2.1.7.2 RegisterMediaEventCallback (response)
+
+Response payload (result and output parameters):
+
+1                                                              2  3
+
+01234567890123456789012345678901
+
+                                        Result
+
+                                                                     17 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+                                                                            Cookie
+
+Result (4 bytes): An unsigned 32-bit integer. An HRESULT that is returned from the function call.
+      See [MS-DSLR] section 2.2.2.5 for error codes. <2>
+
+Cookie (4 bytes): An unsigned 32-bit integer. The extender device will send a random number as a
+      cookie.
+
+2.2.1.8 UnRegisterMediaEventCallback
+
+UnRegisterMediaEventCallback is a two-way request message.
+
+2.2.1.8.1 UnRegisterMediaEventCallback(request)
+
+The CallingConvention parameter in the Dispatch Request tag MUST be dslrRequest (0x00000001).
+The function handle for the Dispatch Request tag for UnRegisterMediaEventCallback MUST be
+0x00000009.
+
+This message is used to disconnect and release the current Media Event Callback Service between the
+extender device and the host.
+
+The request payload (input parameters) is as follows:
+
+1                                               2  3
+
+01234567890123456789012345678901
+
+                                        Cookie
+
+Cookie (4 bytes): An unsigned 32-bit integer. It is a value sent by the extender device while
+      registering.
+
+2.2.1.8.2 UnRegisterMediaEventCallback (response)
+The response payload (result and output parameters) is as follows:
+
+1                                               2  3
+
+01234567890123456789012345678901
+
+                                        Result
+
+Result (4 bytes): An unsigned 32-bit integer. An HRESULT that is returned from the function call.
+      See [MS-DSLR] section 2.2.2.5 for error codes.
+
+2.2.2 Media Event Callback
+
+The extender device uses this service to respond to out-of-band errors that the device has
+encountered or for end-of-stream states that aid in support of the three-box model. Errors include
+device subsystem failures (decoder errors), Digital Rights Management (DRM) errors, and so on. The
+extender device has a proxy code to send messages to the host while the host has a stub to receive
+messages.
+
+2.2.2.1 OnMediaEvent
+OnMediaEvent is a two-way request message.
+
+                                                                                               18 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+2.2.2.1.1 OnMediaEvent (request)
+
+The callingConvention parameter in the Dispatch Request tag MUST be dslrRequest (0x00000001).
+The function handle for the Dispatch Request tag for OnMediaEvent MUST be 0x00000000.
+
+This message is used to send events from an extender device to a host.
+Request payload (input parameters):
+
+1                                       2  3
+
+01234567890123456789012345678901
+
+   Error Code
+
+   MediaState
+
+Error Code (4 bytes): An unsigned 32-bit integer. It is an error code value.
+MediaState (4 bytes): An unsigned 32-bit integer. It is a value to indicate the media state. It can
+
+      have any of the values for Result, as specified in section 2.2.2.1.2.
+
+2.2.2.1.2 OnMediaEvent (response)
+The response payload (result and output parameters) is as follows:
+
+1                                       2  3
+
+01234567890123456789012345678901
+
+   Result
+
+Result (4 bytes): An unsigned 32-bit integer. An HRESULT that is returned from the function call.
+      See [MS-DSLR] section 2.2.2.5 for error codes.
+
+2.2.2.1.2.1 BUFFERING_STOP
+
+It MUST be 0x00000001. If there is no more data in the stream or the buffers are full, the extender
+device sends this event to the host. In this case, the error code value SHOULD be 0x00000000.
+
+2.2.2.1.2.2 END_OF_MEDIA
+
+It MUST be 0x00000002. The extender device uses this event to indicate the end of stream. In this
+case, the error code value SHOULD be 0x00000000.
+
+2.2.2.1.2.3 RTSP_DISCONNECT
+
+It MUST be 0x00000003. The extender device will send this event to the host if the extender device
+received an error over RTSP while receiving data, or if it failed to send a response message. In this
+case, the error code value SHOULD be 0x00000000.
+
+2.2.2.1.2.4 PTS_ERROR
+
+It MUST be 0x00000005. If the current presentation time is behind the previous time by a value
+greater than 200 ms, or if the current presentation is ahead of the previous time by a value greater
+than 2000 ms, then the extender device sends this event. In this case, the error code value SHOULD
+be 0x00000000.
+
+2.2.2.1.2.5 UNRECOVERABLE_SKEW                19 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+It MUST be 0x00000006. If the decoder takes more than 500 ms to open, or if the difference between
+audio's presentation time and video's presentation time is greater than 3500 ms for the first sample
+after seek, then the extender device sends this event. In this case, the error code value SHOULD be
+0x00000000.
+
+2.2.2.1.2.6 DRM_LICENSE_ERROR
+
+It MUST be 0x0000000B. If the extender device doesn't support playback of a given protected
+content, then it sends this event. In this case, the error code value SHOULD be 0x00000000.
+
+2.2.2.1.2.7 DRM_LICENSE_CLEAR
+
+It MUST be 0x0000000E. The extender device sends this event to the host to clear out its license
+error. In this case, the error code value SHOULD be 0x00000000.
+
+2.2.2.1.2.8 DRM_HDCP_ERROR
+
+It MUST be 0x0000000F. If the extender device gets notification for High-bandwidth Digital Content
+Protection (HDCP) and it does not support HDCP, then the extender device sends this event to the
+host. See [MS-DRMND] for error code values.
+
+2.2.2.1.2.9 FIRMWARE_UPDATE
+
+It MUST be 0x00000011. If the extender device needs a new codec pack to download to play the
+current media file, it SHOULD send this event. The error code value is as follows.
+
+Value                      Meaning
+
+E_FIRMWARE_UPDATE_REQUIRED If the extender device does not have a required codec to play the media file,
+
+0x80099702                 it sends this error saying a new codec pack needs to be downloaded.
+
+E_H264_CODECPACK_REQUIRED  If the extender device does not have the H.264 codec to play the media file,
+0x80099703                 it sends this error saying the H.264 codec pack needs to be downloaded.
+
+                                                                                                20 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+3 Protocol Details
+
+3.1 Extender Device Details
+An extender device is a server for the Media Control Service and a client for the Media Event Callback
+Service.
+
+Figure 3: Extender device state machine diagram
+
+Start State: The device is ready to start a new session. The following events are processed in this
+      state:
+
+1. RegisterMediaEventCallback
+2. OpenMedia
+
+      The Extender Device can send the following events to the host:
+1. FIRMWARE_UPDATE
+Ready state: The device is ready to start playing the content. The following event is processed in this
+
+      state:
+1. Start
+
+                                        21 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+2. CloseMedia
+      It can send the following events to the host:
+
+1. UNRECOVERABLE_SKEW
+2. DRM_LICENSE_CLEAR
+3. DRM_HDCP_ERROR
+4. DRM_HDCP_CLEAR
+5. RTSP_DISCONNECT
+6. DRM_LICENSE_ERROR
+Play State: The device is playing the content. The following event is processed in this state:
+1. Pause
+2. CloseMedia
+
+      It can send the following events to the host:
+1. END_OF_MEDIA
+2. RTSP_DISCONNECT
+Pause State: The device is in a paused state. The following event is processed in this state:
+1. Start
+2. CloseMedia
+Finish State: The device MUST close the current session. No event is processed in this state.
+
+      However, before closing, the device processes UnRegisterMediaEventCallback.
+
+3.1.1 Abstract Data Model
+
+This section describes a conceptual model of possible data organization that an implementation
+maintains to participate in this protocol. The described organization is provided to facilitate the
+explanation of how the protocol behaves. This document does not mandate that implementations
+adhere to this model as long as their external behavior is consistent with that described in this
+document.
+
+The Device Media Control Protocol maintains the following data fields for each session:
+
+URL: Stores the URL string of the current media.
+
+State: Stores the current state of the extender device.
+
+Duration: Stores the duration of the current media.
+
+Position: Stores the current position of the media.
+
+SurfaceId: Stores the current render surface.
+
+PlayRate: Stores the current playrate of media that is supported by the extender device.
+
+AvailableBandwidth: Stores available bandwidth.
+
+OptimizedPrerollFlag: If this variable is TRUE, do optimized preroll; otherwise, do normal preroll.
+
+                                                                                                22 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+3.1.2 Timer 1
+
+None.
+
+3.1.3 Initialization
+
+Before the Device Media Control Protocol takes action, the Device Services Lightweight Remoting
+Protocol MUST be started on both sides, and a CreateService call for the Media Controller Service
+received by the server.
+
+3.1.4 Higher-Layer Triggered Events
+
+None.
+
+3.1.5 Processing Events and Sequencing Rules
+
+3.1.5.1 OpenMedia
+
+When the extender device gets this event, it does the following:
+
+1. Check the input URL. If the file does not exist, send error E_FILE_NOT_FOUND.
+
+2. If the extender device has not closed the previous media item, call the CloseMedia() function
+      internally to close it.
+
+3. Establish a connection to the media server by doing a TCP or UDP connection. If the extender
+      device takes more than the number of seconds specified in the timeout parameter to establish a
+      connection, then send E_RTSP_NO_CONNECTION error.
+
+4. If the extender device uses RTSP streaming, send an RTSP DESCRIBE command to the server.
+      And then send RTSP SETUP to select streams.
+
+5. Check that the media server supports the media type of a given media. If it doesn't support the
+      media type, send error E_UNSUPPORTED_STREAM_TYPE.
+
+6. Create audio and video decoders of the media type for a given media. If the extender device does
+      not have decoders for that media type, send error E_MDM_STREAM_TYPE_NOT_SUPPORTED. If
+      the extender device needs new decoders to play the content, send error
+      E_FIRMWARE_UPDATE_REQUIRED or E_H264_CODECPACK_REQUIRED, depending on the media
+      type.
+
+7. Initialize the downstream rendering pipeline.
+
+If the extender device succeeds in doing all steps, send S_OK to the host.
+
+3.1.5.2 CloseMedia
+
+When the extender device receives this event, it closes the media session by clearing the downstream
+rendering pipeline and decoders. It releases the connection to the media server. If the extender device
+is using RTSP streaming, then send an RTSP:TEARDOWN command to the data server.
+
+If the extender device successfully closes the media session, it returns S_OK; else it returns an error
+code.
+
+                                        23 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+3.1.5.3 Start
+
+The extender device receives this event to start streaming media samples. The extender device does
+the following:
+
+1. If the extender device is in Pause state and the start time is 0xFFFFFFFFFFFFFFFF, it will resume
+      from pause.
+
+2. Ask the media server to start playback. If Real-Time Streaming Protocol (RTSP) streaming is
+      used, the extender device sends an RTSP:PLAY command.
+
+3. Check that the media server supports the requested playRate, and update the Granted Rate
+      accordingly.
+
+4. If the Use Optimized preroll variable is enabled, do fast prerolling (prerolling data with a
+      predefined threshold); otherwise do normal prerolling (preroll the data up to the level defined in
+      the file).
+
+5. If this event is for seek and the difference between audio's presentation time and video's
+      presentation time is greater than the threshhold for first sample, the extender device sends
+      UNRECOVERABLE_SKEW.
+
+6. Check the DRM license, if the media is protected content. If the extender device failed to get a
+      DRM license, send event DRM_LICENSE_ERROR with a DRM error code.
+
+If the extender device successfully starts the media session, it returns S_OK; otherwise, it returns an
+error code.
+
+3.1.5.4 Pause
+
+The extender device receives this event to pause the streaming media session. It pauses the
+downstream rendering pipeline. If using RTSP streaming, the extender device sends an RTSP:PAUSE
+command to the server.
+
+If the extender device successfully pauses the media session, it returns S_OK; otherwise, it returns an
+error code.
+
+3.1.5.5 GetDuration
+
+The extender device receives this event to send the duration of media.
+
+If the extender device successfully pauses the media session, it returns S_OK; else it returns an error
+code.
+
+3.1.5.6 GetPosition
+
+The extender device receives this event to send the current position of media.
+
+If the extender device successfully pauses the media session, it returns S_OK; else it returns an error
+code.
+
+3.1.5.7 RegisterMediaEventCallback
+
+The extender device receives this event to create and connect the Media Event Callback Service
+between the extender device and the host and to get events from the extender device to the host.
+
+If the extender device successfully pauses the media session, it returns S_OK; else it returns an error
+code.
+
+                                        24 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+3.1.5.8 UnRegisterMediaEventCallback
+The extender device receives this event to disconnect and release the current Media Event Callback
+Service between the extender device and the host.
+If the extender device successfully pauses the media session, it returns S_OK; else it returns an error
+code.
+
+3.1.6 Timer 2
+None.
+
+3.1.7 Other Local Events
+None.
+
+3.2 Host Details
+A host or a device is a client for the Media Control Service and a server for the Media Event Callback
+Service.
+The host is responsible for controlling the media session by sending events using the Media Control
+Service and taking action on events received using the Media Event Callback Service.
+
+                                        25 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+Figure 4: Host machine state diagram                                                     26 / 35
+
+3.2.1 Abstract Data Model
+The Device Media Control Protocol maintains the following data fields for each session:
+URL: Stores the URL string of the current media.
+State: Stores the current state of the extender device.
+Duration: Stores the duration of the current media.
+Position: Stores the current position of media.
+SurfaceId: Stores the current render surface.
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+PlayRate: Stores the current playrate of media that is supported by the extender device.
+AvailableBandwidth: Stores available bandwidth.
+OptimizedPrerollFlag: If this variable is TRUE, do optimized preroll; otherwise, do normal preroll.
+
+3.2.2 Timer
+None.
+
+3.2.3 Initialization
+Before the Device Media Control Protocol takes action, the Device Services Lightweight Remoting
+Protocol MUST be started on both sides, and the Media Event Callback service is created by calling a
+RegisterMediaEventCallback message over the Media Control Service.
+
+3.2.4 Higher-Layer Triggered Events
+None.
+
+3.2.5 Processing Events and Sequencing Rules
+
+3.2.5.1 END_OF_MEDIA
+When the host gets this event, it stops the playback and resets the stream position. Upon a query for
+the current position, the host returns the full duration of the media. It does the following depending
+on the host's current state:
+1. If the host receives this event while closing the player, the host ignores the end-of-stream (EOS).
+2. If host receives this event while rewinding to the beginning of the stream, then it suppresses this
+
+      call and starts playing with regular 1x playback again.
+3. If it is end of media in the middle of the playlist, then it continues to play the next item; else it
+
+      stops the playback.
+
+3.2.5.2 RTSP_DISCONNECT
+The host will close down the session if it is in the 'Ready' or 'Play' state when it receives this event.
+But the host cannot close the device, because the RTSP session is already torn down. It resets its local
+state.
+
+3.2.5.3 UNRECOVERABLE_SKEW
+When the host receives this event, it tries to recover from skew by a force seek of 10 ms forward,
+which is unnoticeable.
+If a new event occurred less than 1000 ms after the previous one, then the host ignores that event.
+If the host is trying to recover from skew for more than 15000 ms, then it treats that file as corrupted.
+Therefore the host stops recovering and aborts playback and displays an error saying that the
+extender device cannot play the corrputed file.
+
+                                        27 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+3.2.5.4 DRM_LICENSE_ERROR
+When the host receives this event, it displays an error page saying that the extender device does not
+support playback of this protected content.
+
+3.2.5.5 DRM_LICENSE_CLEAR
+The host clears out the license error when it receives this event.
+
+3.2.5.6 DRM_HDCP_ERROR
+The host displays an error saying that the extender device is connected to a device that does not
+support HDCP as required, when it receives this event.
+
+3.2.5.7 DRM_HDCP_CLEAR
+The host clears out the existing HDCP error states when it receives this event.
+
+3.2.5.8 FIRMWARE_UPDATE
+The host displays a message saying that a firmware update is required if it receives the error
+E_FIRMWARE_UPDATE_REQUIRED; or that a new H.264 codec pack is required if it received the error
+E_H264_CODECPACK_REQUIRED; and it stops the playback when receives this event.
+If the events are unknown, the host ignores those events.
+
+3.2.6 Timer Events
+None.
+
+3.2.7 Other Local Events
+None.
+
+                                        28 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+4 Protocol Examples
+
+Figure 5: Sequence diagram for the Device Media Control Protocol
+
+1. The host sends a RegisterMediaEventCallback event to the extender device to create the
+      MediaEvent Callback Service. This event is sent while constructing the device and not per media
+      session.
+
+2. The device returns an S_OK code after successfully creating the MediaEvent Callback Service.
+
+                                        29 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+3. The host sends an OpenMedia message using the Media Controller Service over Device Services
+      Lightweight Remoting Protocol to open a media session.
+
+4. The device returns an S_OK code after successfully opening the media session.
+
+5. The host sends a Start message using the Media Controller Service over the Device Services
+      Lightweight Remoting Protocol to start a media session.
+
+6. The device returns an S_OK code after successfully starting a media session.
+
+7. When the device reaches the end of stream while playing, it sends an END_OF_MEDIA event to
+      the host using the MediaEvent Callback Service over the Device Services Lightweight Remoting
+      Protocol.
+
+8. The host sends a Pause message using the Media Controller Service over the Device Services
+      Lightweight Remoting Protocol to pause the media session.
+
+9. The device returns an S_OK code after successfully pausing the media session.
+
+10. The host sends a CloseMedia message using the Media Controller Service over the Device Services
+      Lightweight Remoting Protocol to close the media session.
+
+11. The device returns an S_OK code after successfully closing the media session.
+
+12. The host sends an UnRegisterMediaEventCallback event to the extender device to release the
+      MediaEvent Callback Service. This event is released while destructing the device and not per
+      media session.
+
+13. The device returns an S_OK code after successfully releasing the MediaEvent Callback Service.
+
+                                        30 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+5 Security
+
+5.1 Security Considerations for Implementers
+None.
+5.2 Index of Security Parameters
+None.
+
+                                              31 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+6 Appendix A: Product Behavior
+
+The information in this specification is applicable to the following Microsoft products or supplemental
+software. References to product versions include released service packs.
+
+ Windows Vista operating system
+
+ Windows 7 operating system
+
+ Windows 8 operating system
+
+ Windows 8.1 operating system
+
+Exceptions, if any, are noted below. If a service pack or Quick Fix Engineering (QFE) number appears
+with the product version, behavior changed in that service pack or QFE. The new behavior also applies
+to subsequent service packs of the product unless otherwise specified. If a product edition appears
+with the product version, behavior is different in that product edition.
+
+Unless otherwise specified, any statement of optional behavior in this specification that is prescribed
+using the terms "SHOULD" or "SHOULD NOT" implies product behavior in accordance with the
+SHOULD or SHOULD NOT prescription. Unless otherwise specified, the term "MAY" implies that the
+product does not follow the prescription.
+
+<1> Section 2.2.1.1.2: Media Center on Windows Vista does not handle
+E_FIRMWARE_UPDATE_REQUIRED and E_H264_CODECPACK_REQUIRED error codes of OpenMedia
+message.
+
+<2> Section 2.2.1.7.2: Media Center on Windows Vista does not handle a FIRMWARE_UPDATE event
+sent from the extender device on the MediaEvent Callback Service.
+
+                                        32 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+7 Change Tracking
+
+No table of changes is available. The document is either new or has had no changes since its last
+release.
+
+                                        33 / 35
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+8 Index                                              initialization 23
+                                                     OpenMedia 23
+A                                                    Pause event 24
+                                                     RegisterMediaEventCallback 24
+Abstract data model                                  Start 24
+   extender device 22                                timer (section 3.1.2 23, section 3.1.6 25)
+   host 26                                           UnRegisterMediaEventCallback 25
+                                                  Extender device details 21
+Applicability 11
+                                                  F
+B
+                                                  Fields - vendor-extensible 11
+BUFFERING_STOP event 19                           FIRMWARE_UPDATE - host 28
+                                                  FIRMWARE_UPDATE event 20
+C
+                                                  G
+Capability negotiation 11
+Change tracking 33                                GetDuration - extender device 24
+CloseMedia - extender device 23                   GetDuration message 16
+CloseMedia message 14                             GetDuration packet 16
+CloseMedia packet 14                              GetPosition - extender device 24
+                                                  GetPosition message 16
+D                                                 GetPosition packet 16
+                                                  Glossary 6
+Data model - abstract
+   extender device 22                             H
+   host 26
+                                                  Higher-layer triggered events
+Details                                              extender device 23
+   extender device 21                                host 27
+   Host details 25
+                                                  Host
+Devices Services Lightweight Remoting Protocol -     abstract data model 26
+      relationship to other protocols 9              DRM_HDCP_CLEAR 28
+                                                     DRM_HDCP_ERROR 28
+DRM_HDCP_CLEAR - host 28                             DRM_LICENSE_CLEAR 28
+DRM_HDCP_ERROR - host 28                             DRM_LICENSE_ERROR 28
+DRM_HDCP_ERROR event 20                              END_OF_MEDIA 27
+DRM_LICENSE_CLEAR - host 28                          FIRMWARE_UPDATE 28
+DRM_LICENSE_CLEAR event 20                           higher-layer triggered events 27
+DRM_LICENSE_ERROR - host 28                          initialization 27
+DRM_LICENSE_ERROR event 20                           local events 28
+                                                     RTSP_DISCONNECT 27
+E                                                    timer 27
+                                                     timer events 28
+END_OF_MEDIA - host 27                               UNRECOVERABLE_SKEW 27
+END_OF_MEDIA event 19
+Events                                            Host details 25
+
+   BUFFERING_STOP event 19                        I
+   DRM_HDCP_ERROR event 20
+   DRM_LICENSE_CLEAR event 20                     Implementer - security considerations 31
+   DRM_LICENSE_ERROR event 20                     Index of security parameters 31
+   END_OF_MEDIA event 19                          Informative references 7
+   FIRMWARE_UPDATE event 20                       Initialization
+   PTS_ERROR event 19
+   RTSP_DISCONNECT event 19                          extender device 23
+   UNRECOVERABLE_SKEW event 19                       host 27
+Events - local                                    Introduction 6
+   extender device 25
+   host 28                                        L
+Events - timer - host 28
+Examples - overview 29                            Local events
+Extender device                                      extender device 25
+   CloseMedia 23                                     host 28
+   Data model - abstract 22
+   GetDuration 24                                                                                                       34 / 35
+   GetPosition 24
+   higher-layer triggered events 23
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+M                                                   Relationship to other protocols 8
+                                                       Devices Services Lightweight Remoting Protocol 9
+Media Controller service - messages 12                 overview 8
+Media Controller Service message 12                    Real Time Streaming Protocol (RTSP) 9
+Media Event Callback message 18
+Media Event callback service - messages 18          RTSP_DISCONNECT - host 27
+Message - syntax 12                                 RTSP_DISCONNECT event 19
+Messages
+                                                    S
+   CloseMedia message 14
+   GetDuration message 16                           Security
+   GetPosition message 16                              implementer considerations 31
+   Media Controller Service 12                         parameter index 31
+   Media Event Callback 18
+   Media Event callback service 18                  Standards assignments 11
+   OnMediaEvent message 18                          Start - extender device 24
+   OpenMedia message 12                             Start message 14
+   Pause message 15                                 Start_request packet 14
+   RegisterMediaEventCallback message (section      Start_response packet 15
+                                                    Syntax 12
+      2.2.1.7 17, section 2.2.1.7.2 17)
+   Start message 14                                 T
+   transport 12
+   UnRegisterMediaEventCallback message (section    Timer
+                                                       extender device (section 3.1.2 23, section 3.1.6
+      2.2.1.8 18, section 2.2.1.8.2 18)                   25)
+Messages - transport 12                                host 27
+
+N                                                   Timer events - host 28
+                                                    Tracking changes 33
+Normative references 7                              Transport 12
+                                                    Triggered events - higher layer
+O
+                                                       extender device 23
+OnMediaEvent message 18                                host 27
+OnMediaEvent_request packet 19
+OnMediaEvent_response packet 19                     U
+OpenMedia - extender device 23
+OpenMedia message 12                                UNRECOVERABLE_SKEW - host 27
+OpenMedia_request packet 12                         UNRECOVERABLE_SKEW event 19
+OpenMedia_response packet 13                        UnRegisterMediaEventCallback - extender device 25
+Overview (synopsis) 7                               UnRegisterMediaEventCallback message (section
+
+P                                                         2.2.1.8 18, section 2.2.1.8.2 18)
+                                                    UnRegisterMediaEventCallback_request packet 18
+Parameters - security index 31                      UnRegisterMediaEventCallback_response packet 18
+Pause event - extender device 24
+Pause message 15                                    V
+Pause packet 15
+Preconditions 9                                     Vendor-extensible fields 11
+Prerequisites 9                                     Versioning 11
+Product behavior 32
+PTS_ERROR event 19                                                                                                        35 / 35
+
+R
+
+Real Time Streaming Protocol (RTSP) - relationship
+      to other protocols 9
+
+References 6
+   informative 7
+   normative 7
+
+RegisterMediaEventCallback - extender device 24
+RegisterMediaEventCallback message (section
+
+      2.2.1.7 17, section 2.2.1.7.2 17)
+RegisterMediaEventCallback_request packet 17
+RegisterMediaEventCallback_response packet 17
+
+[MS-DMCT] - v20170601
+Device Media Control Protocol
+Copyright © 2017 Microsoft Corporation
+Release: June 1, 2017
+

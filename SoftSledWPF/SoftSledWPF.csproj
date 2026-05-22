@@ -90,9 +90,15 @@
     <ErrorReport>prompt</ErrorReport>
     <Prefer32Bit>true</Prefer32Bit>
   </PropertyGroup>
+  <PropertyGroup>
+    <ApplicationIcon>wmc.ico</ApplicationIcon>
+  </PropertyGroup>
   <ItemGroup>
     <Reference Include="AxInterop.MSTSCLib">
       <HintPath>..\SoftSled\obj\x86\Debug\AxInterop.MSTSCLib.dll</HintPath>
+    </Reference>
+    <Reference Include="BouncyCastle.Crypto, Version=1.9.0.0, Culture=neutral, PublicKeyToken=0e99375e54769942, processorArchitecture=MSIL">
+      <HintPath>..\packages\Portable.BouncyCastle.1.9.0\lib\net40\BouncyCastle.Crypto.dll</HintPath>
     </Reference>
     <Reference Include="ffme.win, Version=4.4.350.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\FFME.Windows.4.4.350\lib\net461\ffme.win.dll</HintPath>
@@ -140,6 +146,14 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </ApplicationDefinition>
+    <Page Include="HomeWindow.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="FullScreenWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
     <Page Include="MainWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
@@ -148,35 +162,42 @@
       <DependentUpon>App.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Components\AudioVisual\AvMuxPipe_NoWallclock.cs" />
-    <Compile Include="Components\AudioVisual\AvMuxPipe.cs" />
-    <Compile Include="Components\AudioVisual\PlaybackHandler.cs" />
+    <Compile Include="Components\AudioVisual\AsfFfmeInputStream.cs" />
+    <Compile Include="Components\AudioVisual\AsfStreamProducer.cs" />
+    <Compile Include="Components\AudioVisual\MsWmsRtspClient.cs" />
     <Compile Include="Components\AudioVisual\WindowsSystemAudio.cs" />
     <Compile Include="Components\AudioVisual\WmrptAudioDepacketizer.cs" />
     <Compile Include="Components\AudioVisual\WmrptAudioDepacketizerAsync.cs" />
     <Compile Include="Components\AudioVisual\WmcFastpathAudioDumper.cs" />
     <Compile Include="Components\AudioVisual\WmcFastpathAudioPlayer.cs" />
+    <Compile Include="Components\AudioVisual\WmcFastpathRawDumper.cs" />
+    <Compile Include="Components\AudioVisual\WmcFastpathOverlayRegionDecoder.cs" />
+    <Compile Include="Components\AudioVisual\IMediaController.cs" />
+    <Compile Include="Components\AudioVisual\FfmeMediaController.cs" />
+    <Compile Include="Components\AudioVisual\WmrptPcmNAudioSink.cs" />
+    <Compile Include="Components\AudioVisual\Mp3OverRtpAudioSink.cs" />
+    <Compile Include="Components\AudioVisual\MpegPsMuxer.cs" />
+    <Compile Include="Components\AudioVisual\MpegTsMuxer.cs" />
     <Compile Include="Components\AudioVisual\WmrptVideoDepacketizer.cs" />
     <Compile Include="Components\AudioVisual\WmrptVideoDepacketizerAsync.cs" />
     <Compile Include="Components\Communication\DSLRCommunication.cs" />
     <Compile Include="Components\Communication\FreeRdpClient.cs" />
+    <Compile Include="Components\Communication\DataReceived.cs" />
     <Compile Include="Components\Communication\SoftSledNative.cs" />
     <Compile Include="Components\Configuration\SoftSledConfig.cs" />
     <Compile Include="Components\Configuration\SoftSledConfigManager.cs" />
     <Compile Include="Components\Diagnostics\Logger.cs" />
+    <Compile Include="Components\Diagnostics\RtspWireDumper.cs" />
     <Compile Include="Components\Diagnostics\TextBoxLogger.cs" />
-    <Compile Include="Components\Communication\NamedPipeClient.cs" />
-    <Compile Include="Components\Communication\NamedPipeServer.cs" />
-    <Compile Include="Components\Communication\PipeStreamWrapperBase.cs" />
     <Compile Include="Components\Extender\ContentHandler.cs" />
-    <Compile Include="Components\Extender\Crypto.cs" />
+    <Compile Include="Components\Extender\Archive\Crypto.cs" />
+    <Compile Include="Components\Extender\ExtenderCapabilities.cs" />
+    <Compile Include="Components\Extender\ExtenderCertificate.cs" />
     <Compile Include="Components\Extender\ExtenderDevice.cs" />
     <Compile Include="Components\Extender\NullService.cs" />
     <Compile Include="Components\Extender\RemotedExperienceService.cs" />
-    <Compile Include="Components\Extender\RSAEncoder.cs" />
+    <Compile Include="Components\Extender\Archive\RSAEncoder.cs" />
     <Compile Include="Components\Extender\TrustAgreementService.cs" />
-    <Compile Include="Components\FFmpeg\H264DecoderView.cs" />
-    <Compile Include="Components\FFmpeg\H264DecoderView_1.cs" />
     <Compile Include="Components\RTSP\AACPayload.cs" />
     <Compile Include="Components\RTSP\AMRPayload.cs" />
     <Compile Include="Components\RTSP\Authentication.cs" />
@@ -224,12 +245,27 @@
     <Compile Include="Components\RTSP\Sdp\Timing.cs" />
     <Compile Include="Components\RTSP\UdpSocket.cs" />
     <Compile Include="Components\Utility\DataUtilities.cs" />
+    <Compile Include="Components\Utility\Enums.cs" />
     <Compile Include="Components\Utility\Utility.cs" />
-    <Compile Include="Components\VirtualChannel\RDPVCInterface.cs" />
+    <Compile Include="Components\Splash\Objects\SplashScene.cs" />
+    <Compile Include="Components\Splash\SplashController.cs" />
+    <Compile Include="Components\Splash\SplashObjectRegistry.cs" />
+    <Compile Include="Components\Splash\SplashPayloadReader.cs" />
+    <Compile Include="Components\Splash\SplashRawDumper.cs" />
+    <Compile Include="Components\Splash\SplashRenderHost.cs" />
+    <Compile Include="Components\Splash\SplashWireReassembler.cs" />
     <Compile Include="Components\VirtualChannel\VirtualChannelAvCtrlHandler.cs" />
+    <Compile Include="Components\VirtualChannel\VirtualChannelSplashHandler.cs" />
+    <Compile Include="Components\VirtualChannel\VirtualChannelMCECapsHandler.cs" />
     <Compile Include="Components\VirtualChannel\VirtualChannelDevCapsHandler.cs" />
     <Compile Include="Components\VirtualChannel\VirtualChannelMcxSessHandler.cs" />
     <Compile Include="Components\VirtualChannel\VirtualChannelSendArgs.cs" />
+    <Compile Include="HomeWindow.xaml.cs">
+      <DependentUpon>HomeWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="FullScreenWindow.xaml.cs">
+      <DependentUpon>FullScreenWindow.xaml</DependentUpon>
+    </Compile>
     <Compile Include="MainWindow.xaml.cs">
       <DependentUpon>MainWindow.xaml</DependentUpon>
       <SubType>Code</SubType>
@@ -249,32 +285,17 @@
       <DependentUpon>Settings.settings</DependentUpon>
       <DesignTimeSharedInput>True</DesignTimeSharedInput>
     </Compile>
-    <Resource Include="Certificates\SoftSledPrivateKey.xml">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Resource>
     <EmbeddedResource Include="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>
       <LastGenOutput>Resources.Designer.cs</LastGenOutput>
     </EmbeddedResource>
-    <None Include="Certificates\Linksys2200.cer">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-    <Content Include="Certificates\softsled.cer">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <None Include="Certificates\softsled.pem">
+    <None Include="Certificates\CA\softsled_ca.key">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="Certificates\SoftSled2023.cer">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    <None Include="Certificates\CA\softsled_ca.pem">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="Certificates\softsledCA.cer" />
-    <None Include="Certificates\softsledCAkey.pem" />
-    <None Include="Certificates\softslednew.cer" />
-    <None Include="Certificates\softslednewkey.pem" />
-    <None Include="Certificates\Xbox360.cer">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
+    <None Include="ClassDiagram1.cd" />
     <!-- FreeRDP shim runtime DLLs (x64 only). Copied next to the exe so
          P/Invoke into softsled-rdp.dll resolves freerdp3.dll, winpr3.dll, and
          their OpenSSL/zlib deps. -->
@@ -325,6 +346,49 @@
       <Name>UPnP</Name>
     </ProjectReference>
   </ItemGroup>
-  <ItemGroup />
+  <ItemGroup>
+    <Resource Include="wmc.ico" />
+    <Resource Include="wmc-background.jpg" />
+    <Resource Include="Resources\icon\wmc.bmp">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Resources\icon\wmc.ico" />
+    <Resource Include="Resources\image\wmc-background.jpg" />
+    <None Include="Resources\wmc-background.jpg" />
+    <Content Include="Tools\ffmpeg\x64\avcodec-58.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Tools\ffmpeg\x64\avdevice-58.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Tools\ffmpeg\x64\avfilter-7.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Tools\ffmpeg\x64\avformat-58.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Tools\ffmpeg\x64\avutil-56.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Tools\ffmpeg\x64\ffmpeg.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Tools\ffmpeg\x64\ffplay.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Tools\ffmpeg\x64\ffprobe.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Tools\ffmpeg\x64\postproc-55.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Tools\ffmpeg\x64\swresample-3.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Tools\ffmpeg\x64\swscale-5.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Resource Include="wmc.bmp" />
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

@@ -508,13 +508,12 @@
                 {
                     try
                     {
-                        if (this.MainSocket.SocketType == SocketType.Stream)
-                        {
-                            num = this.MainSocket.EndSend(result);
-                        }
-                        else
-                        {
-                            num = this.MainSocket.EndSendTo(result);
+                        if (this.MainSocket != null) {
+                            if (this.MainSocket.SocketType == SocketType.Stream) {
+                                num = this.MainSocket.EndSend(result);
+                            } else {
+                                num = this.MainSocket.EndSendTo(result);
+                            }
                         }
                     }
                     catch (Exception)

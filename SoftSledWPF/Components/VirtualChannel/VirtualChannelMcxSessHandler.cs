@@ -218,7 +218,7 @@ namespace SoftSled.Components.VirtualChannel {
                     // Heartbeat Request
                     else if (dispatchFunctionHandle == 1) {
 
-                        m_logger.LogDebug("MCXSESS: Heartbeat");
+                        //m_logger.LogDebug("MCXSESS: Heartbeat");
 
                         // Get Heartbeat Data
                         int HeartbeatPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
@@ -285,7 +285,7 @@ namespace SoftSled.Components.VirtualChannel {
                     // Unknown Request
                     else {
 
-                        m_logger.LogDebug($"MCXSESS: Unknown Function ({dispatchFunctionHandle})");
+                        //m_logger.LogDebug($"MCXSESS: Unknown Function ({dispatchFunctionHandle})");
 
                         // Get Unknown Data
                         int UnknownPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
@@ -293,7 +293,7 @@ namespace SoftSled.Components.VirtualChannel {
                         byte[] UnknownPayloadData;
                         if (UnknownPayloadSize > 0) {
                             UnknownPayloadData = DataUtilities.GetByteSubArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2, UnknownPayloadSize);
-                            //m_logger.LogDebug("MCXSESS: " + BitConverter.ToString(UnknownPayloadData));
+                            m_logger.LogDebug("MCXSESS: " + BitConverter.ToString(UnknownPayloadData));
                             System.Diagnostics.Debug.WriteLine("MCXSESS BYTES: " + BitConverter.ToString(UnknownPayloadData));
                             //System.Diagnostics.Debug.WriteLine("MCXSESS ASCII: " + Encoding.ASCII.GetString(UnknownPayloadData));
                             //System.Diagnostics.Debug.WriteLine("MCXSESS    UN: " + Encoding.Unicode.GetString(UnknownPayloadData));

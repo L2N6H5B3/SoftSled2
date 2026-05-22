@@ -4,6 +4,7 @@
 using Intel.UPNP;
 using SoftSled.Components.Configuration;
 using SoftSled.Components.Diagnostics;
+using SoftSled.Components.ExtenderCertificate;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -11,6 +12,8 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Xml.Linq;
+using static System.Net.WebRequestMethods;
 
 namespace SoftSled.Components.Extender {
     /// <summary>
@@ -31,8 +34,12 @@ namespace SoftSled.Components.Extender {
         private string _OneTimePasswordIter;
         private byte _Iterations;
         private byte _Iter;
+        private readonly string _DeviceCertificateSubject;
+        private readonly string _DeviceCertificatePath;
+        private readonly string _DevicePrivateKeyPath;
         private readonly string _DeviceCertificateString;
         private readonly string _DeviceID;
+        private readonly string _DeviceUDN;
         private readonly bool _UseManagedSHA1 = false;
 
         public ExtenderDevice(Logger logger) {
@@ -45,10 +52,41 @@ namespace SoftSled.Components.Extender {
             #endregion ########################################################
 
 
+            #region Prepare Certificate #######################################
+
+            string certificatePath = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\Certificates";
+            string certificateBaseName = "softsled_extender";
+
+            string CACertPath = Path.Combine(certificatePath + "\\CA\\", "softsled_ca.pem");
+            string CAKeyPath = Path.Combine(certificatePath + "\\CA\\", "softsled_ca.key");
+
+            // If there is no Client Certificate
+            if (!System.IO.File.Exists(certificatePath + $"\\{certificateBaseName}.cer")) {
+
+                _DeviceCertificateSubject = $"SoftSled Extender({Environment.MachineName})";
+
+                // Generate a Client Certificate
+                var ca = ExtenderCertGenerator.LoadCaFromPem(CACertPath, CAKeyPath);
+                var generated = ExtenderCertGenerator.Generate(ca.Certificate, ca.PrivateKey, _DeviceCertificateSubject);
+
+                // Create Output Path if not Exists
+                if (!Directory.Exists(certificatePath)) {
+                    Directory.CreateDirectory(certificatePath);
+                }
+                // Save Output Certificates
+                generated.SaveTo(certificatePath, certificateBaseName);
+            }
+
+            _DeviceCertificatePath = certificatePath + $"\\{certificateBaseName}.cer";
+            _DevicePrivateKeyPath = certificatePath + $"\\{certificateBaseName}_PrivateKey.xml";
+
+            #endregion ########################################################
+
+
             #region Get Certificate Device ID #################################
 
-            X509Certificate2 deviceCert = new X509Certificate2(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\Certificates\\Linksys2200.cer");
-            string certDeviceId = "b8771bb8-5496-498b-a6c7-f2d67a1b0d96"; // default if cert doesn't contain an alternative name
+            X509Certificate2 deviceCert = new X509Certificate2(_DeviceCertificatePath);
+            string certDeviceId = null;
             foreach (X509Extension certExtension in deviceCert.Extensions) {
                 if (certExtension.Oid.FriendlyName != null && certExtension.Oid.FriendlyName.Equals("Subject Alternative Name")) {
                     certDeviceId = Encoding.ASCII.GetString(certExtension.RawData).Remove(0, 9);
@@ -79,20 +117,20 @@ namespace SoftSled.Components.Extender {
 
             #region Create Embedded Device ####################################
 
-            UPnPDevice device1 = UPnPDevice.CreateEmbeddedDevice(1, certDeviceId);
-            device1.FriendlyName = "SoftSled Media Center Extender";
-            device1.Manufacturer = "SoftSled Project";
-            device1.ManufacturerURL = "http://www.codeplex.com/softsled";
-            device1.ModelName = "SoftSled";
-            device1.ModelDescription = "SoftSled Media Center Extender";
-            device1.ModelNumber = "";
-            device1.HasPresentation = false;
-            device1.DeviceURN = "urn:schemas-microsoft-com:device:MediaCenterExtender:1";
-            device1.AddCustomFieldInDescription("X_compatibleId", "MICROSOFT_MCX_0001", "http://schemas.microsoft.com/windows/pnpx/2005/11");
-            device1.AddCustomFieldInDescription("X_deviceCategory", "MediaDevices", "http://schemas.microsoft.com/windows/pnpx/2005/11");
-            device1.AddCustomFieldInDescription("pakVersion", "dv2.0.0", "http://schemas.microsoft.com/windows/mcx/2007/06");
-            device1.AddCustomFieldInDescription("supportedHostVersions", "pc2.0.0", "http://schemas.microsoft.com/windows/mcx/2007/06");
-            device1.ContentHandler = new ContentHandler(m_logger);
+            UPnPDevice embeddedDevice = UPnPDevice.CreateEmbeddedDevice(1, certDeviceId);
+            embeddedDevice.FriendlyName = $"SoftSled Media Center Extender ({Environment.MachineName})";
+            embeddedDevice.Manufacturer = "SoftSled Project";
+            embeddedDevice.ManufacturerURL = "https://github.com/L2N6H5B3/SoftSled2";
+            embeddedDevice.ModelName = "SoftSled";
+            embeddedDevice.ModelDescription = $"SoftSled Media Center Extender ({Environment.MachineName})";
+            embeddedDevice.ModelNumber = "";
+            embeddedDevice.HasPresentation = false;
+            embeddedDevice.DeviceURN = "urn:schemas-microsoft-com:device:MediaCenterExtender:1";
+            embeddedDevice.AddCustomFieldInDescription("X_compatibleId", "MICROSOFT_MCX_0001", "http://schemas.microsoft.com/windows/pnpx/2005/11");
+            embeddedDevice.AddCustomFieldInDescription("X_deviceCategory", "MediaDevices", "http://schemas.microsoft.com/windows/pnpx/2005/11");
+            embeddedDevice.AddCustomFieldInDescription("pakVersion", "dv2.0.0", "http://schemas.microsoft.com/windows/mcx/2007/06");
+            embeddedDevice.AddCustomFieldInDescription("supportedHostVersions", "pc2.0.0", "http://schemas.microsoft.com/windows/mcx/2007/06");
+            embeddedDevice.ContentHandler = new ContentHandler(m_logger);
 
             #region Add MSTA Service ##########################################
 
@@ -104,7 +142,7 @@ namespace SoftSled.Components.Extender {
             TrustAgreementService.External_Commit = new TrustAgreementService.Delegate_Commit(TrustAgreementService_Commit);
             TrustAgreementService.External_Validate = new TrustAgreementService.Delegate_Validate(TrustAgreementService_Validate);
             TrustAgreementService.External_Confirm = new TrustAgreementService.Delegate_Confirm(TrustAgreementService_Confirm);
-            device1.AddService(TrustAgreementService);
+            embeddedDevice.AddService(TrustAgreementService);
 
             #endregion ########################################################
 
@@ -115,7 +153,7 @@ namespace SoftSled.Components.Extender {
             RemotedExperienceService.External_AcquireNonce = new RemotedExperienceService.Delegate_AcquireNonce(RemotedExperienceService_AcquireNonce);
             RemotedExperienceService.External_Advertise = new RemotedExperienceService.Delegate_Advertise(RemotedExperienceService_Advertise);
             RemotedExperienceService.External_Inhibit = new RemotedExperienceService.Delegate_Inhibit(RemotedExperienceService_Inhibit);
-            device1.AddService(RemotedExperienceService);
+            embeddedDevice.AddService(RemotedExperienceService);
 
             #endregion ########################################################
 
@@ -125,17 +163,18 @@ namespace SoftSled.Components.Extender {
             #region Create Root Device ########################################
 
             device = UPnPDevice.CreateRootDevice(1800, 1.0, "\\XD");
-            device.UniqueDeviceName = "68c4b624-e1a0-42c5-94b8-4f5fa6fec622"; // W7P01
+            device.UniqueDeviceName = certDeviceId.ToLower(); // Unique Device Name causes failure unless lowercase
+            //device.UniqueDeviceName = "68c4b624-e1a0-42c5-94b8-4f5fa6fec622"; // W7P01
             //device.UniqueDeviceName = "b8501007-688e-4939-b4a2-fd7c649cdaac";
-            //device.UniqueDeviceName = "20000000-0000-0000-0200-0022483E33F6";
-            //device.UniqueDeviceName = "1B19160E-0B19-433B-9315-40AD98C6F5E0";
-            device.FriendlyName = "SoftSled Media Center Extender";
+            //device.UniqueDeviceName = "20000000-0000-0000-0200-0022483E33F6".ToLower();
+            //device.UniqueDeviceName = "1B19160E-0B19-433B-9315-40AD98C6F5E0".ToLower();
+            device.FriendlyName = $"SoftSled Media Center Extender ({Environment.MachineName})";
             device.Manufacturer = "SoftSled Project";
-            device.ManufacturerURL = "http://www.codeplex.com/softsled";
+            device.ManufacturerURL = "https://github.com/L2N6H5B3/SoftSled2";
             device.ModelName = "SoftSled";
-            device.ModelDescription = "SoftSled Media Center Extender";
+            device.ModelDescription = $"SoftSled Media Center Extender ({Environment.MachineName})";
             device.ModelNumber = "";
-            device.ModelURL = new Uri("http://www.codeplex.com/softsled");
+            device.ModelURL = new Uri("https://github.com/L2N6H5B3/SoftSled2");
             device.HasPresentation = false;
             device.DeviceURN = "urn:schemas-microsoft-com:device:MediaCenterExtenderMFD:1";
             device.AddCustomFieldInDescription("X_deviceCategory", "MediaDevices", "http://schemas.microsoft.com/windows/pnpx/2005/11");
@@ -145,13 +184,14 @@ namespace SoftSled.Components.Extender {
             device.AddService(new NullService());
 
             // Add Embedded Device to Root Device
-            device.AddDevice(device1);
+            device.AddDevice(embeddedDevice);
 
             #endregion ########################################################
 
 
             //Get the device id to use in the communication...
-            _DeviceID = "uuid:" + device1.UniqueDeviceName;
+            _DeviceID = "uuid:" + embeddedDevice.UniqueDeviceName;
+            _DeviceUDN = "uuid:" + device.UniqueDeviceName;
 
             // Setting the initial value of evented variables
         }
@@ -186,7 +226,7 @@ namespace SoftSled.Components.Extender {
             SupportedSignatureAlgorithms = "rSASSA-PSS-Default-Identifier";
             AttachCertificate = false;
 
-            m_logger.LogInfo("RemotedExperienceService_AcquireNonce(" + HostId.ToString() + ")");
+            //m_logger.LogInfo("RemotedExperienceService_AcquireNonce(" + HostId.ToString() + ")");
         }
 
         public void RemotedExperienceService_Advertise(uint Nonce, string HostId, string ApplicationId, string ApplicationVersion, string ApplicationData, string HostFriendlyName, string ExperienceFriendlyName, string ExperienceIconUri, string ExperienceEndpointUri, string ExperienceEndpointData, string SignatureAlgorithm, string Signature, string HostCertificate) {
@@ -198,7 +238,7 @@ namespace SoftSled.Components.Extender {
             _RES_SignatureAlgorithm = SignatureAlgorithm;
             _RES_Signature = Signature;
             _RES_HostCertificate = HostCertificate;
-            m_logger.LogInfo("RemotedExperienceService_Advertise(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + HostFriendlyName.ToString() + ExperienceFriendlyName.ToString() + ExperienceIconUri.ToString() + ExperienceEndpointUri.ToString() + ExperienceEndpointData.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
+            //m_logger.LogInfo("RemotedExperienceService_Advertise(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + HostFriendlyName.ToString() + ExperienceFriendlyName.ToString() + ExperienceIconUri.ToString() + ExperienceEndpointUri.ToString() + ExperienceEndpointData.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
 
             // parse endpoint data 
             Dictionary<String, String> endpointData = new Dictionary<string, string>();
@@ -209,27 +249,27 @@ namespace SoftSled.Components.Extender {
 
             // decrypt MCX user password with cert's signing key (private key)
             RSACryptoServiceProvider rsa = new RSACryptoServiceProvider();
-            rsa.FromXmlString(File.ReadAllText(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\Certificates\\SoftSledPrivateKey.xml"));
+            rsa.FromXmlString(System.IO.File.ReadAllText(_DevicePrivateKeyPath));
 
             byte[] cryptedPass = Convert.FromBase64String(endpointData["encryptedpassword"]);
-            string rdpPass;
+            string rdpPass = "";
             try {
                 rdpPass = Encoding.ASCII.GetString(rsa.Decrypt(cryptedPass, true));
             } catch (Exception ex) {
                 m_logger.LogInfo("RSA decryption of encrypted password failed " + ex.Message);
                 m_logger.LogInfo("Extender Experience Pairing has failed!");
-                rdpPass = "mcxpw123";
             }
 
             string rdpHost = ExperienceEndpointUri.Substring(6, ExperienceEndpointUri.Length - 12);
             string rdpUser = endpointData["user"];
 
-            m_logger.LogInfo("RDP host: " + rdpHost);
-            m_logger.LogInfo("RDP clear text Password: " + rdpPass);
-            m_logger.LogInfo("RDP user: " + rdpUser);
+            //m_logger.LogInfo("RDP host: " + rdpHost);
+            //m_logger.LogInfo("RDP clear text Password: " + rdpPass);
+            //m_logger.LogInfo("RDP user: " + rdpUser);
 
             SoftSledConfig config = SoftSledConfigManager.ReadConfig();
             config.IsPaired = true;
+            config.DeviceUDN = _DeviceUDN;
             config.RdpLoginHost = rdpHost;
             config.RdpLoginUserName = rdpUser;
             config.RdpLoginPassword = rdpPass;
@@ -431,8 +471,47 @@ namespace SoftSled.Components.Extender {
             int lastNIter = _OneTimePassword.Length % _Iterations;
             int size = (iterationNum > (_Iterations - lastNIter)) ? Convert.ToInt32(_OneTimePassword.Length / _Iterations) + 1 : Convert.ToInt32(_OneTimePassword.Length / _Iterations);
             int start = (Convert.ToInt32(_OneTimePassword.Length / _Iterations)) * (iterationNum - 1);
-            //m_logger.LogInfo("OTP_Iter for Iteration " + iterationNum + " is " + _OneTimePassword.Substring(start, size));
+            m_logger.LogInfo("OTP_Iter for Iteration " + iterationNum + " is " + _OneTimePassword.Substring(start, size));
             return _OneTimePassword.Substring(start, size);
+        }
+
+        #endregion #############################################################
+
+
+        #region Utilities ######################################################
+
+        public string GetPairingCode() {
+            if (_OneTimePassword.Length != 4)
+                throw new ArgumentException("OTP must be exactly 4 digits.", nameof(_OneTimePassword));
+
+            // 1. Format as the UPnP UDN expected by the hash function
+            string udn = _DeviceUDN;
+
+            // 2. Microsoft's custom 32-bit string hashing algorithm
+            uint num = 0U;
+            for (int i = 0; i < udn.Length; i++) {
+                num = (uint)udn[i] + (num * 8192U) + (num >> 19);
+            }
+
+            // 3. Derive the 3-digit Affiliation Code
+            uint affiliationCode = num - (num / 997U) * 997U + 2U;
+
+            // 4. Construct the 7-digit base (OTP + zero-padded Affiliation Code)
+            string pinBase = $"{_OneTimePassword}{affiliationCode:D3}";
+
+            // 5. Calculate the WPS Modulo-10 Checksum
+            int accum = 0;
+            int[] weights = { 3, 1, 3, 1, 3, 1, 3 };
+
+            for (int i = 0; i < 7; i++) {
+                // Convert the char back to an integer
+                accum += weights[i] * (pinBase[i] - '0');
+            }
+
+            int checkDigit = (10 - (accum % 10)) % 10;
+
+            // 6. Return the final formatted PIN string
+            return $"{pinBase.Substring(0, 4)}-{pinBase.Substring(4, 3)}{checkDigit}";
         }
 
         #endregion #############################################################

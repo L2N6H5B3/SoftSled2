@@ -226,5 +226,18 @@ namespace Rtsp
             data_socket.Send(data, data.Length, hostname, port);
         }
 
+        /// <summary>
+        /// Send an RTCP packet from the local control socket (so the server
+        /// sees the source port matching the client_port pair declared in
+        /// SETUP). Used for sending RTCP Receiver Reports back to the server
+        /// to keep its pacing engine happy — the existing
+        /// <see cref="Write_To_Control_Port"/> sends from the data_socket
+        /// which is the wrong source port for RTCP feedback.
+        /// </summary>
+        public void SendRtcpToServer(byte[] data, String hostname, int port)
+        {
+            control_socket.Send(data, data.Length, hostname, port);
+        }
+
     }
 }

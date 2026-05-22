@@ -1,0 +1,964 @@
+[MS-DSMN]:
+  Device Session Monitoring Protocol
+
+   Intellectual Property Rights Notice for Open Specifications Documentation
+
+    Technical Documentation. Microsoft publishes Open Specifications documentation for
+       protocols, file formats, languages, standards as well as overviews of the interaction among each
+       of these technologies.
+
+    Copyrights. This documentation is covered by Microsoft copyrights. Regardless of any other
+       terms that are contained in the terms of use for the Microsoft website that hosts this
+       documentation, you may make copies of it in order to develop implementations of the
+       technologies described in the Open Specifications and may distribute portions of it in your
+       implementations using these technologies or your documentation as necessary to properly
+       document the implementation. You may also distribute in your implementation, with or without
+       modification, any schema, IDL's, or code samples that are included in the documentation. This
+       permission also applies to any documents that are referenced in the Open Specifications.
+
+    No Trade Secrets. Microsoft does not claim any trade secret rights in this documentation.
+
+    Patents. Microsoft has patents that may cover your implementations of the technologies
+       described in the Open Specifications. Neither this notice nor Microsoft's delivery of the
+       documentation grants any licenses under those or any other Microsoft patents. However, a given
+       Open Specification may be covered by Microsoft Open Specification Promise or the Community
+       Promise. If you would prefer a written license, or if the technologies described in the Open
+       Specifications are not covered by the Open Specifications Promise or Community Promise, as
+       applicable, patent licenses are available by contacting iplg@microsoft.com.
+
+    Trademarks. The names of companies and products contained in this documentation may be
+       covered by trademarks or similar intellectual property rights. This notice does not grant any
+       licenses under those rights. For a list of Microsoft trademarks, visit
+       www.microsoft.com/trademarks.
+
+    Fictitious Names. The example companies, organizations, products, domain names, email
+       addresses, logos, people, places, and events depicted in this documentation are fictitious. No
+       association with any real company, organization, product, domain name, email address, logo,
+       person, place, or event is intended or should be inferred.
+
+   Reservation of Rights. All other rights are reserved, and this notice does not grant any rights
+   other than specifically described above, whether by implication, estoppel, or otherwise.
+
+   Tools. The Open Specifications do not require the use of Microsoft programming tools or
+   programming environments in order for you to develop an implementation. If you have access to
+   Microsoft programming tools and environments you are free to take advantage of them. Certain
+   Open Specifications are intended for use in conjunction with publicly available standard
+   specifications and network programming art, and assumes that the reader either is familiar with the
+   aforementioned material or has immediate access to it.
+
+                                          1 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+Revision Summary
+
+Date  Revision    Revision                Comments
+      History     Class
+                  Major                   First Release.
+11/06/2009 0.1    Editorial
+                  Major                   Revised and edited the technical content.
+12/18/2009 0.1.1  Editorial
+                  Editorial               Updated and revised the technical content.
+01/29/2010 1.0    Major
+                  Major                   Revised and edited the technical content.
+03/12/2010 1.0.1  Major
+                  No change               Revised and edited the technical content.
+04/23/2010 1.0.2
+                  No change               Updated and revised the technical content.
+06/04/2010 2.0
+                  No change               Significantly changed the technical content.
+07/16/2010 3.0
+                  No change               Significantly changed the technical content.
+08/27/2010 4.0
+                  No change               No changes to the meaning, language, or formatting of
+10/08/2010 4.0                            the technical content.
+                  No change
+11/19/2010 4.0                            No changes to the meaning, language, or formatting of
+                  Minor                   the technical content.
+01/07/2011 4.0    No change
+                                          No changes to the meaning, language, or formatting of
+02/11/2011 4.0    Major                   the technical content.
+                  No change
+03/25/2011 4.0                            No changes to the meaning, language, or formatting of
+                  No change               the technical content.
+05/06/2011 4.0
+                  No change               No changes to the meaning, language, or formatting of
+06/17/2011 4.1                            the technical content.
+09/23/2011 4.1    No change
+                                          No changes to the meaning, language, or formatting of
+12/16/2011 5.0                            the technical content.
+03/30/2012 5.0
+                                          Clarified the meaning of the technical content.
+07/12/2012 5.0
+                                          No changes to the meaning, language, or formatting of
+10/25/2012 5.0                            the technical content.
+
+01/31/2013 5.0                            Significantly changed the technical content.
+
+                                          No changes to the meaning, language, or formatting of
+                                          the technical content.
+
+                                          No changes to the meaning, language, or formatting of
+                                          the technical content.
+
+                                          No changes to the meaning, language, or formatting of
+                                          the technical content.
+
+                                          No changes to the meaning, language, or formatting of
+                                          the technical content.
+
+                                          2 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+Date  Revision  Revision                  Comments
+      History   Class
+                Major                     Significantly changed the technical content.
+08/08/2013 6.0  Major
+                No change                 Significantly changed the technical content.
+11/14/2013 7.0
+                No change                 No changes to the meaning, language, or formatting of
+02/13/2014 7.0                            the technical content.
+
+05/15/2014 7.0                            No changes to the meaning, language, or formatting of
+                                          the technical content.
+
+                                          3 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+Contents
+
+   1 Introduction ............................................................................................................. 6
+      1.1 Glossary ............................................................................................................... 6
+      1.2 References............................................................................................................ 6
+         1.2.1 Normative References ....................................................................................... 6
+         1.2.2 Informative References ..................................................................................... 6
+      1.3 Overview .............................................................................................................. 7
+      1.4 Relationship to Other Protocols ................................................................................ 8
+         1.4.1 Device Services Lightweight Remoting Protocol (DSLR) ......................................... 8
+         1.4.2 Quality Windows Audio/Video Experience (qWAVE) ............................................... 8
+      1.5 Prerequisites/Preconditions ..................................................................................... 8
+      1.6 Applicability Statement ........................................................................................... 9
+      1.7 Versioning and Capability Negotiation....................................................................... 9
+      1.8 Vendor-Extensible Fields......................................................................................... 9
+      1.9 Standards Assignments .......................................................................................... 9
+
+   2 Messages................................................................................................................ 10
+      2.1 Transport............................................................................................................ 10
+      2.2 Message Syntax .................................................................................................. 10
+         2.2.1 ShellDisconnect.............................................................................................. 10
+            2.2.1.1 ShellDisconnect (request) .......................................................................... 10
+            2.2.1.2 ShellDisconnect (response) ........................................................................ 11
+         2.2.2 ShellIsActive.................................................................................................. 11
+            2.2.2.1 ShellIsActive (request) .............................................................................. 12
+            2.2.2.2 ShellIsActive (response) ............................................................................ 12
+         2.2.3 Heartbeat ...................................................................................................... 12
+            2.2.3.1 Heartbeat (request) .................................................................................. 12
+            2.2.3.2 Heartbeat (response) ................................................................................ 12
+         2.2.4 GetQWaveSinkInfo ......................................................................................... 13
+            2.2.4.1 GetQWaveSinkInfo (request) ..................................................................... 13
+            2.2.4.2 GetQWaveSinkInfo (response) ................................................................... 13
+
+   3 Protocol Details ...................................................................................................... 14
+      3.1 Server (Stub) Details ........................................................................................... 14
+         3.1.1 Abstract Data Model ....................................................................................... 14
+         3.1.2 Timers .......................................................................................................... 15
+         3.1.3 Initialization .................................................................................................. 15
+         3.1.4 Higher-Layer Triggered Events ......................................................................... 15
+         3.1.5 Processing Events and Sequencing Rules........................................................... 15
+            3.1.5.1 ShellDisconnect ........................................................................................ 15
+            3.1.5.2 ShellIsActive ............................................................................................ 15
+            3.1.5.3 Heartbeat ................................................................................................ 15
+            3.1.5.4 GetQWaveSinkInfo ................................................................................... 16
+         3.1.6 Timer Events ................................................................................................. 16
+            3.1.6.1 HB Timeout Event ..................................................................................... 16
+         3.1.7 Other Local Events ......................................................................................... 16
+
+   4 Protocol Examples .................................................................................................. 17
+
+   5 Security .................................................................................................................. 18
+      5.1 Security Considerations for Implementers ............................................................... 18
+      5.2 Index of Security Parameters ................................................................................ 18
+
+                                          4 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+6 Appendix A: Product Behavior ................................................................................ 19
+7 Change Tracking..................................................................................................... 20
+8 Index ..................................................................................................................... 21
+
+                                          5 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+1 Introduction
+
+   The Device Session Monitoring Protocol (DSMN) enables a client device to monitor the status of the
+   host in a remote session. DSMN is built on the Device Services Lightweight Remoting Protocol
+   (DSLR), as specified in [MS-DSLR].
+
+   Sections 1.8, 2, and 3 of this specification are normative and can contain the terms MAY, SHOULD,
+   MUST, MUST NOT, and SHOULD NOT as defined in RFC 2119. Sections 1.5 and 1.9 are also
+   normative but cannot contain those terms. All other sections and examples in this specification are
+   informative.
+
+1.1 Glossary
+
+   The following terms are defined in [MS-GLOS]:
+
+        big-endian
+        Component Object Model (COM)
+        little-endian
+        remote procedure call (RPC)
+        session
+        shell
+        Terminal Services
+
+   The following terms are specific to this document:
+
+        Quality Windows Audio/Video Experience (qWAVE): A part of the Link Layer Topology
+            Discovery (LLTD) Quality of Service (QoS) extension for Internet streaming media.
+
+        MAY, SHOULD, MUST, SHOULD NOT, MUST NOT: These terms (in all caps) are used as
+            described in [RFC2119]. All statements of optional behavior use either MAY, SHOULD, or
+            SHOULD NOT.
+
+1.2 References
+
+   References to Microsoft Open Specifications documentation do not include a publishing year because
+   links are to the latest version of the documents, which are updated frequently. References to other
+   documents include a publishing year when one is available.
+
+1.2.1 Normative References
+
+   We conduct frequent surveys of the normative references to assure their continued availability. If
+   you have any issue with finding a normative reference, please contact dochelp@microsoft.com. We
+   will assist you in finding the relevant information.
+
+   [MS-DSLR] Microsoft Corporation, "Device Services Lightweight Remoting Protocol".
+
+   [MS-DTYP] Microsoft Corporation, "Windows Data Types".
+
+   [RFC2119] Bradner, S., "Key words for use in RFCs to Indicate Requirement Levels", BCP 14, RFC
+   2119, March 1997, http://www.rfc-editor.org/rfc/rfc2119.txt
+
+1.2.2 Informative References
+
+   [MS-GLOS] Microsoft Corporation, "Windows Protocols Master Glossary".
+
+                                          6 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+   [MS-LLTD] Microsoft Corporation, "Link Layer Topology Discovery (LLTD) Protocol".
+
+1.3 Overview
+
+   After a network-connected device establishes a remote session with a host PC, the users on the
+   remote device can interact with the shell running on the host. The purpose of DSMN is for the
+   remote device to monitor the shell status on the host. For this, DSMN provides a remote
+   procedure call (RPC)-like interface via which the host can notify the shell status to the remote
+   host. In addition, the host can retrieve the Quality Windows Audio/Video Experience (qWAVE)
+   information of the device via DSMN.
+
+   This protocol uses the Device Services Lightweight Remoting Protocol as specified in [MS-DSLR] to
+   enable the remoting of services between the host and the client over a reliable point-to-point
+   channel.
+
+   DSMN must be implemented and offered by the remote device (acting in this case as the stub) while
+   the host acts as the proxy, in DSLR nomenclatures. For a more detailed definition of these roles, see
+   [MS-DSLR]. DSMN contains the following messages/functions:
+
+   ShellDisconnect
+
+   ShellIsActive
+
+   Heartbeat
+
+   GetQwaveSinkInfo
+
+   The following block diagram shows the relationship between the host and the device.<1>
+
+Figure 1: Architecture and operation of the DSMN Protocol  7 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+ Copyright © 2014 Microsoft Corporation.
+ Release: Thursday, May 15, 2014
+1.4 Relationship to Other Protocols
+
+   DSMN uses the Device Services Lightweight Remoting Protocol (DSLR) for transport. DSMN can be
+   also used to retrieve qWAVE information from the device.
+
+1.4.1 Device Services Lightweight Remoting Protocol (DSLR)
+
+   Device Services Lightweight Remoting Protocol (DSLR) is a Component Object Model (COM)-like
+   protocol that enables remoting of services (for example, function calls, events, and so on) over a
+   reliable point-to-point connection. It enables an application to call functions on and/or send events
+   to a remote device over the established channel. The service itself is implemented on the local/stub
+   side of the connection, and the remote side creates a proxy for that service. DSLR is direction-
+   agnostic, that is, each side of the connection can act as both a proxy for a remote service and a stub
+   that manages calls into a local service. Both the stub and proxy are implemented by the DSLR
+   consumer; each side has knowledge of the functions/events exposed by the service, as well as the
+   in/out parameters for each. By convention, the request/response calling convention follows COM
+   rules:
+
+   The function returns an HRESULT.
+
+   All [in] parameters are serialized in the request tag.
+
+   The returned HRESULT is serialized in the response tag, followed by the [out] parameters, if
+        successful,
+
+   The caller should expect the returned HRESULT to be either one of the values returned by the
+        function, or one of the DSLR failure values.
+
+   The caller may not evaluate any of the [out] parameters if the call returned a failure.
+
+   For more information about this protocol, see [MS-DSLR].
+
+1.4.2 Quality Windows Audio/Video Experience (qWAVE)
+
+   qWAVE provides the functionality for socket-based applications to gather in-depth, real-time
+   information of a variable bandwidth network allowing it to dynamically adapt to changing network
+   conditions. It also allows applications to prioritize packets in order to make better use of the
+   available bandwidth.
+
+   The functionality provided by qWAVE is mainly targeted for use by multimedia applications that
+   require network QoS for streams on a home network.
+
+   A PC or device must implement the Link Layer Topology Discovery (LLTD) Responder Protocol [MS-
+   LLTD] with QoS extensions for qWAVE in order to expose advanced functionality, such as bandwidth
+   measurements and congestion notifications.<2>
+
+1.5 Prerequisites/Preconditions
+
+   For DSMN to function properly, the following conditions must be met:
+
+   A network connection has been established between the host and the remote device.
+
+   The DSLR modules have been initialized and started on both devices. Once completed, the proxy
+        side calls the CreateService request to instantiate the service on the stub side, and creates a
+        proxy for that service (that is, an object that implements the proxied service's interfaces). As
+        part of the CreateService request, it allocates a service handle that is sent to the stub side. This
+
+                                          8 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+        handle would subsequently be used when calling functions on the service and to terminate the
+        service via DeleteService. See [MS-DSLR] section 3.1.5.1 and section 3.2.5.1 for more
+        information on this process. The following class/service GUIDS are passed in the CreateService
+        ([MS-DSLR] section 2.2.2.3) message for DSMN:
+
+        ClassID GUID: a30dc60e-1e2c-44f2-bfd1-17e51c0cdf19.
+
+        ServiceID GUID: 73e8f48c-033c-4590-a59f-fb844eb24681.
+
+1.6 Applicability Statement
+
+   DSMN is suitable for a device running a remote session which needs to be informed of the shell
+   status. Additionally, DSMN can be used where it is necessary for the host to query qWAVE
+   information from the remote device, although the operation of DSMN does not require qWAVE/LLTD.
+
+1.7 Versioning and Capability Negotiation
+
+   DSMN does not specify versioning and capability negotiation beyond what is specified by [MS-
+   DSLR].
+
+1.8 Vendor-Extensible Fields
+
+   None.
+
+1.9 Standards Assignments
+
+   None.
+
+                                          9 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+2 Messages
+
+   This protocol references commonly used data types as defined in [MS-DTYP].
+
+2.1 Transport
+
+   Messages are transported over DSLR, which can be implemented on top of any stream-based or
+   message-based reliable transport.
+
+2.2 Message Syntax
+
+   The DSMN messages MUST follow the DSLR message syntax for requests and responses, as
+   specified in [MS-DSLR] section 2.2. DSLR uses a tag-based formatting for its messages, see [MS-
+   DSLR] section 2.2 for details of the tag formats.
+
+   The DSLR payload for a request is defined by the DSLR Dispatcher Request tag payload, followed by
+   the child payload of a given message (that is, the function parameters for the given message). The
+   Dispatcher Request tag payload includes the service handle for the specific service (see section 1.5
+   for how this service handle is obtained), the function handle for the specific function being called on
+   that service (defined by the service), the calling convention for that function, and a one-time
+   request handle allocated by the client for each request. See [MS-DSLR] section 2.2.2.1 for the
+   format of the DSLR Dispatcher Request tag payload.
+
+   The DSLR payload for a response is defined by the DSLR Dispatcher Response tag payload, followed
+   by the child payload of a given message (that is, the result and return parameters for the given
+   message). The Dispatcher Response tag payload includes the callingConvention parameter and the
+   matching one-time request handle to which this response corresponds. See [MS-DSLR] section 2.2
+   for the format of the DSLR Dispatcher Response tag payload.
+
+   The format of the data types for input and output parameters for the following functions are defined
+   in [MS-DSLR]. See [MS-DSLR] section 2.2 for valid input/output parameters and how they are
+   formatted on the wire (big-endian or little-endian).
+
+   For more details on the DSLR message syntax, see [MS-DSLR].
+
+2.2.1 ShellDisconnect
+
+   The ShellDisconnect message is a two-way request message
+
+2.2.1.1 ShellDisconnect (request)
+
+   The CallingConvention parameter in the Dispatcher Request tag MUST be dslrRequest
+   (0x00000001). The function handle for the Dispatcher Request tag for ShellDisconnect MUST be
+   0x00000000.
+
+   Request payload (input parameter)
+
+1                                                            2  3
+
+01234567890123456789012345678901
+
+                                          Disconnect Reason
+
+Disconnect Reason (4 bytes): An unsigned 32-bit integer. This parameter MUST be the right
+    value from the following table.
+
+                                                                10 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+Disconnect reason  Description
+0                  Shell exited unexpectedly.
+1                  Error is unknown. (This is deprecated.)
+2                  Initialization error.
+3                  Shell is hung.
+4                  Unauthorized UI in the session.
+5                  User is not allowed - the remote device was disabled on the host.
+6                  Certificate is invalid.
+7                  Shell cannot be started.
+8                  Shell monitor thread cannot be started.
+9                  Message window cannot be created.
+10                 Terminal Services (TS) session cannot be started.
+11                 Plug-and-Play (PNP) failed.
+12                 Certificate is not trusted.
+13                 Product registration is expired.
+14                 PC goes to sleep or shuts down.
+15                 User closed the session.
+
+2.2.1.2 ShellDisconnect (response)
+
+   The CallingConvention parameter in the Dispatch Response tag MUST be dslrResponse
+   (0x00000002).
+
+   Response payload (result parameter)
+
+                   1                              2                                                3
+
+01234567890123456789012345678901
+
+                                          Result
+
+        Result (4 bytes): An unsigned 32-bit integer. HRESULT is returned from the function call.
+2.2.2 ShellIsActive
+
+   The ShellIsActive message is a two-way request message.
+
+                                                                                      11 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+2.2.2.1 ShellIsActive (request)
+
+   The CallingConvention parameter in the Dispatcher Request tag MUST be dslrRequest
+   (0x00000001). The function handle for the Dispatcher Request tag for ShellIsActive MUST be
+   0x00000001. There is no input parameter for this message.
+
+2.2.2.2 ShellIsActive (response)
+
+   The CallingConvention parameter in the Dispatch Response tag MUST be dslrResponse
+   (0x00000002).
+
+   Response payload (result parameter)
+
+1                                                           2                                  3
+
+01234567890123456789012345678901
+
+                                          Result
+
+        Result (4 bytes): An unsigned 32-bit integer. HRESULT is returned from the function call.
+
+2.2.3 Heartbeat
+   The Heartbeat message is a two-way request message.
+
+2.2.3.1 Heartbeat (request)
+   The CallingConvention parameter in the Dispatcher Request tag MUST be dslrRequest
+   (0x00000001). The function handle for the Dispatcher Request tag for Heartbeat message MUST be
+   0x00000002.
+   Request payload (input parameter)
+
+1                                                           2                                  3
+
+01234567890123456789012345678901
+
+                                          Screensaver Flag
+
+        Screensaver Flag (4 bytes): An unsigned 32-bit integer. The device MAY have its own
+            screensaver. If so, the device's native screensaver MUST be controlled as specified in section
+            3.1.5.3 based on the value of the Screensaver Flag parameter whenever the device receives
+            HeartBeat message.
+
+2.2.3.2 Heartbeat (response)
+
+   The CallingConvention parameter in the Dispatch Response tag MUST be dslrResponse
+   (0x00000002).
+
+   Response payload (result parameter)
+
+                                                                                               12 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+1                                                          2  3
+
+01234567890123456789012345678901
+
+                                          Result
+
+        Result (4 bytes): An unsigned 32-bit integer. HRESULT is returned from the function call.
+
+2.2.4 GetQWaveSinkInfo
+   The GetQWaveSinkInfo message is a two-way request message.
+
+2.2.4.1 GetQWaveSinkInfo (request)
+   The CallingConvention parameter in the Dispatcher Request tag MUST be dslrRequest
+   (0x00000001). The function handle for the Dispatcher Request tag for GetQWaveSinkInfo MUST be
+   0x00000003. There is no input parameter for this message.
+
+2.2.4.2 GetQWaveSinkInfo (response)
+   The CallingConvention parameter in the Dispatch Response tag MUST be dslrResponse
+   (0x00000002).
+   Response payload (result and output parameters)
+
+1                                                          2  3
+
+01234567890123456789012345678901
+
+                                          Result
+
+                                          Is Sink Running
+
+                                          Port Number
+
+Result (4 bytes): An unsigned 32-bit integer. HRESULT is returned from the function call.
+
+Is Sink Running (4 bytes): An unsigned 32-bit integer. A nonzero value is returned if qWAVE
+    is running on the device. Otherwise, 0 is returned.
+
+Port Number (4 bytes): An unsigned 32-bit integer. The port number on which qWAVE runs is
+    returned.<3>
+
+                                                              13 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+3 Protocol Details
+
+3.1 Server (Stub) Details
+
+   Built on DSLR, DSMN service (stub) resides in the remote device and processes the messages issued
+   by the shell monitoring logic at the host (acting as DSMN client/proxy). The following figure
+   illustrates the state transition diagram for DSMN.
+
+   Figure 2: State diagram for DSMN
+   The states for DSMN can be summarized as follows:
+   Start: The device established a remote session and the shell is ready to start on the host. The
+   following event is processed in this state:
+   ShellIsActive
+
+   ShellRunning: The shell is up and running on the remote session. The following events are
+   processed in this state:
+   Heartbeat
+   GetQWaveSinkInfo
+   ShellDisconnect
+   HB (heartbeat) timeout
+
+   Finish: The shell is closed. No event is processed in this state.
+
+3.1.1 Abstract Data Model
+   This section describes a conceptual model of possible data organization that an implementation
+   maintains to participate in this protocol. The described organization is provided to facilitate the
+   explanation of how the protocol behaves. This document does not mandate that implementations
+
+                                          14 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+   adhere to this model as long as their external behavior is consistent with that described in this
+   document.
+
+   IsNativeScreensaverOn: This flag is TRUE if the device has its own native screensaver and it is
+   turned on. If the device does not have its own screensaver or it is not turned on, this flag is FALSE.
+
+   IsQWaveSinkRunning: If the device is currently running qWAVE, this flag is TRUE. Otherwise, this
+   flag is FALSE.
+
+   QWaveSinkPortNumber: This is the port number on which qWAVE runs.
+
+3.1.2 Timers
+
+   DSMN MUST maintain the following timer for each session:
+
+   HB timeout timer: The elapsed time from which the device received the last heartbeat from the
+   host.
+
+3.1.3 Initialization
+
+   Before DSMN takes action, DSLR MUST be started on both sides, and the CreateService message
+   received by server.
+
+3.1.4 Higher-Layer Triggered Events
+
+   None.
+
+3.1.5 Processing Events and Sequencing Rules
+
+3.1.5.1 ShellDisconnect
+
+   If this event occurs while the device is in the ShellRunning state, the device MUST move to the
+   Finish state and return S_OK. Otherwise, the device MAY ignore this message.<4>
+
+3.1.5.2 ShellIsActive
+
+   If this event occurs while the device is in the Start state, the device moves into the ShellRunning
+   state and returns S_OK. Otherwise, the device returns an appropriate error code.<5> See [MS-
+   DSLR] section 2.2.2.5 for the possible error codes returned in the DSLR Dispatcher Response Tag
+   Payload.
+
+3.1.5.3 Heartbeat
+
+   If this event occurs while the device is in the ShellRunning state, the device MUST reset the HB
+   timeout timer (section 3.1.2). The device MUST return S_OK if the message is processed
+   successfully. Otherwise, the device MUST return an appropriate error code.
+
+   The device MAY have its own native screensaver, of which state is represented by
+   IsNativeScreensaverOn flag. If IsNativeScreensaverOn flag is TRUE and the value of the
+   Screensaver Flag parameter is nonzero, the device MUST suppress the screensaver at the moment
+   by disengaging any active native screensaver. Otherwise, the device MUST let the native
+   screensaver run following the local settings of the device.
+
+                                          15 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+3.1.5.4 GetQWaveSinkInfo
+
+   If this event occurs while the device is in the ShellRunning state, the device MUST return
+   IsQWaveSinkRunning and QWaveSinkPortNumber information in the Is Sink Running and Port
+   Number parameters, respectively, as specified in section 2.2.4.
+
+   The device MUST return S_OK if the message is processed successfully. Otherwise, the device MUST
+   return an appropriate error code. See [MS-DSLR] section 2.2.2.5 for the possible error codes
+   returned in the DSLR Dispatcher Response Tag Payload.
+
+3.1.6 Timer Events
+
+3.1.6.1 HB Timeout Event
+
+   This represents the abnormal shell inactivity, which is originated from, not limited to, network
+   disconnection or host shutdown. The device triggers this event if it cannot receive a Heartbeat
+   message for 60 seconds after it received the last Heartbeat message from the host. When this event
+   occurs, the device MUST move to the Finish state.<6>
+
+3.1.7 Other Local Events
+
+   None.
+
+                                          16 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+4 Protocol Examples
+
+   The following diagram and accompanying list of steps show the sequence of DSMN messages that
+   pass over the wire after the host and client establish a connection.
+
+Figure 3: Typical DSMN message sequence during the lifetime of DSMN
+1. The host notifies that the shell is now activated.
+2. The host queries qWAVE sink information on the client.
+3. The client returns qWAVE sink information in response.
+4. The host starts sending Heartbeat messages, with the appropriate screensaver flag.
+5. The host keeps sending Heartbeat messages before HB timeout timer is expired, continuing to
+
+    control native screensaver behavior with the screensaver flag.
+6. The host notifies the client of the shell closedown and the reason.
+
+                                          17 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+5 Security
+
+5.1 Security Considerations for Implementers
+   None.
+
+5.2 Index of Security Parameters
+   None.
+
+                                              18 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+6 Appendix A: Product Behavior
+
+   The information in this specification is applicable to the following Microsoft products or supplemental
+   software. References to product versions include released service packs:
+
+   Windows Vista operating system
+
+   Windows 7 operating system
+
+   Windows 8 operating system
+
+   Windows 8.1 operating system
+
+   Exceptions, if any, are noted below. If a service pack or Quick Fix Engineering (QFE) number
+   appears with the product version, behavior changed in that service pack or QFE. The new behavior
+   also applies to subsequent service packs of the product unless otherwise specified. If a product
+   edition appears with the product version, behavior is different in that product edition.
+
+   Unless otherwise specified, any statement of optional behavior in this specification that is prescribed
+   using the terms SHOULD or SHOULD NOT implies product behavior in accordance with the SHOULD
+   or SHOULD NOT prescription. Unless otherwise specified, the term MAY implies that the product
+   does not follow the prescription.
+
+   <1> Section 1.3: Windows Media Center is the shell, Windows is the host which runs the shell, and
+   Extenders for Windows Media Center is the client device.
+
+   <2> Section 1.4.2: Windows Vista, Windows 7, Windows 8, and Windows 8.1 support LLTD by
+   default.
+
+   <3> Section 2.2.4.2: Media Center uses port 2177 for qWAVE/LLTD with Extenders for Windows
+   Media Center.
+
+   <4> Section 3.1.5.1: Media Center on Windows Vista, Windows 7, Windows 8, and Windows 8.1
+   sends ShellDisconnect when Media Center shell exits.
+
+   <5> Section 3.1.5.2: Media Center on Windows Vista, Windows 7, Windows 8, and Windows 8.1
+   sends ShellIsActive when Media Center shell is initialized and ready to start UI.
+
+   <6> Section 3.1.6.1: Media Center on Windows Vista sends Heartbeat to the device at every 5
+   seconds. Media Center on Windows 7, Windows 8, and Windows 8.1 sends Heartbeat to the device
+   at every 5 seconds and whenever Screensaver flag is set 0x00000001.
+
+                                          19 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+7 Change Tracking
+
+   No table of changes is available. The document is either new or has had no changes since its last
+   release.
+
+                                          20 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+8 Index                                            Local events 16
+
+   A                                               M
+
+    Abstract data model 14                         Message processing
+    Applicability 9                                   GetQWaveSinkInfo 16
+                                                      Heartbeat 15
+   C                                                  ShellDisconnect 15
+                                                      ShellIsActive 15
+    Capability negotiation 9
+    Change tracking 20                             Messages
+                                                      GetQWaveSinkInfo message 13
+   D                                                  Heartbeat message 12
+                                                      ShellDisconnect message 10
+    Data model - abstract 14                          ShellIsActive message 11
+    Details 14                                        syntax 10
+    Device Services Lightweight Remoting Protocol     transport 10
+
+       (DSLR) - relationship to other protocols 8  N
+
+   E                                               Normative references 6
+
+    Examples - overview 17                         O
+
+   F                                               Overview (synopsis) 7
+
+    Fields - vendor-extensible 9                   P
+
+   G                                               Parameters - security index 18
+                                                   Preconditions 8
+    GetQWaveSinkInfo                               Prerequisites 8
+       message 13                                  Product behavior 19
+       message processing 16
+       request packet 13                           Q
+       response packet 13
+       sequencing rules 16                         Quality Windows Audio/Video Experience (qWAVE) -
+                                                      relationship to other protocols 8
+    GetQWaveSinkInfo_response packet 13
+    Glossary 6                                     R
+
+   H                                               References
+                                                      informative 6
+    HB Timeout Event - timer events 16                normative 6
+    Heartbeat
+                                                   Relationship to other protocols
+       message 12                                     Device Services Lightweight Remoting Protocol
+       message processing 15                              (DSLR) 8
+       request packet 12                              Quality Windows Audio/Video Experience
+       response packet 12                                 (qWAVE) 8
+       sequencing rules 15
+    Heartbeat_request packet 12                    S
+    Heartbeat_response packet 12
+    Higher-layer triggered events 15               Security
+                                                      implementer considerations 18
+   I                                                  parameter index 18
+
+    Implementer - security considerations 18       Sequencing rules
+    Index of security parameters 18                   GetQWaveSinkInfo 16
+    Informative references 6                          Heartbeat 15
+    Initialization 15                                 ShellDisconnect 15
+    Introduction 6                                    ShellIsActive 15
+
+   L                                               ShellDisconnect
+
+    [MS-DSMN] -- v20140502                                                                                             21 / 22
+     Device Session Monitoring Protocol
+
+     Copyright © 2014 Microsoft Corporation.
+
+     Release: Thursday, May 15, 2014
+   message 10
+   message processing 15
+   request packet 10
+   response packet 11
+   sequencing rules 15
+ShellDisconnect_request packet 10
+ShellDisconnect_response packet 11
+ShellIsActive
+   message 11
+   message processing 15
+   request packet 12
+   response packet 12
+   sequencing rules 15
+ShellIsActive_response packet 12
+Standards assignments 9
+Syntax - messages 10
+
+T
+
+Timer events - HB Timeout Event 16
+Timers 15
+Tracking changes 20
+Transport 10
+Triggered events - higher-layer 15
+
+V
+
+Vendor-extensible fields 9
+Versioning 9
+
+                                          22 / 22
+
+[MS-DSMN] -- v20140502
+ Device Session Monitoring Protocol
+
+ Copyright © 2014 Microsoft Corporation.
+
+ Release: Thursday, May 15, 2014
+

@@ -9,20 +9,18 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
    * H.264 working
    * MPEG2-TS underway
    * Recorded TV and Live TV playback over H.264 is working!
-* Interface sounds (through RDP or local) currently being worked out
 
 ## Finished Elements
-* Initial Device Configuration
+* Full Pairing Configuration (Including on-the-fly Extender Certificate Generation)
 * Device Services Remoting (DSLR)
 * Extender Device Capability Queries (DSPA)
 * Extender Device Session Communication (DSMN)
 * Extender Device Media Control (DMCT)
-* Opening Sounds
+* Interface Sounds
 * Full-Screen Interface
 
 ## Future Requirements
 * Implement Video Overlay (Not possible to Chroma-key the RDP window in WinForms or WPF... Need to think of another option.)
-* Create Extender Certificate
 * Implement media controls (play/pause/previous/next) media from client
 * Create RC6 remote control forwarder
 
@@ -43,19 +41,17 @@ Multiple certificates have been found to work with SoftSled - these being:
 * Linksys2200.cer
 * Xbox360.cer
 
-Work is currently ongoing around a certificate generation process to build certificates upon SoftSled provisioning / setup.
-
-The device certificate selected seems to be required to be installed into the Other People store of the Current User running the Extender setup.  This might be required to be in the Local Machine store at a later point in time, but work still needs to be done to confirm.
+Work has been completed to enable on-the-fly certificate generation upon SoftSled provisioning / setup.
 
 ### Configuration
 (If using Linksys2200.cer)
-1. Copy Linksys2200.cer to the Host Machine and let Windows install the certificate into the default store.
-2. Start SoftSled.
-3. Go to your Media Center PC and Navigate to **Settings** > **Extenders**.
-4. Find SoftSled in the list.
-5. Click Configure.
-6. In the key type in 1234-3706, and WMC will try to pair the Extender.
-7. Windows Media Center will go through the configuration steps and will pair the Extender, but will fail the last step and won't be able to connect.
-8. Open netplwiz, and note the new user (in the form of Mcx{num}-{machineName}). 
-9. Manually reset the password of this user to **mcxpw123**.
-10. Once done, try to connect SoftSled, and if you're lucky you'll get to the WMC home screen through RDP.
+1. Copy SoftSledCA.cer to the Host Machine and install the certificate into the Local Machine Trusted Root store.
+2. Copy and replace Mcx2Prov.exe with the patched version.
+3. Start SoftSled > Setup.
+4. Go to your Media Center PC and Navigate to **Settings** > **Extenders**.
+5. Find SoftSled in the list.
+6. Click Configure.
+7. In the key type in the provided key, and WMC will try to pair the Extender.
+8. Windows Media Center will go through the configuration steps and will pair the Extender.
+9. When the Extender shows that it has received the user details, select Connect.
+10. If you're lucky you'll get to the WMC home screen through RDP.

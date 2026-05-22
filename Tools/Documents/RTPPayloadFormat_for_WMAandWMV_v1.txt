@@ -1,0 +1,1237 @@
+                    RTP Payload Format 
+                                   for
+
+         Windows Media Audio and Video
+
+Version v1.0
+End User License Agreement
+
+RTP Payload Format for Windows Media Audio and Video, v1.0
+
+IMPORTANT--READ CAREFULLY: This Microsoft Agreement ("Agreement") is a legal agreement
+between you (either an individual or a single entity) and Microsoft Corporation ("Microsoft") for
+the version of the Microsoft specification identified above which you are about to download
+("Specification"). By downloading, copying, or otherwise using the Specification, you agree to be
+bound by the terms of this Agreement. If you do not agree to the terms of this Agreement, do not
+download, copy or otherwise use the Specification.
+
+The Specification is owned by Microsoft or its suppliers and is protected by copyright laws and international
+copyright treaties, as well as other intellectual property laws and treaties.
+
+The capitalized terms used in this Agreement are defined as follows:
+
+ The "Real-time Transport Protocol" (or "RTP") is a packet format for multimedia data streams.
+
+ "Necessary Claims" means any and all claim(s), but only such claim(s), of a patent or patent application
+      that (a) are owned, controlled, or sublicensable (without payment of royalties to an unaffiliated third
+      party) by Microsoft now or at any future time; and (b) are necessarily infringed by implementing the
+      Specification. Notwithstanding the foregoing sentence, Necessary Claims do not include any claims: (i) to
+      any enabling technologies that may be necessary to make or use any product or portion thereof that
+      includes an implementation of the Specification (e.g., enabling semiconductor manufacturing technology,
+      compiler technology, object oriented technology, operating system technology, protocols, programming
+      interfaces, etc.); or (ii) covering the implementation of other specifications, technical documentation or
+      technology merely referred to in the Specification.
+
+All other initially capitalized terms have the meanings assigned to them elsewhere in this Agreement.
+
+1. LICENSE.
+
+(a)  License Grant. Provided you comply with all terms and conditions of this Agreement, including
+
+     without limitation Section 2 below, Microsoft grants you the following limited, non-exclusive,
+
+     world-wide, royalty-free, non-assignable, nontransferable, non-sublicenseable license during the
+
+     Term (defined below), under any copyrights owned or licensable by Microsoft without payment of
+
+     consideration to unaffiliated third parties, to: (i) reproduce and internally use a reasonable
+
+     number of copies of the Specification in its entirety as a reference for the sole purpose of
+
+     implementing the Specification in your hardware, application, or utilities (your "Solutions"); (ii)
+
+     reproduce and internally use your implementations of the Specification made pursuant to the
+
+     terms of this Agreement (your "Implementations") solely for internal development and testing of
+
+     your Solutions, and (iii) reproduce and have reproduced your Implementations and distribute,
+
+     directly and indirectly, your Implementations (only in object code form) solely as part of and for
+
+     use with your Solutions.
+
+(b)  Necessary Claims. Provided you comply with all terms and conditions of this Agreement,
+
+     including without limitation Section 2 below, Microsoft grants you the following limited,
+
+     non-exclusive, world-wide, royalty-free, non-assignable, nontransferable, non-sublicenseable
+
+     license during the Term under its Necessary Claims to make, use and distribute in object code
+
+     form (in accordance with the distribution criteria set forth in Section 1(a)(iii) above) your
+
+     Implementations that fully comply with the Specification.
+
+(c)  Reserved Rights. The foregoing license is applicable only to the version of the Specification
+
+     which hereby follows. This Agreement does not grant you any rights to any additional versions
+
+     of or extensions to the Specification. Microsoft and its suppliers retain title and all ownership
+
+     rights to the Specification and the information contained therein. All rights not expressly
+
+     granted are reserved to Microsoft. Microsoft may have patents or pending patent applications,
+
+     trademarks, copyrights, trade secrets or other intellectual property rights covering the subject
+
+     matter in the Specification. The furnishing of this Specification does not give you any license to
+
+     these patents, trademarks, trade secrets, copyrights, or other intellectual property rights, except
+
+     as specifically set forth in Sections 1(a) and 1(b) above.
+
+2. DESCRIPTION OF ADDITIONAL LIMITATIONS. Without limiting the conditions set forth in Section 1
+      above, your rights under Section 1 are expressly conditioned upon your compliance with each of the
+      following limitations:
+
+(a)  You may not alter or remove any copyright, trademark or other protective notices or legends
+
+     from any copy of the Specification.
+
+(b)  Your Implementations as incorporated into your Solutions must implement the Specification in
+
+     its entirety. By way of clarification of the foregoing, you are not required to implement any
+
+     portion of the Specification that is identified as "optional". However, if you elect to implement a
+     portion of the Specification that is identified as optional, you must also implement that optional
+     portion of the Specification in its entirety.
+
+(c)  For a variety of reasons, including without limitation, because you do not have the right to
+
+     sublicense the Necessary Claims, your license rights to the Specification are conditioned upon
+
+     your not creating or distributing your Implementations in any manner that would cause the RTP
+
+     (whether embodied in your Implementation or otherwise) to become subject to any of the terms
+
+     of an Excluded License. An "Excluded License" is any license that requires as a condition of use,
+
+     modification and/or distribution of software subject to the Excluded License, that such software
+
+     or other software combined and/or distributed with such software be (x) disclosed or distributed
+
+     in source code form; (y) licensed for the purpose of making derivative works; or (z)
+
+     redistributable at no charge;
+
+3. TERM. The term of this Agreement ("Term") commences upon your downloading of the Specification and
+      expires without notice on January 1, 2012, unless terminated sooner as provided in Section 4.
+
+4. TERMINATION. Without prejudice to any other rights, Microsoft may terminate this Agreement if you
+      fail to comply with any of the terms and conditions of this Agreement ("Termination for Cause").
+      Immediately following a Termination for Cause, you must destroy all copies of the Specification in your
+      possession or under your control and cease any further distribution of your Solutions that use or
+      incorporate Implementations.
+
+5. SUPPORT. Microsoft is not obligated to provide technical or other support for the Specification. You are
+      responsible for any and all maintenance, end-user support, technical support and updates for your
+      Solutions.
+
+6. EXPORT RESTRICTIONS. You acknowledge that the Specification is subject to U.S. export jurisdiction.
+      You agree to comply with all applicable international and national laws that apply to the Specification,
+      including the U.S. Export Administration Regulations, as well as end-user, end-use and country
+      destination restrictions issued by U.S. and other governments. For additional information on exporting
+      Microsoft products, see http://www.microsoft.com/exporting/.
+
+7. DISCLAIMER OF WARRANTIES. TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW,
+      MICROSOFT AND ITS SUPPLIERS PROVIDE TO YOU THE SPECIFICATION (AND ALL
+      INTELLECTUAL PROPERTY THEREIN), AND ANY (IF ANY) SUPPORT SERVICES RELATED TO THE
+      SPECIFICATION ("SUPPORT SERVICES") AS IS AND WITH ALL FAULTS; AND MICROSOFT AND
+      ITS SUPPLIERS HEREBY DISCLAIM WITH RESPECT TO THE SPECIFICATION AND SUPPORT
+      SERVICES ALL WARRANTIES AND CONDITIONS, WHETHER EXPRESS, IMPLIED OR STATUTORY,
+      INCLUDING, BUT NOT LIMITED TO, ANY (IF ANY) WARRANTIES OR CONDITIONS OF OR
+      RELATED TO: MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, ACCURACY OR
+      COMPLETENESS OF RESPONSES, RESULTS, WORKMANLIKE EFFORT AND LACK OF NEGLIGENCE.
+      ALSO THERE IS NO WARRANTY, DUTY OR CONDITION OF TITLE, QUIET ENJOYMENT, QUIET
+      POSSESSION, CORRESPONDENCE TO DESCRIPTION OR NONINFRINGEMENT. THE ENTIRE
+      RISK ARISING OUT OF USE OF THE SPECIFICATION (AND ALL INTELLECTUAL PROPERTY
+      THEREIN) AND ANY SUPPORT SERVICES REMAINS WITH YOU.
+
+8. EXCLUSION OF INCIDENTAL, CONSEQUENTIAL AND CERTAIN OTHER DAMAGES. TO THE
+
+      MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL MICROSOFT OR ITS
+      SUPPLIERS BE LIABLE FOR ANY SPECIAL, INCIDENTAL, INDIRECT, OR CONSEQUENTIAL
+      DAMAGES WHATSOEVER (INCLUDING, BUT NOT LIMITED TO, DAMAGES FOR LOSS OF PROFITS
+      OR CONFIDENTIAL OR OTHER INFORMATION, FOR BUSINESS INTERRUPTION, FOR PERSONAL
+      INJURY, FOR LOSS OF PRIVACY, FOR FAILURE TO MEET ANY DUTY INCLUDING OF GOOD
+      FAITH OR OF REASONABLE CARE, FOR NEGLIGENCE, AND FOR ANY OTHER PECUNIARY OR
+      OTHER LOSS WHATSOEVER) ARISING OUT OF OR IN ANY WAY RELATED TO THE USE OF OR
+      INABILITY TO USE THE SPECIFICATION, ANY INTELLECTUAL PROPERTY THEREIN, THE
+      PROVISION OF OR FAILURE TO PROVIDE SUPPORT SERVICES, OR OTHERWISE UNDER OR IN
+      CONNECTION WITH ANY PROVISION OF THIS AGREEMENT, EVEN IN THE EVENT OF THE
+      FAULT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY, BREACH OF CONTRACT OR
+      BREACH OF WARRANTY OF MICROSOFT OR ANY SUPPLIER, AND EVEN IF MICROSOFT OR ANY
+      SUPPLIER HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+9. LIMITATION OF LIABILITY AND REMEDIES. NOTWITHSTANDING ANY DAMAGES THAT YOU
+      MIGHT INCUR FOR ANY REASON WHATSOEVER (INCLUDING, WITHOUT LIMITATION, ALL
+      DAMAGES REFERENCED ABOVE AND ALL DIRECT OR GENERAL DAMAGES), THE ENTIRE
+      LIABILITY OF MICROSOFT AND ANY OF ITS SUPPLIERS UNDER ANY PROVISION OF THIS
+      AGREEMENT AND YOUR EXCLUSIVE REMEDY FOR ALL OF THE FOREGOING SHALL BE LIMITED
+      TO THE GREATER OF THE AMOUNT ACTUALLY PAID BY YOU FOR THE SPECIFICATION OR U.S.
+      $5.00. THE FOREGOING LIMITATIONS, EXCLUSIONS AND DISCLAIMERS SHALL APPLY TO THE
+      MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, EVEN IF ANY REMEDY FAILS ITS
+      ESSENTIAL PURPOSE.
+
+10. APPLICABLE LAW. This Agreement is governed by the laws of the State of Washington.
+11. ENTIRE AGREEMENT. This Agreement is the entire agreement between you and Microsoft relating to
+      the Specification and it supersedes all prior or contemporaneous oral or written communications,
+      proposals and representations with respect to the Specification.
+
+Should you have any questions concerning this EULA, or if you desire to contact Microsoft for any reason,
+please contact the Microsoft subsidiary serving your country, or write: Microsoft Corporation, One Microsoft
+Way, Redmond, WA 98052-6399.
+Table of Contents
+
+1.  Introduction                                      1
+
+2.  Overview                                          1
+
+3.  Definition of the RTP Payload Format              3
+
+    3.1 Structure of the RTP Payload Format header    3
+
+    3.2 Grouping and fragmentation                    4
+
+    3.3 Grouping of multiple fragments                6
+
+    3.4 Timing rules                                  7
+
+    3.4.1 Timelines                                   7
+
+    3.4.2 Time stamp wrap around                      8
+
+    3.4.3 Decode Time and Presentation Time           8
+
+    3.4.4 Trick play                                  9
+
+    3.4.5 Normal Play Time                            9
+
+    3.4.6 Send Time                                   10
+
+    3.4.7 Correspondence                              11
+
+    3.5 RTP header fields                             11
+
+    3.6 Payload Format header syntax                  12
+
+    3.6.1 Fields in the Packet Specific Info section  12
+
+    3.6.2 Fields in the MAU Properties section        13
+
+    3.6.3 Fields in the MAU Timing section            14
+
+    3.7 Extensions                                    15
+
+    3.7.1 Encrypted Payload Boundary                  15
+
+    3.7.2 DRM Initialization Vector                   16
+
+    3.7.3 DRM Key ID                                  16
+
+4.  MIME registration for Windows Media Audio         17
+
+    4.1 Required parameters                           17
+
+    4.2 Optional parameters                           17
+
+    4.3 SDP Parameters                                18
+5.  MIME registration for Windows Media Video  18
+
+    5.1 Required parameters                    18
+
+    5.2 Optional parameters                    19
+
+    5.3 SDP Parameters                         20
+
+6.  Security Evaluation                        20
+
+7.  References                                 22
+                 RTP Payload Format for Windows Media Audio and Video
+
+1. Introduction
+
+This specification is organized as follows:
+
+ Introduction to this specification document.
+
+ Section 2 provides an overview of the Real-time Transport Protocol (RTP) Payload
+     Format specification.
+
+ Section 3 provides the RTP Payload Format specification.
+
+ Sections 4 and 5 define the MIME parameters and SDP syntax for content in
+     Windows Media Audio (WMA) and Windows Media Video (WMV) formats,
+     respectively.
+
+ Section 6 contains a security evaluation of the RTP Payload Format.
+
+This specification defines a RTP Payload Format for content encoded using the Windows
+Media Audio (WMA) or Windows Media Video (WMV) codecs. The specification also
+defines MIME parameters for WMA and WMV, and defines how the parameters are
+mapped to Session Description Protocol (SDP).
+
+2. Overview
+
+The RTP Payload Format defined in this document has been designed to encapsulate
+WMV or WMA codec bit streams. The bit streams are comprised of media access units
+(MAUs). This document defines how MAUs can be encapsulated in RTP.
+For the purposes of this specification, a MAU is typically a single video picture or one or
+more WMA packets, including start codes and padding bits.
+The RTP Payload Format defines the meaning of some of the fields in the RTP header.
+The syntax of the RTP header is defined in RFC-3550 [1]. The current specification also
+defines a new header, which is referred to as the RTP Payload Format header.
+The RTP Payload Format header, which is defined in section 3, is inserted in front of
+each MAU, or fragment thereof, in the RTP packet.
+Figure 1 illustrates the high-level structure of the RTP Payload Format header, and
+shows how it relates to the RTP header.
+
+© 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+
+subject to the terms of the End User License Agreement accompanying this specification.
+
+                                                                                                       1
+RTP Payload Format for Windows Media Audio and Video
+Figure 1: High-level structure of RTP Payload Format header.
+As shown in Figure 1, the RTP Payload Format header is divided into three sections.
+Each section starts with a one-byte bit field, and is followed by one or more optional
+fields. In some cases, up to two entire sections may be omitted from the RTP Payload
+Format header. This can result in an RTP Payload Format header as small as one byte.
+All RTP Payload Format fields should be transmitted in network byte order, which means
+that the most significant byte of each field is transmitted first.
+The RTP Payload Format header is followed by a payload. The payload can consist of a
+complete MAU or a MAU fragment. The payload can contain a partial MAU, allowing
+large MAUs to be fragmented across multiple payloads in multiple RTP packets.
+The first payload can be followed by additional pairs of RTP Payload Format headers and
+payloads, as permitted by the size of the RTP packet.
+The first section of the RTP Payload Format header, which is called Packet Specific Info
+in Figure 1, contains information that is specific to all payloads in the RTP packet.
+The Packet Specific Info section is only included once in each RTP packet, in the first
+RTP Payload Format header.
+The second section, called MAU Properties, contains information that describes the
+payload that follows the header. This section specifies whether the payload contains a
+MAU that is a synchronization point (sync-point), such as a video key frame. It also
+specifies how the size of the payload is determined. Additionally, this section contains
+information that enables a receiver to parse the RTP packet if the previous packet was
+lost. This is important if a MAU is fragmented across multiple RTP packets.
+The primary purpose of the third section, called MAU Timing, is to provide information
+about various time stamps that are associated with the MAU in the payload. This section
+specifies how the presentation time of the MAU is determined. This section also includes
+extension mechanisms that allow additional information to be included in the RTP
+Payload Format header.
+
+3. Definition of the RTP Payload Format
+
+3.1 Structure of the RTP Payload Format header
+
+Figure 2 shows the design of the RTP Payload Format header in greater detail. Each of
+the three sections in Figure 1 consists of several individual header fields. These fields
+are shown as boxes in Figure 2.
+
+     © 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+                subject to the terms of the End User License Agreement accompanying this specification.
+
+2
+RTP Payload Format for Windows Media Audio and Video
+
+Figure 2: RTP Payload Format header.
+
+The first header field in each of the three sections is a bit field. The other header fields
+in a section are present only if indicated by that section's bit field. In some cases an
+entire section, including its bit field, can be omitted.
+
+The first RTP Payload Format header in the RTP packet will always include Bit Field 1,
+and may also include any of the other fields shown in Figure 2. Additional RTP Payload
+Format headers in the same RTP packet always begin with similar bit fields (Bit Field 2
+and Bit Field 3 in Figure 2), and can only include the fields in the MAU Properties section
+and the MAU Timing section.
+
+In the simplest possible case, an RTP packet contains a single, complete, MAU. In this
+case, it is possible to include all of the header fields. However, fields that are not
+needed can be omitted. Each of the three sections of the RTP Payload Format header
+has a bit field that indicates which, if any, of the fields in the section are present.
+
+© 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+
+subject to the terms of the End User License Agreement accompanying this specification.
+
+                                                                                                       3
+RTP Payload Format for Windows Media Audio and Video
+
+For example, the Offset field, which specifies the byte offset to the end of the current
+payload, is not needed when the packet contains a single payload, because the length
+of the payload can be computed from the size of the RTP packet. The OP bit in Bit Field
+2 indicates whether the Offset field is present. If all of the bits in Bit Field 3 are zero,
+then Bit Field 3 itself can be omitted, and this is indicated by setting the B3P bit in Bit
+Field 2 to zero.
+
+3.2 Grouping and fragmentation
+
+It is possible to combine multiple payloads in a single RTP packet. This is referred to as
+grouping. The Offset field indicates the use of grouping.
+If the Offset field is present, another RTP Payload Format header and another payload
+may follow after the end of the current payload. The Offset field specifies the number of
+bytes to the end the current payload, counted from the end of the Offset field.
+To determine whether another RTP Payload Format header follows the end of the
+current payload, consider both the value of the Offset field, the size of the RTP packet,
+and the size of the RTP padding area, if any.
+A single MAU can be split into multiple payloads. This is referred to as fragmentation.
+Fragmentation is useful when a MAU is larger than a single RTP packet. The F field in Bit
+Field 2 indicates whether a payload contains a complete MAU or a fragment.
+The fields in the MAU Timing section should only be specified in the RTP Payload Format
+header for the payload that contains the first fragment of a MAU. The only exception to
+this is when the Extension field in the MAU Timing section contains a different extension
+than other fragments of the same MAU. For an example of such an extension, see
+section 3.7.1, Encrypted Payload Boundary extension, later in this specification.
+When a MAU is fragmented, the bits S, D1, and D2 in Bit Field 2 are only significant in
+the RTP Payload Format header for the payload that contains the first fragment.
+Therefore, receivers must ignore these bits if the value of the F field is 0 or 2. For more
+information about the F field, see section 3.6.2 later in this specification.
+Fragmentation of a MAU is not recommended unless the MAU is too large to fit in a
+single RTP packet. It is also generally not recommended to combine a fragment of one
+MAU with another MAU or a fragment of another MAU in a single RTP packet. However,
+receivers must still be able to handle these cases. An example of this is shown in Figure
+3.
+Figure 3 illustrates a possible sequence of three RTP packets. The three RTP packets
+transport the data of four MAUs. The remainder of the fourth MAU is continued in a
+fourth RTP packet (not shown). Figure 3 also illustrates that fragmented MAUs can be
+used to create fixed-size RTP packets.
+
+     © 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+                subject to the terms of the End User License Agreement accompanying this specification.
+
+4
+RTP Payload Format for Windows Media Audio and Video
+
+Figure 3: Example of RTP packets containing multiple MAUs.
+
+In Figure 3, MAU 2 is fragmented across two RTP packets. In the first RTP packet, the
+RTP Payload Format header for MAU 2 specifies that MAU 2 is continued in the next RTP
+packet. (This is signaled by using the F field in Bit Field 2, which is defined in section
+3.6.2.)
+
+The second RTP packet starts with an RTP Payload Format header that does not include
+the MAU Timing field because the MAU Timing field for MAU 2 had already been
+specified in the first RTP packet. The Offset field in the MAU Properties section is used to
+specify the start of the RTP Payload Format header for MAU 3. This allows the client to
+decode MAU 3 even if the previous RTP packet was lost.
+
+© 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+
+subject to the terms of the End User License Agreement accompanying this specification.
+
+                                                                                                       5
+RTP Payload Format for Windows Media Audio and Video
+
+Figure 3 also shows that MAU 4 is fragmented across the second and third RTP packets.
+However, MAU 4 is so large that no additional MAUs can be inserted in the third RTP
+packet. In this example, MAU 4 is continued in a fourth RTP packet that is not shown. In
+situations such as this where a MAU is very large, the third RTP packet's RTP Payload
+Format header does not need to include the Offset field, and it may be possible to omit
+the entire MAU Properties section. The remaining part of the RTP Payload Format
+header then consists only of the Packet Specific Info section, which can be as small as a
+single byte.
+
+3.3 Grouping of multiple fragments
+
+If a MAU is fragmented into multiple payloads, the payloads are usually carried in
+separate RTP packets. However, this RTP Payload Format also allows multiple payloads
+for the same MAU to be carried within a single RTP packet. Normally, there is no benefit
+in fragmenting a MAU, because extra fragmentation only increases the overhead. But
+this feature may be useful when the MAUs have already been fragmented without
+regard for the RTP packet size, and it is impractical to recombine the fragments into
+complete MAUs prior to RTP encapsulation.
+For example, a MAU may already be fragmented when DRM-encrypted content has been
+stored in an ASF file [4]. In the ASF file, each MAU may be fragmented into multiple
+encryption units. The encryption may make it difficult for the RTP sender to recombine
+the encryption units into a single MAU. It may then be preferable to directly map each
+encryption unit to a RTP payload. If the RTP payloads are small, it may be desirable to
+combine several payloads into a single RTP packet.
+The F field in Bit Field 2 indicates when a payload in the RTP packet contains a MAU
+fragment. This field is described in greater detail in section 3.6.2.
+Figure 4 shows an example where a single MAU has been split into three fragments and
+all three fragments are carried in the same RTP packet.
+
+Figure 4: Example of grouping MAU fragments.
+In Figure 4, the F field in the first RTP Payload Format header is set to 1, indicating that
+the first payload contains the first fragment of the MAU. The MAU Timing section should
+only be present in the first payload.
+The F field in the second RTP Payload Format header is set to 0, indicating that its
+payload contains a fragment that is neither the first nor the last fragment of the MAU.
+The F field in the third RTP Payload Format header is set to 2, indicating that its payload
+contains the last fragment of the MAU.
+
+     © 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+                subject to the terms of the End User License Agreement accompanying this specification.
+
+6
+                  RTP Payload Format for Windows Media Audio and Video
+
+3.4 Timing rules
+
+In addition to the usual RTP sampling clock and wallclock, this RTP Payload Format
+specification defines several additional time stamps and notions of time, which are
+described in this section.
+
+3.4.1 Timelines
+
+The RTP header has a single time stamp, which specifies the time at which the data in
+the packet was sampled. This is sometimes called the sampling clock.
+
+It is important to note that the RTP time stamps of packets from different media
+streams should not be compared because the sampling clock may run at different
+frequencies for different media streams. For example, the sampling clock of an audio
+stream may run at 44,100 Hertz (Hz), while the sampling clock of a video stream will
+usually run at 90,000 Hz. Furthermore, RFC-3550 specifies that the value for the initial
+RTP time stamp should be chosen randomly. In effect, each media stream has its own
+timeline. In this specification, each such timeline is referred to as a media timeline.
+
+RTP allows the timelines for different media streams to be synchronized to the timeline
+of a reference clock, called the wallclock. RTP senders allow the receiver to perform this
+synchronization by transmitting a mapping between the sampling clock and the
+wallclock in the Real-Time Control Protocol (RTCP) Sender Report packet. A different
+RTCP Sender Report must be sent for each media stream because the media streams
+may use different sampling clocks.
+
+The mappings are updated and transmitted again at some interval to allow the receiver
+to correct for possible drift between the wallclock and the sampling clocks. Clock drift
+may still be a problem if the sender's wallclock drifts in relation to the receiver's
+wallclock. The two clocks could be synchronized by using the Network Time Protocol
+(NTP), for example, but the RTP specification (RFC-3550) does not specify a particular
+synchronization method.
+
+It is important to note that the wallclock originates from the encoder. If the RTP sender
+and the encoder are separate entities, the wallclock is typically unrelated to any
+physical clock at the sender.
+
+This RTP Payload Format specification uses a third timeline, called the Normal Play Time
+(NPT) timeline. The NPT timeline is useful primarily when RTP is used to transmit a
+media presentation. Time stamps from the NPT timeline usually start at 0 at the
+beginning of the presentation. NPT time stamps are particularly useful when
+transmitting a pre-recorded presentation because the time stamps can assist the
+receiver in specifying a playback position to seek to within the presentation. This
+assumes the existence of some mechanism for the receiver to communicate the new
+position to the RTP sender.
+
+Since RTP was designed for digital media conferencing applications, the RTP
+specification does not discuss the NPT timeline. However, other protocols that are built
+on top of RTP include the concept of the NPT timeline. This includes protocols such as
+Real Time Streaming Protocol (RTSP), a control protocol for video-on-demand
+applications. In RTSP, the control protocol provides a mapping between the NPT timeline
+and the media timeline for each media stream.
+
+This RTP Payload Format specification defines a mechanism for specifying the NPT
+timeline time stamp associated with a MAU. However, when practical, an out-of-band
+mapping between the media timeline and the NPT timeline, such as the one defined by
+
+© 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+
+subject to the terms of the End User License Agreement accompanying this specification.
+
+                                                                                                       7
+RTP Payload Format for Windows Media Audio and Video
+
+RTSP, may be preferable, since it reduces the overhead of the RTP Payload Format
+header.
+
+3.4.2 Time stamp wrap around
+
+All RTP-compliant systems are required to handle time stamp wraparound. At a typical
+clock frequency of 90,000 Hz, the RTP time stamp will wrap around approximately
+every 13 hours. But since the RTP specification says that a random offset should be
+added to the sampling clock, a receiver may experience the first wraparound in
+significantly less than 13 hours.
+The wrapping around of the RTP time stamp is usually handled by using modular
+arithmetic. When modular arithmetic is used, time stamps are usually compared by
+subtracting one time stamp from another and observing whether the result is positive
+or negative. See RFC-3550 [1] for an example of how to use modular arithmetic to cope
+with time stamp wraparound.
+It should be noted that at 90,000 Hz, 32 bits is sufficient for media timeline time
+stamps. Using 32 bits becomes a problem only when comparing two time stamps that
+are more than 6.5 hours apart.
+The wallclock time is expressed by using an NTP-format time stamp. This time stamp
+will wrap around in the year 2036. As with the media timeline time stamps, this should
+not be a problem, as receivers should only need to examine the relative difference of
+such time stamps.
+
+3.4.3 Decode Time and Presentation Time
+
+In this RTP Payload Format specification, each MAU has a Decode Time and a
+Presentation Time. The decode time is the time by which the MAU should be delivered
+to the receiver's decoder, and the presentation time is the time at which the MAU should
+be presented (displayed or played) by the receiver. Both times belong to the media
+timeline, described in section 3.4.1. Since the delays in the network and in the decoder
+are not typically known to the RTP sender, the receiver should not use the absolute
+values of a decode time stamp or a presentation time stamp. The receiver should
+consider only the relative difference between a pair of decode time stamps or a pair of
+presentation time stamps.
+In some cases, such as when a video codec produces bi-directional video frames, MAUs
+may have to be decoded in a different order than they will be presented. The RTP
+sender must transmit the MAUs in the order they should be decoded.
+The Timestamp field in the RTP header is normally the presentation time of the first
+MAU in the RTP packet. This definition is equivalent to the concept of "sampling instant"
+in RFC-3550. Alternatively, the Timestamp field can be set to the decode time of the
+first MAU in the RTP packet, if this usage is negotiated through non-RTP means. Section
+5.2 defines how this negotiation is done using SDP.
+Since the RTP packets are transmitted in decode order, the presentation time of
+consecutive MAUs may not be monotonically non-decreasing.
+The RTP Payload Format header includes an optional Decode Time field, which is used to
+specify the decode time of the MAU in the payload. The RTP Payload Format header also
+includes a Presentation Time field which is used to specify the presentation time of the
+MAU when the RTP packet contains more than one MAU.
+
+     © 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+                subject to the terms of the End User License Agreement accompanying this specification.
+
+8
+                                                 RTP Payload Format for Windows Media Audio and Video
+
+When only a single MAU is included in the RTP packet, either the Presentation Time field
+or the Decode Time field is not necessary because the Timestamp field serves as a
+replacement for one of those fields in the first MAU in the packet.
+Both the Decode Time and the Presentation Time fields are expressed using the same
+clock resolution as the Timestamp field.
+
+3.4.4 Trick play
+
+In this RTP Payload Format specification, the term "trick play" refers to the receiver
+rendering the media presentation at a rate other than real time. Examples of trick play
+include fast-forwarding and rewinding the presentation. If the RTP sender is
+transmitting in trick play mode, the decode time stamp and presentation time stamp for
+each MAU should increment at the real-time rate. This allows the decoder to decode the
+MAUs without knowing that trick play is used.
+During trick play, the Decode Time and Presentation Time fields in the RTP Payload
+Format header are unaffected by trick play in that they continue to increase at their
+normal real-time rate. The NPT field, if present, is affected by trick play. For example, if
+a media presentation is being rewound, the Presentation Time time stamp fields of
+MAUs increase, while the value of the NPT fields decrease.
+
+3.4.5 Normal Play Time
+
+The NPT field in the RTP Payload Format header specifies the position in the Normal Play
+Time timeline to which the MAU belongs.
+If the NPT field is not present, a receiver can calculate the normal play time of the MAU
+from the presentation time, provided that a mapping between the two timelines is
+available. Various approaches for establishing this mapping are discussed below.
+
+© 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+
+subject to the terms of the End User License Agreement accompanying this specification.
+
+                                                                                                       9
+RTP Payload Format for Windows Media Audio and Video
+
+Since the RTP sender adds a random offset to the time stamps in the media timeline,
+the presentation time stamp cannot be used as a direct replacement for the NPT time
+stamp. Even if this random offset is known to the receiver, the wrap around of the
+media timeline time stamps can be an issue.
+To resolve this issue, the sender can use an out-of-band mechanism to provide a
+mapping between the Normal Play Time timeline and the media timeline. This mapping
+could be provided only once, at the beginning of the transmission, or repeatedly as
+needed. Additionally, if trick play is possible, the sender needs to communicate the trick
+play rate. For example, if the presentation is being rewound, the trick play rate is
+negative. The receiver uses the trick play rate to generate NPT time stamps that
+decrease as the presentation time increases.
+If the mapping is provided only once at the beginning of the transmission, the receiver
+should establish mapping between the Normal Play Time timeline and the wallclock
+timeline. This is usually possible as soon as an appropriate RTCP Sender Report packet
+is received. It is preferable to calculate the NPT time stamp for each MAU based on the
+MAU's wallclock time, because time stamps from the media timeline may drift against
+the wallclock timeline.
+The RTSP protocol is an example of a control protocol that provides a mapping between
+the Normal Play Time timeline and the media timeline at the beginning of the
+transmission.
+Another solution that may provide a suitable trade-off between complexity and
+overhead is to include the NPT field only on sync-point MAUs. The NPT field is used to
+establish a mapping between the Normal Play Time timeline and the presentation or
+wallclock timelines. For non-sync point MAUs, the receiver calculates the NPT time
+stamp using the previously established mapping. When trick play is used, the sender
+would include the NPT field for every MAU.
+
+3.4.6 Send Time
+
+The Send Time field in the RTP Payload Format header specifies the transmission time
+of the RTP packet. This can be useful when a sequence of RTP packets is transferred
+from one server to a second server. Only the first server needs to compute a
+transmission schedule for the packets. The second server will forward the RTP packets
+to other clients based on the value of the Send Time field.
+It is not necessary to include the Send Time field when forwarding RTP packets to a
+client. However, clients can use the Send Time field to detect network congestion by
+comparing the difference between the values of the Send Time fields in a series of
+packets against the difference in packet arrival times.
+The Send Time field uses the same units as the media timeline.
+
+     © 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+                subject to the terms of the End User License Agreement accompanying this specification.
+
+10
+                      RTP Payload Format for Windows Media Audio and Video
+
+3.4.7 Correspondence
+
+The purpose of the Correspondence field is to provide a mapping between the wallclock
+timeline and the current media timeline. This is the same mapping that is provided by
+RTCP Sender Reports, but the optional inclusion of this mapping in the RTP packet
+allows the sender to transmit the mapping more frequently than the RTCP reporting
+interval. Since including the mapping in the RTP packet is more efficient than
+transmitting a separate RTCP packet, this may allow the sender to reduce the frequency
+of RTCP Sender Reports, while still being able to transmit the mapping as frequently as
+desired.
+
+3.5 RTP header fields
+
+Figure 5 illustrates the standard 12-byte RTP header. It is the same header that is
+defined in RFC-3550 [1], and it is shown here for reference only.
+
+Figure 5: Standard 12-byte RTP header.
+
+Explanation of header fields:
+
+Version (V) field. 2 bits. This field must always be set 2.
+
+Padding (P) bit. This bit is used to add padding to the end of the RTP packet, as
+specified in RFC-3550.
+
+Extension (X) bit. This bit is set to 1 if an RTP header extension is present. The RTP
+profile defines how the header extension is used. A receiver must be able to parse, or
+skip over, the header extension should the RTP header have a non-zero Extension bit.
+
+Contributing Source (CC) field. 4 bits. This field is used as defined in RFC-3550. A
+receiver must be able to correctly parse, or skip over, the list of contributing sources
+should the RTP header have a non-zero Contributing Source field.
+
+Marker (M) bit. This bit is set to 1 if any of the payloads in the RTP packet contain
+complete a MAU, or the last fragment of a MAU.
+
+Payload Type (PT) field. 7 bits. The assignment of an RTP payload type is beyond the
+scope of this specification. It is specified by the RTP profile under which this payload
+format is used, or signaled dynamically out-of-band (such as by using SDP).
+
+Sequence number field. 16 bits. This field contains a number that increments by 1 for
+each RTP packet that is sent with the same SSRC value. The initial value of the RTP
+sequence number may be communicated to the client through non-RTP means.
+
+© 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+
+subject to the terms of the End User License Agreement accompanying this specification.
+
+                                                                                                       11
+RTP Payload Format for Windows Media Audio and Video
+
+Timestamp field. 32 bits. This field specifies a time stamp that applies to the first
+payload that is included in the RTP packet. By default, the field is interpreted as a
+presentation time. Alternatively, the Timestamp field can be interpreted as a decode
+time, if this usage is negotiated through non-RTP means. The clock frequency of the
+Timestamp field is recommended to be 90 kilohertz (kHz), i.e., the resolution is
+1/90,000 seconds. The sender and receiver may negotiate a different clock frequency
+through non-RTP means.
+Synchronization Source (SSRC) field. 32 bits. RTP packets with the same value for
+the SSRC field share the same timeline for the Timestamp field and the same number
+space for the Sequence Number field.
+
+3.6 Payload Format header syntax
+
+The RTP header is always followed by a RTP Payload Format header. The only exception
+is a RTP packet that only consists of padding. In that case, the RTP Payload Format
+header is not present. If a RTP packet contains data from multiple MAUs, the RTP
+Payload Format header will appear in front of each MAU. Thus, RTP packets using this
+payload format may contain one or more RTP payload Format headers.
+The layout of the RTP Payload Format header is shown in Figure 2. When the RTP
+Payload Format header directly follows the standard 12-byte RTP header, it must begin
+with the one-byte field called Bit Field 1, followed by a series of optional fields. The
+header is followed by a payload. The payload consists of either a complete MAU or a
+fragment (partial) MAU.
+After the first data payload, another RTP Payload Format header may appear, followed
+by another data payload. The process of adding another RTP Payload Format header
+after a data payload may be repeated multiple times. Each RTP Payload Format header
+that follows the first data payload must begin with the Bit field 2 field.
+
+3.6.1 Fields in the Packet Specific Info section
+
+The following diagram shows the layout of the field Bit Field 1.
+
+Figure 6: Layout of Bit Field 1.
+Send Time Present (ST) bit. If this bit is 1, a 32-bit Send Time field is inserted
+directly following the end of the Bit Field 1 field.
+Correspondence Present (CP) bit. If this bit is 1, a 96-bit Correspondence field is
+inserted after the Send Time field.
+R1, R2, and R3 fields. 1 bit each. If the bit is set to 1, the receiver should assume
+that a 32-bit field has been added between the Correspondence field and Bit Field 2.
+The meaning of these 32-bit fields is not defined in this specification. A receiver that
+does not understand the 32-bit fields must ignore them.
+R4 and R5 fields. 1 bit each. Reserved for future use and must be set to 0.
+Bit Field 2 Present (B2P) bit. If this bit is 1, the one-byte Bit Field 2 field is inserted
+after the Correspondence field.
+Send Time field. 32 bits. This field specifies the transmission time of the RTP packet,
+using the same time units that are used for the Timestamp field in the RTP header.
+
+     © 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+                subject to the terms of the End User License Agreement accompanying this specification.
+
+12
+                                                 RTP Payload Format for Windows Media Audio and Video
+Correspondence field. 96 bits. Consists of two time stamps: A 64-bit wallclock time
+stamp in NTP format and a 32-bit decode time stamp. The two fields are used in the
+same way as the NTP time stamp and the RTP time stamp in the RTCP Sender Report,
+which is defined in section 6.4.1 of RFC-3550.
+
+3.6.2 Fields in the MAU Properties section
+
+When Bit Field 1 is present, Bit Field 2 is optional. The B2P bit in Bit Field 1 determines
+whether Bit Field 2 is present. The default value for all bits in Bit Field 2 is 0.
+
+Figure 7: Layout of Bit Field 2.
+
+Fragmentation (F) field. This field indicates whether the data payload consists of a
+partial MAU. One or more payloads must be combined to reconstruct a complete MAU.
+The F field also indicates whether the payload contains the first or last fragment of the
+MAU.
+
+Table 1: Meaning of F field.
+
+F field value  Meaning
+
+0              Payload contains fragment of MAU other than the first or last
+
+               fragment.
+
+1              Payload contains first fragment of MAU.
+
+2              Payload contains last fragment of MAU.
+
+3              Payload contains complete MAU (not fragmented.)
+
+The S, D1 and D2 bits are only valid when the value of the F field is 0 or 3.
+
+Offset Present (OP) bit. If this bit is 1, the 16-bit Offset field is inserted directly after
+Bit Field 2. The Offset field is used to find the end of the current payload. Another RTP
+Payload Format header, starting with Bit Field 2, may follow the end of the current
+payload. If the Offset Present bit is 0, the Offset field is absent, and the current payload
+extends to the end of the RTP packet or to the start of the RTP padding area, if the
+Padding bit in the RTP header is 1.
+
+Sync Point (S) bit. This bit is set to 1 when the MAU is a sync-point MAU.
+
+Discontinuity (D1) bit. This bit is set to 1 to indicate that one or more MAUs are
+missing even though RTP sequence number does not have a gap.
+
+Droppable (D2) bit. If this bit is 1 and it is necessary to drop some MAUs, this MAU
+can be dropped with less negative impact than MAUs that have the D2 bit set to 0.
+
+Encryption (E) bit. Set to 1 to indicate that the payload contains encrypted data. The
+bit should be set to 0 if the payload does not contain encrypted data.
+
+Bit Field 3 Present (B3P) bit. If this bit is 1, the one-byte Bit Field 3 field is inserted
+after the Length field.
+
+Offset. A 16-bit field that specifies the offset, in bytes, to the end of the current
+payload, counted from the first byte following the Offset field. In other words, the value
+of the Offset field is the size of the MAU Timing section, if any, plus the size of the
+current payload.
+
+   © 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+
+   subject to the terms of the End User License Agreement accompanying this specification.
+
+                                                                                                          13
+RTP Payload Format for Windows Media Audio and Video
+
+3.6.3 Fields in the MAU Timing section
+
+The value of the B3P bit in Bit Field 2 determines whether Bit Field 3 is present. The
+default value for all bits in Bit Field 3 is 0.
+
+Figure 8: Layout of Bit Field 3.
+Decode Time Present (D3) bit. If this bit is 1, the 32-bit Decode Time field is
+inserted after Bit Field 3, but before the Presentation Time field.
+Presentation Time Present (P) bit. If this bit is 1, the 32-bit Presentation Time field
+is inserted after the Decode Time field, but before the NPT field.
+NPT Present (N) bit. If this bit is 1, the 64-bit NPT field is inserted immediately after
+the Presentation Time field.
+R6, R7, R8, and R9 fields. For each of these bits that are set to 1, the receiver should
+assume that a 32-bit field has been added between the NPT field and the Extension
+field. The meaning of these 32-bit fields is not defined in this specification. A receiver
+that does not know the meaning of the 32-bit fields must ignore them.
+Extension Present (X) bit. If this bit is 1, a variable-size Extension field is inserted
+after the NPT field.
+Decode Time. A 32-bit field that specifies the decode time of the MAU, using the same
+time units that are used for the Timestamp field in the RTP header.
+Presentation Time. A 32-bit field that specifies the presentation time of the MAU,
+using the same time units that are used for the Timestamp field in the RTP header.
+NPT field. A 64-bit time stamp using the same time units as the RTP Timestamp field.
+The NPT field specifies the position in the Normal Play Time timeline to which the MAU
+belongs. See sections 3.4.4 and 3.4.5 for a description of how this field is used.
+
+     © 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+                subject to the terms of the End User License Agreement accompanying this specification.
+
+14
+                                                 RTP Payload Format for Windows Media Audio and Video
+
+Extension field. Shown in Figure 2, this field consists of one or more collections of
+fields. Figure 9 illustrates the layout of the fields contained in one such collection.
+
+Figure 9: Layout of Extension field.
+
+L bit. If this bit is 1, this is the last collection of Extension fields. If the bit is 0, the end
+of the Extension Data field is followed by at least one more collection of Extension fields
+as shown in Figure 9.
+
+Extension Type. A 7-bit field that is used to identify the contents of the Extension
+Data field. Section 3.7 lists the currently defined values for the Extension Type field.
+The values 0 and 127 are reserved for future use.
+
+Extension Length. An 8-bit number giving the size, in bytes, of the Extension Data
+field that appears directly following this field.
+
+Extension Data. Variable-length field. The size of this field is given by the Extension
+Length field.
+
+3.7 Extensions
+
+This section defines extensions that can be used in the Extension field.
+
+3.7.1 Encrypted Payload Boundary
+
+The fields in the Extension field have the following values when the Encrypted Payload
+Boundary extension is used.
+Extension Type. Must be 1.
+Extension Length. Must be 1.
+Extension Data. One byte. The most significant bit is referred to as the G bit. All other
+bits must be set to zero by the sender and must be ignored by receivers.
+The default value of the G bit is zero. Since no other bits are used in this extension, this
+extension should not be included when the value of G is zero.
+The G bit is used to indicate the boundaries of DRM encryption units. When certain
+versions of DRM are used, a single MAU may be divided into multiple encryption units.
+Each such encryption unit is transmitted as a separate payload. If an encryption unit
+must be fragmented into multiple payloads, the G bit is set to 1 on all fragments except
+the last one.
+If the G bit is 1 and DRM is used, the receiver must reassemble the payloads into a
+complete encryption unit before it can decrypt it.
+If the G bit is 0 and DRM is used, the payload contains either a complete encryption
+unit or the last fragment of a sequence of fragmented encryption units.
+The G bit should always be 0 when DRM is not used.
+
+3.7.2 DRM Initialization Vector
+
+The fields in the Extension field have the following values when the DRM Initialization
+Vector extension is used.
+
+© 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+
+subject to the terms of the End User License Agreement accompanying this specification.
+
+                                                                                                       15
+RTP Payload Format for Windows Media Audio and Video
+Extension Type. Must be 2.
+Extension Length. The size of the Extension Data field, in bytes.
+Extension Data. A sequence of one or more bytes, to be used as part of the
+initialization vector for the current MAU. When this extension is present, the DRM
+encryption unit is always a complete MAU. If the MAU is fragmented into multiple
+payloads, the DRM Initialization Vector extension should be present only in the first
+payload.
+The Encrypted Payload Boundary extension, defined in section 3.7.1, must not be used
+when this extension is used.
+
+3.7.3 DRM Key ID
+
+The fields in the Extension field have the following values when the DRM Key ID
+extension is used.
+Extension Type. Must be 3.
+Extension Length. The size of the Extension Data field, in bytes.
+Extension Data. A sequence of one or more bytes that identifies the decryption key to
+use for decrypting the current payload.
+The DRM Key ID extension remains effective until replaced by a different DRM Key ID
+extension. Therefore, the extension is only required when a payload requires the use of
+a decryption key that is different from the decryption key of the previous payload.
+However, if the previous payload was contained in an RTP packet that was lost, the
+receiver may be unaware that a change of decryption key is necessary. If a payload is
+decrypted with the wrong key, it can lead to undesirable rendering artifacts.
+One approach to reducing the severity of this issue is to specify the DRM Key ID
+extension for the first payload of every MAU that is a sync-point. This is a good solution
+if the lost MAU will force the receiver to discard all MAUs until it receives the next
+sync-point MAU. A more conservative solution is to specify the DRM Key ID extension
+for the first payload in each multiple-payload RTP packet. This solution guards against
+packet loss because the interdependent payloads are all contained within a single RTP
+packet.
+
+     © 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+                subject to the terms of the End User License Agreement accompanying this specification.
+
+16
+                                                 RTP Payload Format for Windows Media Audio and Video
+
+4. MIME registration for Windows Media Audio
+
+The receiver must ignore any unspecified parameters.
+Media Type name: audio
+Media subtype name: wma
+
+4.1 Required parameters
+
+version. A case-insensitive string that specifies the version of the Windows Media
+Audio codec. Table 2 shows the currently defined values of the version parameter:
+
+Table 2: Values for WMA version parameter.
+
+Version parameter        Description
+
+STD                      Windows Media Audio 9 Standard
+
+PRO                      Windows Media Audio 9 Professional
+
+LSL                      Windows Media Audio 9 Lossless
+
+VOICE                    Windows Media Audio 9 Voice
+
+bitrate. The average bit rate, in bits per second, of the encoded audio stream. The
+effect of RTP encapsulation is not included in this number.
+
+blocksize. The maximum size, in bytes, of the WMA audio packets. This number is
+independent of the RTP packet size, as multiple WMA audio packets can be combined in
+a single RTP packet.
+
+samplesize. The number of bits per audio sample.
+
+preroll. The number of milliseconds worth of data that must be received before
+decoding can begin to ensure smooth playback of the decoded audio stream.
+
+config. A Base16 [3] (hexadecimal) representation of the WMA Format Header. The bits
+in the Format Header are represented with the most significant bit first. If the Format
+Header is not a multiple of 8 bits, up to 7 zero-valued padding bits should be added
+after the last bit, to extend the Format Header to a multiple of 8 bits.
+
+4.2 Optional parameters
+
+profile. A number that specifies the encoding profile used in the audio stream.
+samplerate. The number of samples per second in the encoded audio stream. This
+parameter is optional if the a=rtpmap line in the Session Description Protocol (SDP)
+specifies the sample rate. The parameter must be specified if a=rtpmap specifies an
+RTP clock frequency that is different from the sample rate of the encoded audio stream.
+
+4.3 SDP Parameters
+
+The MIME media type audio/wma is mapped to fields in the SDP as follows:
+ The media name in the m= line of SDP must be audio.
+ The encoding name in the a=rtpmap line of SDP must be WMA (the MIME subtype).
+ The clock frequency in the a=rtpmap line should be equal to the audio sample rate.
+
+© 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+
+       subject to the terms of the End User License Agreement accompanying this specification.
+
+                                                                                                       17
+RTP Payload Format for Windows Media Audio and Video
+
+ The encoding parameters section in the a=rtpmap line must be set to the number of
+     channels in the audio stream.
+
+ The optional and required parameters, described above, must be included in the
+     a=fmtp line of SDP. These parameters are expressed as a semicolon separated list
+     of name-value pairs. Names are separated from their corresponding values by a =
+     character.
+
+Example:
+     m=audio 50000 RTP/AVP 98
+     a=rtpmap:98 wma/48000/2
+     a=fmtp:98 version=STD;profile=2;bitrate=64000;blocksize=8000;
+          samplesize=16;preroll=3000;config=ABCDEF
+
+5. MIME registration for Windows Media Video
+
+The receiver must ignore any unspecified parameters.
+Media Type name: video
+Media subtype name: wmv
+
+5.1 Required parameters
+
+version. A number that specifies the version of the Windows Media Video codec. Table
+3 describes the currently defined values for this parameter.
+
+Table 3: Values for WMV version parameter.
+
+Version parameter        Description
+
+WMV1                     Windows Media Video 7
+
+WMV2                     Windows Media Video 8
+
+WMV3                     Windows Media Video 9
+
+WMVA                     Windows Media Video Advanced Profile
+
+bitrate. The average bit rate, in bits per second, of the encoded video stream. The
+effect of RTP encapsulation is not included in this number.
+
+width. The number of horizontal pixels in the encoded video image.
+
+height. The number of vertical pixels in the encoded video image.
+
+preroll. The number of milliseconds worth of data that must be received before
+decoding can begin in order to ensure smooth playback of the decoded video images.
+
+config. A Base16 [3] (hexadecimal) representation of the WMV Sequence Header. The
+bits in the Sequence Header are represented with the most significant bit first. If the
+Sequence Header is not a multiple of 8 bits, up to 7 zero-valued padding bits should be
+added after the last bit, to extend the Sequence Header to a multiple of 8 bits.
+
+5.2 Optional parameters
+
+profile. A number that specifies the encoding profile used in the video stream. This
+parameter should be present if the content is encoded using either the Windows Media
+
+     © 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+                subject to the terms of the End User License Agreement accompanying this specification.
+
+18
+                              RTP Payload Format for Windows Media Audio and Video
+
+Video 9 or Windows Media Video Advanced Profile codec. The concept of an encoding
+profile is not applicable to content encoded using the Windows Media Video 7 and
+Windows Media Video 8 codecs. The profile parameter should be omitted when those
+codec versions are used. Table 4 lists the currently defined profiles.
+
+Table 4: Values for WMV profile parameter.
+
+Profile parameter                  Description
+
+0                                  Simple Profile
+
+1                                  Main Profile
+
+3                                  Advanced Profile
+
+level. The encoding level used in the video stream. This parameter should be present if
+the content is encoded using either the Windows Media Video 9 or Windows Media Video
+Advanced Profile codec. The concept of an encoding level is not applicable to WMV
+content encoded using the Windows Media Video 7 and Windows Media Video 8 codecs.
+The level parameter should be omitted when those codec versions are used. The
+interpretation of the level parameter depends on the value of the profile parameter.
+Table 5 lists the currently defined levels.
+
+Table 5: Values for WMV level parameter.
+
+   Level           Simple Profile  Main Profile      Advanced Profile
+   parameter
+
+   1               Low Level       Low Level         Level 1
+
+   2               Medium Level    Medium Level      Level 2
+
+   3                               High Level        Level 3
+
+aspect. The aspect ratio of the encoded video image. The aspect ratio is represented as
+two decimal numbers, separated by a colon (:). The first number is the aspect width,
+and the second number is the aspect height. If this parameter is not specified, the
+aspect ratio is 1:1.
+
+      © 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+
+      subject to the terms of the End User License Agreement accompanying this specification.
+
+                                                                                                             19
+RTP Payload Format for Windows Media Audio and Video
+
+ts. A string that defines the meaning of the RTP Timestamp field. The possible values
+for this parameter are PTS and DTS. The default is PTS. If the value of the ts parameter
+is PTS, the RTP Timestamp field specifies the presentation time of the first MAU in the
+RTP packet. If the value is DTS, the RTP Timestamp field specifies the decode time of
+the first MAU in the RTP packet.
+
+5.3 SDP parameters
+
+The MIME media type video/wmv is mapped to fields in the Session Description Protocol
+(SDP) as follows:
+ The media name in the m= line of SDP must be video.
+ The encoding name in the a=rtpmap line of SDP must be WMV (the MIME subtype).
+ The clock frequency in the a=rtpmap line should be 90000.
+ The optional and required parameters, described above, must be included in the
+
+     a=fmtp line of SDP. These parameters are expressed as a semi-colon separated list
+     of name-value pairs. Names are separated from their corresponding values by a =
+     character.
+ The a=framerate line [2] must be present. It is used to specify the frame rate of the
+     video stream.
+Example:
+   m=video 50000 RTP/AVP 98
+   a=rtpmap:98 wmv/90000
+   a=fmtp:98 version=WMV3;profile=2;level=3;ts=DTS;bitrate=300000;
+     width=320;height=240;aspect=16:11;preroll=3000;config=ABCDEF
+   a=framerate:24.976
+
+6. Security Evaluation
+
+Implementers should be aware that the Offset field in the RTP Payload Format header
+could have an invalid value. An invalid value could cause an implementation to attempt
+to read from unallocated memory if this situation is not handled correctly. The issue
+also exists with the Extension Length header.
+This RTP Payload Format specification defines two fragmentation mechanisms. The first
+mechanism allows a sender to fragment a MAU across multiple payloads (section 3.2.)
+Receivers can reassemble such payloads to reconstruct the original MAU.
+The second fragmentation mechanism allows payloads containing DRM-encrypted data
+to be fragmented into multiple payloads (section 3.7.1). Receivers can reassemble such
+fragmented payloads to reconstruct the original payload.
+
+     © 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+                subject to the terms of the End User License Agreement accompanying this specification.
+
+20
+                                                 RTP Payload Format for Windows Media Audio and Video
+
+Implementers should take note that both fragmentation mechanisms are susceptible to
+an attack where the attacker deliberately refrains from sending an RTP packet
+containing the last fragment. Unless properly mitigated, this could cause the receiver to
+tie up memory resources for an indeterminate amount of time.
+
+An attacker could send a sequence of RTP packets with identical time stamps, or time
+stamps that decrease instead of increase. Unless properly mitigated, this could cause a
+receiver to buffer packets and tie up memory resources for an indeterminate amount of
+time.
+
+Receivers should also be prepared for the possibility that the data contained in the MAU
+may have been deliberately corrupted by an attacker to cause a malfunction of the
+decoder.
+
+RTP and RTCP are subject to spoofing. Spoofed RTP packets can cause the receiver to
+process the wrong data, possibly leading to decoder malfunction. Spoofed RTCP Sender
+Report packets can cause synchronization problems, and can cause the receiver to send
+RTCP Receiver Reports less frequently than required. Spoofed RTCP Receiver Report
+packets can cause the server to retransmit RTP packets that were not lost, possibly
+flooding the receiver with data. However, these problems are inherent to RTP and RTCP
+and are not introduced by this specification.
+
+© 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+
+subject to the terms of the End User License Agreement accompanying this specification.
+
+                                                                                                       21
+RTP Payload Format for Windows Media Audio and Video
+
+7. References
+
+1. "RTP: A Transport Protocol for Real-Time Applications", 2003, RFC-3550
+     (http://www.ietf.org/rfc/rfc3550.txt)
+
+2. "SDP: Session Description Protocol", RFC-2327 (http://www.ietf.org/rfc/rfc2327.txt)
+3. "The Base16, Base32 and Base64 Data Encodings", RFC-3548
+
+     (http://www.ietf.org/rfc/rfc3548.txt)
+4. "Advanced Systems Format (ASF) Specification"
+
+     (http://www.microsoft.com/windows/windowsmedia/format/asfspec.aspx)
+
+     © 2004 Microsoft Corporation. All rights reserved. Any reproduction, modification, or distribution is
+                subject to the terms of the End User License Agreement accompanying this specification.
+
+22
+

@@ -4,10 +4,11 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:SoftSledWPF"
+        xmlns:splash="clr-namespace:SoftSled.Components.Splash"
         xmlns:ffme="clr-namespace:Unosquare.FFME;assembly=ffme.win"
         mc:Ignorable="d"
         AllowsTransparency="False"
-        Title="MainWindow" Height="720" Width="1580">
+        Title="SoftSled Windows Media Center Extender" Height="720" Width="1580" Icon="/wmc.bmp">
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="720*"/>
@@ -24,13 +25,61 @@
             <Button x:Name="btnPair" Content="Setup" Width="75" Click="BtnExtenderSetup_Click" Margin="5,0"/>
         </StackPanel>
 
+        <!-- FFME element receives decoded video via Media.Open(IMediaInputStream).
+        Wrapped in a Canvas so MainWindow.xaml.cs can position it absolutely
+        per the WMC fast-path overlay-region messages (type=3 on 0x0D),
+        which carry the (x,y,w,h) destination rectangle in RDP source
+        coords — full-screen when watching, small thumbnail when browsing.
+
+        Listed BEFORE rdpDisplay so it renders BELOW the RDP bitmap; SUP
+        devcap makes the RDP bitmap transparent in the video region so the
+        FFME content shows through. -->
+        <Canvas x:Name="MediaCanvas"
+                Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="1" Margin="5"
+                ClipToBounds="True">
+            <ffme:MediaElement x:Name="Media"
+                       Canvas.Left="0" Canvas.Top="0"
+                       Background="Black"
+                       LoadedBehavior="Play"
+                       UnloadedBehavior="Manual"
+                       Visibility="Collapsed"/>
+            <!-- Second FFME element dedicated to audio. Used when the
+                 RTSP audio stream takes the FFME path (e.g. X-WMF-PF
+                 raw PCM, where libavformat's s16le demuxer needs an
+                 independent IMediaInputStream because the wire never
+                 muxes PCM into the H264 video container).
+                 NOTE: kept *Visible* with a tiny on-canvas footprint
+                 rather than Collapsed/Hidden — FFME's audio decoder
+                 starves itself if the element doesn't get layout +
+                 render cycles, producing the "audio start/stop" symptom.
+                 The 1x1 pixel at -100,-100 is invisible behind the
+                 splash overlay / RDP layer but still triggers FFME's
+                 render path. -->
+            <ffme:MediaElement x:Name="MediaAudio"
+                       Canvas.Left="-100" Canvas.Top="-100"
+                       Width="1" Height="1"
+                       LoadedBehavior="Play"
+                       UnloadedBehavior="Manual"
+                       Visibility="Visible"/>
+        </Canvas>
         <!-- RDP framebuffer surface. Source is bound in code-behind once FreeRdpClient.FrameReady fires. -->
         <Image Grid.Row="1" Grid.ColumnSpan="1" Grid.RowSpan="2"
                x:Name="rdpDisplay" Margin="5"
                Stretch="Uniform"
-               RenderOptions.BitmapScalingMode="HighQuality"/>
+               RenderOptions.BitmapScalingMode="HighQuality" Visibility="Hidden"/>
+
+        <!-- MS-RRSP2 (Xbox-360-style UI) renderer. Listed AFTER rdpDisplay so
+        it composites ON TOP of the RDP layer. Owns its own DrawingVisual
+        tree built up from messages on the 'splash' virtual channel. Has
+        no Background by default so RDP shows through where the MS-RRSP2
+        server has drawn nothing. Visibility flips Visible the first time
+        the controller paints anything (e.g. Window_SetBackgroundColor). -->
+        <splash:SplashRenderHost x:Name="splashHost"
+                                 Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="1" Grid.RowSpan="2"
+                                 Margin="5"
+                                 Visibility="Collapsed"
+                                 IsHitTestVisible="False"/>
+
         <TextBox Name="loggerTextBox" Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="1" Margin="5" TextWrapping="Wrap" Width="290"/>
-        <!-- TODO: route H.264 decoder output here once the WMRTP pipeline is wired in -->
-        <ffme:MediaElement x:Name="Media" Background="Gray" LoadedBehavior="Play" UnloadedBehavior="Manual" />
     </Grid>
 </Window>
