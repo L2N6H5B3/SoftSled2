@@ -17,7 +17,7 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 * Extender Device Session Communication (DSMN)
 * Extender Device Media Control (DMCT)
 * Interface Sounds
-* RDP Bit
+* RDP Bitmap OR Remote Rendering capabilities
 
 ## Future Requirements
 * 
