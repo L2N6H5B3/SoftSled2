@@ -17,10 +17,10 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 * Extender Device Session Communication (DSMN)
 * Extender Device Media Control (DMCT)
 * Interface Sounds
-* Full-Screen Interface
+* RDP Bit
 
 ## Future Requirements
-* Implement Video Overlay (Not possible to Chroma-key the RDP window in WinForms or WPF... Need to think of another option.)
+* 
 * Implement media controls (play/pause/previous/next) media from client
 * Create RC6 remote control forwarder
 
@@ -37,16 +37,17 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 
 ## Notes
 ### Certificates
-Multiple certificates have been found to work with SoftSled - these being:
+Work has been completed to enable on-the-fly certificate generation upon SoftSled provisioning / setup; however, the original certificates used with SoftSled do still work here (though password decryption will not be possible with these due to the lack of a Private Key) - these being:
 * Linksys2200.cer
 * Xbox360.cer
 
-Work has been completed to enable on-the-fly certificate generation upon SoftSled provisioning / setup.
+A patched version of Mcx2Prov.exe is required to enable pairing with the SoftSled-specific certificates, as these certificates do not contain a CRL.  This could be worked-around later on but the easiest option was to patch Mcx2Prov.exe to ignore the CRL check - for our use-cases, it doesn't matter and still allows all other extenders to pair and connect as normal.
+
 
 ### Configuration
 (If using Linksys2200.cer)
 1. Copy SoftSledCA.cer to the Host Machine and install the certificate into the Local Machine Trusted Root store.
-2. Copy and replace Mcx2Prov.exe with the patched version.
+2. Copy and replace Mcx2Prov.exe with the patched version - this patched version removes the CRL check which otherwise fails the Extender setup.
 3. Start SoftSled > Setup.
 4. Go to your Media Center PC and Navigate to **Settings** > **Extenders**.
 5. Find SoftSled in the list.
