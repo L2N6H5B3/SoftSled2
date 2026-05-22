@@ -295,7 +295,6 @@
     <None Include="Certificates\CA\softsled_ca.pem">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="ClassDiagram1.cd" />
     <!-- FreeRDP shim runtime DLLs (x64 only). Copied next to the exe so
          P/Invoke into softsled-rdp.dll resolves freerdp3.dll, winpr3.dll, and
          their OpenSSL/zlib deps. -->
