@@ -37,11 +37,12 @@
                          VerticalAlignment="Top"
                          KeyDown="RootMenu_KeyDown"
                          MouseLeftButtonUp="RootMenu_MouseLeftButtonUp">
-                    <ListBoxItem x:Name="ItemGeneral"  Content="General"  IsSelected="True"/>
-                    <ListBoxItem x:Name="ItemPairing"  Content="Pairing"/>
-                    <ListBoxItem x:Name="ItemVideo"    Content="Video"/>
-                    <ListBoxItem x:Name="ItemUi"       Content="UI"/>
-                    <ListBoxItem x:Name="ItemAbout"    Content="About"/>
+                    <ListBoxItem x:Name="ItemGeneral"   Content="General"  IsSelected="True"/>
+                    <ListBoxItem x:Name="ItemPairing"   Content="Pairing"/>
+                    <ListBoxItem x:Name="ItemVideo"     Content="Video"/>
+                    <ListBoxItem x:Name="ItemUi"        Content="UI"/>
+                    <ListBoxItem x:Name="ItemDebugging" Content="Debugging"/>
+                    <ListBoxItem x:Name="ItemAbout"     Content="About"/>
                 </ListBox>
             </Grid>
 
@@ -157,6 +158,40 @@
                     <CheckBox x:Name="ChkMouseInput"
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Enable mouse input"
+                              Click="OnConfigChanged"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- ===== Debugging sub-view =================================== -->
+            <Grid x:Name="DebuggingView"
+                  Margin="100,200,100,80"
+                  Visibility="Collapsed">
+                <StackPanel HorizontalAlignment="Left" Width="640">
+                    <CheckBox x:Name="ChkLogger"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Show on-screen log overlay"
+                              Click="OnConfigChanged"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="10,16,0,24"
+                               TextWrapping="Wrap"
+                               Text="The log overlay appears on the right edge of the session view. You can also toggle it during a session with Ctrl+L."/>
+
+                    <CheckBox x:Name="ChkLogDevCaps"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Include DevCaps VirtualChannel logs"
+                              Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkLogMcxSess"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Include McxSess VirtualChannel logs"
+                              Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkLogAvCtrl"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Include AvCtrl VirtualChannel logs"
+                              Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkLogRdpFastpath"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Include RDP Fastpath logs"
                               Click="OnConfigChanged"/>
                 </StackPanel>
             </Grid>

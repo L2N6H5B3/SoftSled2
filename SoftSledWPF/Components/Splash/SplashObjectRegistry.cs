@@ -51,6 +51,20 @@ namespace SoftSled.Components.Splash {
         public bool TryGetObject(uint handle, out ISplashObject obj) =>
             _objects.TryGetValue(handle, out obj);
 
+        /// <summary>
+        /// Enumerate all handles that resolve to a Surface object.
+        /// Used by the media playback Surface Router to broadcast
+        /// "host resized" notifications to every currently-registered
+        /// video surface ID.
+        /// </summary>
+        public IEnumerable<uint> EnumerateSurfaceHandles() {
+            foreach (var kv in _objects) {
+                if (kv.Value is SoftSled.Components.Splash.Objects.SplashSurface) {
+                    yield return kv.Key;
+                }
+            }
+        }
+
         public void RemoveObject(uint handle) {
             if (_objects.TryGetValue(handle, out var obj)) {
                 obj.OnDestroyed();

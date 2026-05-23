@@ -14,7 +14,9 @@ namespace SoftSled.Components.RTSP {
     class RTSPClient {
 
         private string UserAgent = "User-Agent: MCExtender/1.50.X.090522.00"; // Assume Xbox 360?
+        //private string UserAgent = "User-Agent: MCExtender/1.50.0.0";
         //private string UserAgent = "User-Agent: MCExtender/1.0.0.0"; // Linksys Extender (Doesn't support H.264?)
+
         private string AcceptHeader = "Accept: application/sdp";
         private string LanguageHeader = "Accept-Language: en-us, *;q=0.1";
         //describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
@@ -340,6 +342,14 @@ namespace SoftSled.Components.RTSP {
                     return;
                 }
 
+                // PTS monitor (Layer 4f) — runs before SubmitChunk so the
+                // event fires the moment we observe the bad PTS, regardless
+                // of which pipeline accepts the sample below. Decoder-open
+                // stopwatch (Layer 4g(a)) is armed at the first submit
+                // attempt so we measure FFME's open latency from this point.
+                MonitorPts(isAudio: false, rtpTs: eventData.timestamp);
+                ArmDecoderOpenStopwatch();
+
                 // MPEG-TS unified container (preferred for modern codecs).
                 // Same idea as the PS path but uses 188-byte TS packets
                 // with per-stream PIDs + PCR + PAT/PMT — supports H264 and
@@ -447,6 +457,12 @@ namespace SoftSled.Components.RTSP {
             };
 
             audioDepacketizer.AudioDataReady += async (s, eventData) => {
+                // PTS monitor (Layer 4f) + decoder-open stopwatch arm
+                // (Layer 4g(a)). See the symmetric block in
+                // videoDepacketizer.NalUnitReady above.
+                MonitorPts(isAudio: true, rtpTs: eventData.timestamp);
+                ArmDecoderOpenStopwatch();
+
                 // MPEG-TS unified path (preferred for modern codecs).
                 // PCM samples go in as raw LE bytes; muxer applies any
                 // codec-specific framing (Blu-ray LPCM header etc.) and
@@ -697,23 +713,360 @@ namespace SoftSled.Components.RTSP {
         }
 
         public void Play() {
-            if (rtsp_client != null) {
-                // Send PLAY
-                RtspRequest play_message = new Rtsp.Messages.RtspRequestPlay();
-                play_message.RtspUri = new Uri(url);
-                play_message.Session = session;
-                play_message.AddHeader(LanguageHeader);
-                //play_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-                play_message.AddHeader(SupportedHeader);
-                play_message.AddHeader(UserAgent);
+            Play(/*startMs*/ -1L, /*rate*/ 1.0);
+        }
+
+        /// <summary>
+        /// Send an RTSP PLAY with optional <c>Range:</c> seek and
+        /// <c>Scale:</c>/<c>Speed:</c> rate. Replaces the parameterless
+        /// overload as the canonical implementation; the old one delegates
+        /// here with -1 / 1.0 sentinels for "no change".
+        ///
+        /// IMPORTANT lifecycle note: RTSP requires DESCRIBE → SETUP →
+        /// PLAY. The existing message handler at
+        /// <see cref="Rtsp_MessageReceived"/> already sends an automatic
+        /// PLAY once the last SETUP completes. Callers that hit this
+        /// method *before* the initial PLAY has been issued (typical:
+        /// AvCtrlHandler.Start fires almost the same instant as
+        /// OpenMedia, well before SETUP completes) would otherwise
+        /// stack up a flood of premature PLAY requests on the wire and
+        /// most servers respond with 455 "Method not valid in this
+        /// state" or simply ignore them. The fix: until the auto-PLAY
+        /// fires we only *cache* the requested startMs/rate — the
+        /// auto-PLAY then picks them up via
+        /// <see cref="SendPlayWithCachedParams"/> and we end up sending
+        /// exactly one PLAY with the right Range/Scale/Speed.
+        /// </summary>
+        /// <param name="startMs">Absolute media position to seek to in
+        /// milliseconds, or -1 to omit the Range header (server resumes
+        /// from the current position).</param>
+        /// <param name="rate">Playback rate. 1.0 = omit Scale/Speed.
+        /// Any other value (positive or negative) is written into both
+        /// <c>Scale:</c> and <c>Speed:</c> headers — servers vary in
+        /// which one they actually honour, so we send both. The captures
+        /// show PLAY responses always echo Scale and Speed when
+        /// requested, even if the value is rounded.</param>
+        public void Play(long startMs, double rate) {
+            // Always update the cached request — used both as the
+            // params for the auto-PLAY (if it hasn't fired yet) and
+            // for mid-session re-PLAYs (SetRate, seek). Only overwrite
+            // the cached startMs when the caller actually specified
+            // one; -1 means "resume / no Range" and should NOT be
+            // remembered as "seek to 0" — that would force every
+            // subsequent SetRate to rewind the server.
+            _currentRateRequested = rate;
+            if (startMs >= 0) _currentStartMsRequested = startMs;
+
+            if (rtsp_client == null) return;
+
+            // Pre-auto-PLAY: defer. The auto-PLAY in Rtsp_MessageReceived
+            // (fired after the last SETUP response) will pick up the
+            // cached params and send the single PLAY of the session.
+            if (!_initialPlayFired) {
+                Debug.WriteLine($"[rtsp] Play({startMs},{rate}) deferred — " +
+                                $"awaiting initial SETUP-completion PLAY");
+                return;
+            }
+
+            // Wire-level idempotency. WMC repeats Start commands
+            // aggressively — on remote-control retransmits, held FF
+            // buttons, etc. Captured pattern: three Start(rate=3) within
+            // 31ms when the user tapped fast-forward once. Each PLAY
+            // restarts the server's pacing engine; the second-and-third
+            // restarts arriving while the first is still propagating
+            // throws WMPNss into a "frozen stream" state until the next
+            // PAUSE/PLAY cycle. Skip the wire write if the requested
+            // (startMs, rate) exactly matches what we last shipped.
+            //
+            // -1 startMs is "use cached" — equate to the last-sent
+            // startMs for the purposes of this check so a pure rate
+            // change with no seek doesn't get artificially differentiated.
+            long candidateStart = startMs >= 0 ? startMs : _lastSentStartMs;
+            if (_lastSentStartMs == candidateStart &&
+                System.Math.Abs(_lastSentRate - rate) < 0.0001) {
+                Debug.WriteLine($"[rtsp] Play({startMs},{rate}) suppressed — " +
+                                $"wire state already (start={_lastSentStartMs}, rate={_lastSentRate})");
+                return;
+            }
+
+            // Post-auto-PLAY: mid-session change. Send a fresh PLAY
+            // that atomically replaces the prior playback params.
+            SendPlayMessage(startMs, rate);
+        }
+
+        /// <summary>Most recent (startMs, rate) actually written to the
+        /// RTSP wire by <see cref="SendPlayMessage"/>. Used to suppress
+        /// no-op re-PLAYs from WMC's repeating Start commands. -1 / 1.0
+        /// means "no PLAY sent yet this session".</summary>
+        private long   _lastSentStartMs = -1;
+        private double _lastSentRate    = 1.0;
+
+        /// <summary>
+        /// Send an RTSP PLAY directly to the wire, bypassing the
+        /// auto-PLAY-deferral guard in <see cref="Play"/>. Called from
+        /// (a) the auto-PLAY trigger inside Rtsp_MessageReceived after
+        /// the last SETUP response, and (b) the mid-session Play()/
+        /// SetRate() path once <see cref="_initialPlayFired"/> is set.
+        /// </summary>
+        private void SendPlayMessage(long startMs, double rate) {
+            if (rtsp_client == null) return;
+
+            RtspRequest play_message = new Rtsp.Messages.RtspRequestPlay();
+            play_message.RtspUri = new Uri(url);
+            play_message.Session = session;
+            play_message.AddHeader(LanguageHeader);
+            play_message.AddHeader(SupportedHeader);
+            play_message.AddHeader(UserAgent);
+
+            // Range: npt=<sec>-  — sent whenever the caller asked for an
+            // explicit seek. WMC's "resume" sentinel arrives as -1 and we
+            // drop the header to let the server keep its own position.
+            if (startMs >= 0) {
+                double sec = startMs / 1000.0;
+                play_message.AddHeader(
+                    "Range: npt=" + sec.ToString("0.000",
+                        System.Globalization.CultureInfo.InvariantCulture) + "-");
+            }
+
+            // Scale: / Speed: — only when rate ≠ 1.0. Captured McxDMS
+            // responses always show Scale and Speed echoed when requested.
+            // Some servers prefer Scale, some Speed; sending both is the
+            // recommended belt-and-braces approach (RFC 7826 §18.46/§18.50).
+            if (System.Math.Abs(rate - 1.0) > 0.0001) {
+                string rateStr = rate.ToString("0.###",
+                    System.Globalization.CultureInfo.InvariantCulture);
+                play_message.AddHeader("Scale: " + rateStr);
+                play_message.AddHeader("Speed: " + rateStr);
+            }
+
+            if (auth_type != null) {
+                AddAuthorization(play_message, username, password, auth_type, realm, nonce, url);
+            }
+
+            // First-sample-after-seek arm: clear the per-stream "first
+            // PTS captured" flags so the UNRECOVERABLE_SKEW first-sample
+            // A/V skew check (Layer 4g(b)) re-runs on this seek.
+            ArmFirstSampleAfterSeek();
+
+            // Mark initial-PLAY fired so subsequent public Play()
+            // calls actually reach the wire. Record what we sent so
+            // the wire-idempotency check in Play() can suppress
+            // duplicate Starts from WMC.
+            _initialPlayFired = true;
+            _lastSentStartMs = startMs >= 0 ? startMs : _lastSentStartMs;
+            _lastSentRate    = rate;
+
+            rtsp_client.SendMessage(play_message);
+        }
+
+        /// <summary>
+        /// Used by the auto-PLAY trigger in Rtsp_MessageReceived (after
+        /// the last SETUP response) to send a PLAY that honours any
+        /// startMs/rate that WMC requested via Start while the SETUP
+        /// handshake was still in flight.
+        /// </summary>
+        internal void SendPlayWithCachedParams() {
+            SendPlayMessage(
+                startMs: _currentStartMsRequested >= 0 ? _currentStartMsRequested : -1,
+                rate:    double.IsNaN(_currentRateRequested) ? 1.0 : _currentRateRequested);
+        }
+
+        /// <summary>
+        /// Mid-session rate change. Issues a PLAY at the current position
+        /// with the new Scale/Speed. RTSP semantics: a new PLAY atomically
+        /// replaces the prior playback parameters, so this works whether
+        /// or not playback is currently paused.
+        ///
+        /// If the initial auto-PLAY hasn't fired yet, this just caches
+        /// the rate and the auto-PLAY (when it fires) will include it —
+        /// avoiding a duplicate request on the wire.
+        /// </summary>
+        public void SetRate(double rate) {
+            // Re-PLAY at the most recently-requested start time so the
+            // server resumes where we were rather than rewinding to 0.
+            // (Callers that want to combine seek + rate change should
+            // call Play(startMs, rate) directly.)
+            long resumeMs = _currentStartMsRequested >= 0
+                            ? _currentStartMsRequested : -1;
+            Play(resumeMs, rate);
+        }
+
+        /// <summary>Set to true the first time we actually send a PLAY
+        /// message to the wire. Until this is true, Play()/SetRate()
+        /// calls are stored to <see cref="_currentStartMsRequested"/>
+        /// and <see cref="_currentRateRequested"/> but not transmitted —
+        /// the auto-PLAY in Rtsp_MessageReceived (after the last SETUP
+        /// response) is the one that actually fires the first PLAY and
+        /// picks up whatever cached params accumulated during the
+        /// DESCRIBE/SETUP phase. Reset in Stop() / Connect().</summary>
+        private volatile bool _initialPlayFired;
+
+        /// <summary>
+        /// Update the <c>Buffer-Info.dlna.org</c> hint mid-session.
+        /// Sent as SET_PARAMETER. If no session is established yet the
+        /// values are stashed and applied on the next SETUP. Fire-and-
+        /// forget — servers commonly ignore mid-session Buffer-Info,
+        /// in which case we just keep using the SETUP-time value.
+        /// </summary>
+        public void SetBufferInfo(long bandwidthBps, bool optimisedPreroll) {
+            // Stash so the next SETUP picks them up even if there's no
+            // session yet.
+            _bufferInfoBandwidthBps = bandwidthBps;
+            _bufferInfoOptimisedPreroll = optimisedPreroll;
+
+            if (rtsp_client == null || string.IsNullOrEmpty(session)) {
+                // No live session — nothing to send right now.
+                return;
+            }
+
+            try {
+                var msg = new Rtsp.Messages.RtspRequestSetParameter();
+                msg.RtspUri = new Uri(url);
+                msg.Session = session;
+                msg.AddHeader(LanguageHeader);
+                msg.AddHeader(SupportedHeader);
+                msg.AddHeader(UserAgent);
+                msg.AddHeader(BuildBufferInfoHeader(bandwidthBps, optimisedPreroll));
                 if (auth_type != null) {
-                    AddAuthorization(play_message, username, password, auth_type, realm, nonce, url);
+                    AddAuthorization(msg, username, password, auth_type, realm, nonce, url);
                 }
-                rtsp_client.SendMessage(play_message);
+                rtsp_client.SendMessage(msg);
+            } catch (Exception ex) {
+                Debug.WriteLine($"[rtsp] SetBufferInfo failed: {ex.Message}");
             }
         }
 
+        /// <summary>
+        /// Build the <c>Buffer-Info.dlna.org</c> request-line header value
+        /// from a bandwidth hint and the OptimisedPreroll flag.
+        ///
+        /// Capture-observed default (Example 1 etc.):
+        /// <c>dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0</c>
+        ///
+        /// Our adjustments:
+        /// <list type="bullet">
+        ///   <item>dejitter scales inversely with bandwidth — clamp to the
+        ///   capture-observed 6624000 (≈6.6 MB) ceiling, drop to 16384
+        ///   floor.</item>
+        ///   <item>BTM=0 and BFR=0 when optimisedPreroll, else the
+        ///   capture defaults (BTM=0;BFR=0 was already the default in
+        ///   the corpus, but if the server later prefers a non-zero
+        ///   ramp we expose the knob here).</item>
+        ///   <item>CDB/TD held at capture defaults.</item>
+        /// </list>
+        /// </summary>
+        internal static string BuildBufferInfoHeader(long bandwidthBps, bool optimisedPreroll) {
+            // dejitter inverse-scales with bandwidth: at 50 Mbps we can
+            // get away with a small dejitter (~0.13s of 8-byte audio);
+            // at 1 Mbps we need much more headroom. Cap at the captured
+            // 6624000 (≈6.6 MB ≈ 1 s at 50 Mbps), floor at 16384.
+            long dejitter;
+            if (bandwidthBps <= 0) {
+                dejitter = 6624000; // unknown — use the captured default
+            } else {
+                // Heuristic: 1 second of bandwidth, divided by 8 (×8 b/byte)
+                // gives bytes-per-second, then we keep ~1 s headroom.
+                dejitter = bandwidthBps / 8;
+                if (dejitter > 6624000) dejitter = 6624000;
+                if (dejitter < 16384) dejitter = 16384;
+            }
+            int btm = optimisedPreroll ? 0 : 0;        // unchanged (capture default)
+            int bfr = optimisedPreroll ? 0 : 0;        // unchanged (capture default)
+            const int cdb = 6553600;
+            const int td = 2000;
+            return "Buffer-Info.dlna.org: dejitter=" + dejitter +
+                   ";CDB=" + cdb +
+                   ";BTM=" + btm +
+                   ";TD=" + td +
+                   ";BFR=" + bfr;
+        }
+
+        /// <summary>Cached so SETUP can pick them up if SetBufferInfo
+        /// fired before the session was established.</summary>
+        private long _bufferInfoBandwidthBps = -1;
+        private bool _bufferInfoOptimisedPreroll = false;
+
+        /// <summary>Cached so SetRate can re-PLAY at the same position.</summary>
+        private long _currentStartMsRequested = -1;
+        private double _currentRateRequested = 1.0;
+
+        // ====================================================================
+        //  Spec-event surface (Phase 2)
+        //  -------------------------------------------------------------------
+        //  These three events are consumed by FfmeMediaController and relayed
+        //  on to VirtualChannelAvCtrlHandler.OnMediaEvent as MS-DMCT codes
+        //  RTSP_DISCONNECT (3), PTS_ERROR (5), UNRECOVERABLE_SKEW (6).
+        // ====================================================================
+
+        /// <summary>Fires when the RTSP socket disconnects unexpectedly
+        /// (socket exception, UDP receive failure, server BYE on the
+        /// data stream, keepalive miss-count exceeded). The exception
+        /// carries whatever the failing layer threw so the controller
+        /// can derive a reasonable HRESULT.</summary>
+        public event Action<Exception> Disconnected;
+
+        /// <summary>Fires when a PTS jump in the depacketizer exceeds
+        /// the spec thresholds (delta &lt; -200ms or &gt; 2000ms vs the
+        /// previous PTS on the same stream).</summary>
+        public event Action<PtsErrorInfo> PtsError;
+
+        /// <summary>Fires when the decoder takes more than 500ms to
+        /// open after the first SubmitChunk, OR when the audio↔video
+        /// first-sample PTS skew exceeds 3500ms.</summary>
+        public event Action<SkewInfo> UnrecoverableSkew;
+
+        // --- internal helpers used by 4d-4g of the playback plan ------------
+        internal void RaiseDisconnected(Exception ex) {
+            try { Disconnected?.Invoke(ex); }
+            catch (Exception subEx) {
+                Debug.WriteLine($"[rtsp] Disconnected handler threw: {subEx.Message}");
+            }
+        }
+        internal void RaisePtsError(PtsErrorInfo info) {
+            try { PtsError?.Invoke(info); }
+            catch (Exception subEx) {
+                Debug.WriteLine($"[rtsp] PtsError handler threw: {subEx.Message}");
+            }
+        }
+        internal void RaiseUnrecoverableSkew(SkewInfo info) {
+            try { UnrecoverableSkew?.Invoke(info); }
+            catch (Exception subEx) {
+                Debug.WriteLine($"[rtsp] UnrecoverableSkew handler threw: {subEx.Message}");
+            }
+        }
+
+        /// <summary>Re-arms the "first sample after seek" detector used
+        /// by both the PTS monitor and the UNRECOVERABLE_SKEW first-
+        /// sample-A/V-skew check. Called at every PLAY (seek).</summary>
+        private void ArmFirstSampleAfterSeek() {
+            System.Threading.Interlocked.Exchange(ref _firstAudioPtsCapturedMs, long.MinValue);
+            System.Threading.Interlocked.Exchange(ref _firstVideoPtsCapturedMs, long.MinValue);
+            _avSkewFiredForThisSeek = 0;
+        }
+
+        // PTS monitor state (Layer 4f) — last-PTS-per-stream + first-after-seek.
+        private long _lastAudioPtsMs;
+        private long _lastVideoPtsMs;
+        private long _firstAudioPtsCapturedMs = long.MinValue;
+        private long _firstVideoPtsCapturedMs = long.MinValue;
+        private int  _avSkewFiredForThisSeek;   // 0 = not yet, 1 = fired
+        // UNRECOVERABLE_SKEW decoder-open state (Layer 4g(a)).
+        private readonly Stopwatch _decoderOpenSw = new Stopwatch();
+        private int _decoderOpenArmed;          // 0 = not armed, 1 = armed (stopwatch running)
+        private int _decoderOpenFired;          // 0 = not fired, 1 = fired
+        // SDP-derived clock-Hz per stream (set in SDP processing).
+        private uint _audioClockHz;
+        private uint _videoClockHz;
+        // RTCP-SR-anchored NTP↔RTP clocks (Layer 4e(iv)).
+        private StreamClock _audioClock;
+        private StreamClock _videoClock;
+
         public void Stop() {
+            // Flag set first so the keepalive miss-counter and other
+            // background paths know any subsequent socket exception is
+            // expected (user requested teardown) and don't escalate it
+            // to a Disconnected event.
+            _stopRequested = true;
 
             if (rtsp_client != null) {
                 // Send TEARDOWN
@@ -897,6 +1250,22 @@ namespace SoftSled.Components.RTSP {
             _pendingVideoRtptime = null;
             try { _commitTimer?.Dispose(); } catch { }
             _commitTimer = null;
+            _vidRecvLoggedOnce = 0;
+            _audRecvLoggedOnce = 0;
+            try { _commitDiagLog?.Dispose(); } catch { }
+            _commitDiagLog = null;
+
+            // Reset playback-state caches so the next session's auto-PLAY
+            // starts from defaults (no carry-over Range/Scale/Speed) and
+            // the first Play()/SetRate() call against the new session
+            // again routes through the auto-PLAY deferral path.
+            _initialPlayFired = false;
+            _currentStartMsRequested = -1;
+            _currentRateRequested = 1.0;
+            _lastSentStartMs = -1;
+            _lastSentRate = 1.0;
+            _bufferInfoBandwidthBps = -1;
+            _bufferInfoOptimisedPreroll = false;
 
             // Tear down the H264 video producer. Mirrors the MPV teardown.
             try {
@@ -1735,6 +2104,7 @@ namespace SoftSled.Components.RTSP {
         ///   * A/V sync: FFME's master clock presents both streams together
         /// </summary>
         private bool TrySetupMpegPsPipeline() {
+            CommitDiagLog($"TrySetupMpegPsPipeline: entered (_psMuxer null? {_psMuxer == null}, dict count={wmfPayloadDataDict.Count})");
             if (_psMuxer != null) return true;
 
             // Pre-wire-commit code declined here when X-WMF-PF was also
@@ -1746,6 +2116,7 @@ namespace SoftSled.Components.RTSP {
             int vidPt = -1, audPt = -1;
             foreach (var kv in wmfPayloadDataDict) {
                 var entry = kv.Value;
+                CommitDiagLog($"TrySetupMpegPsPipeline: dict[{kv.Key}] type={entry?.Type} codec={entry?.Codec ?? "(null)"}");
                 if (entry == null || string.IsNullOrEmpty(entry.Codec)) continue;
                 if (entry.Type == MediaType.Video && entry.Codec.Equals("VND.MS.WM-MPV",
                                                                        StringComparison.OrdinalIgnoreCase))
@@ -1754,6 +2125,7 @@ namespace SoftSled.Components.RTSP {
                                                                              StringComparison.OrdinalIgnoreCase))
                     audPt = entry.PayloadNumber;
             }
+            CommitDiagLog($"TrySetupMpegPsPipeline: search result vidPt={vidPt} audPt={audPt}");
             if (vidPt < 0 || audPt < 0) return false;
 
             Debug.WriteLine($"[ps-ffme] standing up MPEG-PS pipeline " +
@@ -2063,6 +2435,7 @@ namespace SoftSled.Components.RTSP {
                 if (_wireAudioCodec != null) return;
                 _wireAudioCodec = codec;
                 Debug.WriteLine($"[wire-commit] audio codec={codec}");
+                CommitDiagLog($"COMMIT audio={codec} (videoSoFar={_wireVideoCodec ?? "(none)"})");
                 TryFinalizePipelineSetup();
             }
         }
@@ -2073,8 +2446,33 @@ namespace SoftSled.Components.RTSP {
                 if (_wireVideoCodec != null) return;
                 _wireVideoCodec = codec;
                 Debug.WriteLine($"[wire-commit] video codec={codec}");
+                CommitDiagLog($"COMMIT video={codec} (audioSoFar={_wireAudioCodec ?? "(none)"})");
                 TryFinalizePipelineSetup();
             }
+        }
+
+        // Diagnostic log for the wire-commit / FinalizePipelineSetup /
+        // TrySetupMpegPsPipeline chain — written unconditionally to
+        // %TEMP%\softsled-commit-debug.log. Helps diagnose "RTP arriving
+        // but FFME never opens" bugs by tracing exactly which branch
+        // the pipeline-setup state machine takes.
+        private System.IO.StreamWriter _commitDiagLog;
+        private void CommitDiagLog(string line) {
+            try {
+                if (_commitDiagLog == null) {
+                    string path = System.IO.Path.Combine(
+                        System.IO.Path.GetTempPath(),
+                        "softsled-commit-debug.log");
+                    _commitDiagLog = new System.IO.StreamWriter(
+                        new System.IO.FileStream(path,
+                            System.IO.FileMode.Create,
+                            System.IO.FileAccess.Write,
+                            System.IO.FileShare.Read),
+                        System.Text.Encoding.ASCII) { AutoFlush = true };
+                    _commitDiagLog.WriteLine($"# commit-debug, started {DateTime.Now:HH:mm:ss.fff}");
+                }
+                _commitDiagLog.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {line}");
+            } catch { /* never break the wire path because diag fails */ }
         }
 
         // Lock-held caller. Either commits NOW if both codecs known, or
@@ -2087,12 +2485,17 @@ namespace SoftSled.Components.RTSP {
         private void TryFinalizePipelineSetup() {
             if (_pipelinesCommitted) return;
             if (_wireAudioCodec != null && _wireVideoCodec != null) {
+                CommitDiagLog("TryFinalize: both codecs known, finalizing now");
                 FinalizePipelineSetup();
                 return;
             }
             if (_commitTimer == null) {
+                CommitDiagLog($"TryFinalize: only have audio={_wireAudioCodec ?? "(none)"} video={_wireVideoCodec ?? "(none)"} — arming 300ms timer");
                 _commitTimer = new System.Threading.Timer(_ => {
-                    lock (_commitLock) { FinalizePipelineSetup(); }
+                    lock (_commitLock) {
+                        CommitDiagLog("TryFinalize: timer fired");
+                        FinalizePipelineSetup();
+                    }
                 }, null, 300, System.Threading.Timeout.Infinite);
             }
         }
@@ -2105,6 +2508,7 @@ namespace SoftSled.Components.RTSP {
             try { _commitTimer?.Dispose(); } catch { }
             _commitTimer = null;
             Debug.WriteLine($"[wire-commit] finalize: audio={_wireAudioCodec ?? "(none)"} video={_wireVideoCodec ?? "(none)"}");
+            CommitDiagLog($"FinalizePipelineSetup: audio={_wireAudioCodec ?? "(none)"} video={_wireVideoCodec ?? "(none)"}");
 
             string aud = _wireAudioCodec ?? "";
             string vid = _wireVideoCodec ?? "";
@@ -2119,8 +2523,14 @@ namespace SoftSled.Components.RTSP {
             //    if it can't find both PTs in the SDP dict; fall through
             //    to dual-FFME in that case rather than leaving the
             //    session with no pipeline.
+            CommitDiagLog($"FinalizePipelineSetup: isAudMpa={isAudMpa} isVidMpv={isVidMpv} isAudPcm={isAudPcm} isVidH264={isVidH264}");
             if (isAudMpa && isVidMpv) {
-                if (TrySetupMpegPsPipeline()) return;
+                CommitDiagLog("FinalizePipelineSetup: calling TrySetupMpegPsPipeline");
+                if (TrySetupMpegPsPipeline()) {
+                    CommitDiagLog("FinalizePipelineSetup: TrySetupMpegPsPipeline returned TRUE");
+                    return;
+                }
+                CommitDiagLog("FinalizePipelineSetup: TrySetupMpegPsPipeline returned FALSE — falling back to dual FFME");
                 Debug.WriteLine("[wire-commit] PS pipeline declined despite MPA+MPV wire codecs — falling back to dual FFME");
             }
 
@@ -2164,10 +2574,21 @@ namespace SoftSled.Components.RTSP {
 
 
         int rtp_count = 0; // used for statistics
+        private int _vidRecvLoggedOnce;
+        private int _audRecvLoggedOnce;
         // RTP packet (or RTCP packet) has been received.
         public void Rtp_VideoDataReceived(object sender, Rtsp.RtspChunkEventArgs e) {
 
             RtspData data_received = e.Message as RtspData;
+            try {
+                if (System.Threading.Interlocked.Exchange(ref _vidRecvLoggedOnce, 1) == 0) {
+                    int pt = e.Message.Data.Length > 1 ? (e.Message.Data[1] & 0x7F) : -1;
+                    CommitDiagLog($"Rtp_VideoDataReceived: FIRST chan={data_received.Channel} pt={pt} " +
+                                  $"video_data_channel={video_data_channel} video_rtcp_channel={video_rtcp_channel} " +
+                                  $"audio_data_channel={audio_data_channel} dictHasPt={(pt >= 0 && wmfPayloadDataDict.ContainsKey(pt))} " +
+                                  $"dictCodec={(pt >= 0 && wmfPayloadDataDict.ContainsKey(pt) ? wmfPayloadDataDict[pt].Codec ?? "(null)" : "(no-entry)")}");
+                }
+            } catch { }
 
             // Check which channel the Data was received on.
             // eg the Video Channel, the Video Control Channel (RTCP)
@@ -2207,58 +2628,59 @@ namespace SoftSled.Components.RTSP {
                                       + " SSRC=" + rtcp_ssrc);
 
                     if (rtcp_packet_type == 200) {
-                        // We have received a Sender Report
-                        // Use it to convert the RTP timestamp into the UTC time
+                        // SR (Sender Report). Carries the per-stream NTP↔RTP
+                        // anchor we need for absolute A/V timing.
+                        //
+                        //  off 4..7   sender SSRC
+                        //  off 8..15  NTP timestamp (64-bit fixed-point)
+                        //  off 16..19 RTP timestamp paired with above NTP
 
-                        UInt32 ntp_msw_seconds = (uint)(e.Message.Data[packetIndex + 8] << 24) + (uint)(e.Message.Data[packetIndex + 9] << 16)
-                        + (uint)(e.Message.Data[packetIndex + 10] << 8) + (uint)(e.Message.Data[packetIndex + 11]);
+                        UInt32 ntp_msw_seconds =
+                            (uint)(e.Message.Data[packetIndex + 8]  << 24) |
+                            (uint)(e.Message.Data[packetIndex + 9]  << 16) |
+                            (uint)(e.Message.Data[packetIndex + 10] << 8)  |
+                            (uint)(e.Message.Data[packetIndex + 11]);
+                        UInt32 ntp_lsw_fractions =
+                            (uint)(e.Message.Data[packetIndex + 12] << 24) |
+                            (uint)(e.Message.Data[packetIndex + 13] << 16) |
+                            (uint)(e.Message.Data[packetIndex + 14] << 8)  |
+                            (uint)(e.Message.Data[packetIndex + 15]);
+                        UInt32 rtp_timestamp_sr =
+                            (uint)(e.Message.Data[packetIndex + 16] << 24) |
+                            (uint)(e.Message.Data[packetIndex + 17] << 16) |
+                            (uint)(e.Message.Data[packetIndex + 18] << 8)  |
+                            (uint)(e.Message.Data[packetIndex + 19]);
 
-                        UInt32 ntp_lsw_fractions = (uint)(e.Message.Data[packetIndex + 12] << 24) + (uint)(e.Message.Data[packetIndex + 13] << 16)
-                        + (uint)(e.Message.Data[packetIndex + 14] << 8) + (uint)(e.Message.Data[packetIndex + 15]);
+                        ulong ntp_full = ((ulong)ntp_msw_seconds << 32) | ntp_lsw_fractions;
 
-                        UInt32 rtp_timestamp = (uint)(e.Message.Data[packetIndex + 16] << 24) + (uint)(e.Message.Data[packetIndex + 17] << 16)
-                        + (uint)(e.Message.Data[packetIndex + 18] << 8) + (uint)(e.Message.Data[packetIndex + 19]);
+                        // Plant the SR-derived anchor on the matching
+                        // per-stream clock (Layer 4e(iv)). The PTS monitor
+                        // (Layer 4f) reads this when committing each sample
+                        // to detect the MS-DMCT >200ms-behind / >2000ms-ahead
+                        // thresholds.
+                        ApplyRtcpSenderReport(rtcp_ssrc, ntp_full, rtp_timestamp_sr);
 
-                        double ntp = ntp_msw_seconds + (ntp_lsw_fractions / UInt32.MaxValue);
-
-                        // NTP Most Signigicant Word is relative to 0h, 1 Jan 1900
-                        // This will wrap around in 2036
-                        DateTime time = new DateTime(1900, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-
-                        time = time.AddSeconds((double)ntp_msw_seconds); // adds 'double' (whole&fraction)
-
-                        System.Diagnostics.Debug.WriteLine("RTCP time (UTC) for RTP timestamp " + rtp_timestamp + " is " + time);
-
-                        // Send a Receiver Report
-                        try {
-                            byte[] rtcp_receiver_report = new byte[8];
-                            int version = 2;
-                            int paddingBit = 0;
-                            int reportCount = 0; // an empty report
-                            int packetType = 201; // Receiver Report
-                            int length = (rtcp_receiver_report.Length / 4) - 1; // num 32 bit words minus 1
-                            rtcp_receiver_report[0] = (byte)((version << 6) + (paddingBit << 5) + reportCount);
-                            rtcp_receiver_report[1] = (byte)(packetType);
-                            rtcp_receiver_report[2] = (byte)((length >> 8) & 0xFF);
-                            rtcp_receiver_report[3] = (byte)((length >> 0) & 0XFF);
-                            rtcp_receiver_report[4] = (byte)((ssrc >> 24) & 0xFF);
-                            rtcp_receiver_report[5] = (byte)((ssrc >> 16) & 0xFF);
-                            rtcp_receiver_report[6] = (byte)((ssrc >> 8) & 0xFF);
-                            rtcp_receiver_report[7] = (byte)((ssrc >> 0) & 0xFF);
-
-                            if (rtp_transport == RTP_TRANSPORT.TCP) {
-                                // Send it over via the RTSP connection
-                                rtsp_client.SendData(video_rtcp_channel, rtcp_receiver_report);
-                            }
-                            if (rtp_transport == RTP_TRANSPORT.UDP || rtp_transport == RTP_TRANSPORT.MULTICAST) {
-                                // Send it via a UDP Packet
-                                System.Diagnostics.Debug.WriteLine("TODO - Need to implement RTCP over UDP");
-                            }
-
-                        } catch {
-                            System.Diagnostics.Debug.WriteLine("Error writing RTCP packet");
+                        // Periodic RR is already paced by StartRtcpReceiverReports
+                        // (~2 Hz timer in _rtcpTimer) for both UDP and TCP transports,
+                        // so we no longer ad-hoc send an extra RR per inbound SR.
+                    } else if (rtcp_packet_type == 203) {
+                        // BYE — RFC 3550 §6.6. Server is dropping the stream
+                        // for the SSRCs listed in the packet. Log and (for
+                        // a stream we depend on) surface as Disconnected
+                        // so AVCTRL can emit RTSP_DISCONNECT.
+                        bool dropsAudio = (rtcp_ssrc == _audioServerDataSsrc &&
+                                           _audioServerDataSsrc != 0);
+                        bool dropsVideo = (rtcp_ssrc == _videoServerDataSsrc &&
+                                           _videoServerDataSsrc != 0);
+                        if (dropsAudio || dropsVideo) {
+                            RaiseDisconnected(new System.IO.IOException(
+                                $"RTCP BYE for {(dropsAudio ? "audio" : "video")} stream " +
+                                $"ssrc=0x{rtcp_ssrc:X8}"));
+                        } else {
+                            Debug.WriteLine($"[rtcp] BYE for unrelated ssrc=0x{rtcp_ssrc:X8}");
                         }
                     }
+                    // PT 201 RR / 202 SDES / 204 APP / 207 XR — log-only.
 
                     packetIndex = packetIndex + ((rtcp_length + 1) * 4);
                 }
@@ -2609,6 +3031,15 @@ namespace SoftSled.Components.RTSP {
         public void Rtp_AudioDataReceived(object sender, Rtsp.RtspChunkEventArgs e) {
 
             RtspData data_received = e.Message as RtspData;
+            try {
+                if (System.Threading.Interlocked.Exchange(ref _audRecvLoggedOnce, 1) == 0) {
+                    int pt = e.Message.Data.Length > 1 ? (e.Message.Data[1] & 0x7F) : -1;
+                    CommitDiagLog($"Rtp_AudioDataReceived: FIRST chan={data_received.Channel} pt={pt} " +
+                                  $"audio_data_channel={audio_data_channel} audio_rtcp_channel={audio_rtcp_channel} " +
+                                  $"video_data_channel={video_data_channel} dictHasPt={(pt >= 0 && wmfPayloadDataDict.ContainsKey(pt))} " +
+                                  $"dictCodec={(pt >= 0 && wmfPayloadDataDict.ContainsKey(pt) ? wmfPayloadDataDict[pt].Codec ?? "(null)" : "(no-entry)")}");
+                }
+            } catch { }
 
             // Check which channel the Data was received on.
             // eg the Video Channel, the Video Control Channel (RTCP)
@@ -2648,58 +3079,59 @@ namespace SoftSled.Components.RTSP {
                                       + " SSRC=" + rtcp_ssrc);
 
                     if (rtcp_packet_type == 200) {
-                        // We have received a Sender Report
-                        // Use it to convert the RTP timestamp into the UTC time
+                        // SR (Sender Report). Carries the per-stream NTP↔RTP
+                        // anchor we need for absolute A/V timing.
+                        //
+                        //  off 4..7   sender SSRC
+                        //  off 8..15  NTP timestamp (64-bit fixed-point)
+                        //  off 16..19 RTP timestamp paired with above NTP
 
-                        UInt32 ntp_msw_seconds = (uint)(e.Message.Data[packetIndex + 8] << 24) + (uint)(e.Message.Data[packetIndex + 9] << 16)
-                        + (uint)(e.Message.Data[packetIndex + 10] << 8) + (uint)(e.Message.Data[packetIndex + 11]);
+                        UInt32 ntp_msw_seconds =
+                            (uint)(e.Message.Data[packetIndex + 8]  << 24) |
+                            (uint)(e.Message.Data[packetIndex + 9]  << 16) |
+                            (uint)(e.Message.Data[packetIndex + 10] << 8)  |
+                            (uint)(e.Message.Data[packetIndex + 11]);
+                        UInt32 ntp_lsw_fractions =
+                            (uint)(e.Message.Data[packetIndex + 12] << 24) |
+                            (uint)(e.Message.Data[packetIndex + 13] << 16) |
+                            (uint)(e.Message.Data[packetIndex + 14] << 8)  |
+                            (uint)(e.Message.Data[packetIndex + 15]);
+                        UInt32 rtp_timestamp_sr =
+                            (uint)(e.Message.Data[packetIndex + 16] << 24) |
+                            (uint)(e.Message.Data[packetIndex + 17] << 16) |
+                            (uint)(e.Message.Data[packetIndex + 18] << 8)  |
+                            (uint)(e.Message.Data[packetIndex + 19]);
 
-                        UInt32 ntp_lsw_fractions = (uint)(e.Message.Data[packetIndex + 12] << 24) + (uint)(e.Message.Data[packetIndex + 13] << 16)
-                        + (uint)(e.Message.Data[packetIndex + 14] << 8) + (uint)(e.Message.Data[packetIndex + 15]);
+                        ulong ntp_full = ((ulong)ntp_msw_seconds << 32) | ntp_lsw_fractions;
 
-                        UInt32 rtp_timestamp = (uint)(e.Message.Data[packetIndex + 16] << 24) + (uint)(e.Message.Data[packetIndex + 17] << 16)
-                        + (uint)(e.Message.Data[packetIndex + 18] << 8) + (uint)(e.Message.Data[packetIndex + 19]);
+                        // Plant the SR-derived anchor on the matching
+                        // per-stream clock (Layer 4e(iv)). The PTS monitor
+                        // (Layer 4f) reads this when committing each sample
+                        // to detect the MS-DMCT >200ms-behind / >2000ms-ahead
+                        // thresholds.
+                        ApplyRtcpSenderReport(rtcp_ssrc, ntp_full, rtp_timestamp_sr);
 
-                        double ntp = ntp_msw_seconds + (ntp_lsw_fractions / UInt32.MaxValue);
-
-                        // NTP Most Signigicant Word is relative to 0h, 1 Jan 1900
-                        // This will wrap around in 2036
-                        DateTime time = new DateTime(1900, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-
-                        time = time.AddSeconds((double)ntp_msw_seconds); // adds 'double' (whole&fraction)
-
-                        System.Diagnostics.Debug.WriteLine("RTCP time (UTC) for RTP timestamp " + rtp_timestamp + " is " + time);
-
-                        // Send a Receiver Report
-                        try {
-                            byte[] rtcp_receiver_report = new byte[8];
-                            int version = 2;
-                            int paddingBit = 0;
-                            int reportCount = 0; // an empty report
-                            int packetType = 201; // Receiver Report
-                            int length = (rtcp_receiver_report.Length / 4) - 1; // num 32 bit words minus 1
-                            rtcp_receiver_report[0] = (byte)((version << 6) + (paddingBit << 5) + reportCount);
-                            rtcp_receiver_report[1] = (byte)(packetType);
-                            rtcp_receiver_report[2] = (byte)((length >> 8) & 0xFF);
-                            rtcp_receiver_report[3] = (byte)((length >> 0) & 0XFF);
-                            rtcp_receiver_report[4] = (byte)((ssrc >> 24) & 0xFF);
-                            rtcp_receiver_report[5] = (byte)((ssrc >> 16) & 0xFF);
-                            rtcp_receiver_report[6] = (byte)((ssrc >> 8) & 0xFF);
-                            rtcp_receiver_report[7] = (byte)((ssrc >> 0) & 0xFF);
-
-                            if (rtp_transport == RTP_TRANSPORT.TCP) {
-                                // Send it over via the RTSP connection
-                                rtsp_client.SendData(video_rtcp_channel, rtcp_receiver_report);
-                            }
-                            if (rtp_transport == RTP_TRANSPORT.UDP || rtp_transport == RTP_TRANSPORT.MULTICAST) {
-                                // Send it via a UDP Packet
-                                System.Diagnostics.Debug.WriteLine("TODO - Need to implement RTCP over UDP");
-                            }
-
-                        } catch {
-                            System.Diagnostics.Debug.WriteLine("Error writing RTCP packet");
+                        // Periodic RR is already paced by StartRtcpReceiverReports
+                        // (~2 Hz timer in _rtcpTimer) for both UDP and TCP transports,
+                        // so we no longer ad-hoc send an extra RR per inbound SR.
+                    } else if (rtcp_packet_type == 203) {
+                        // BYE — RFC 3550 §6.6. Server is dropping the stream
+                        // for the SSRCs listed in the packet. Log and (for
+                        // a stream we depend on) surface as Disconnected
+                        // so AVCTRL can emit RTSP_DISCONNECT.
+                        bool dropsAudio = (rtcp_ssrc == _audioServerDataSsrc &&
+                                           _audioServerDataSsrc != 0);
+                        bool dropsVideo = (rtcp_ssrc == _videoServerDataSsrc &&
+                                           _videoServerDataSsrc != 0);
+                        if (dropsAudio || dropsVideo) {
+                            RaiseDisconnected(new System.IO.IOException(
+                                $"RTCP BYE for {(dropsAudio ? "audio" : "video")} stream " +
+                                $"ssrc=0x{rtcp_ssrc:X8}"));
+                        } else {
+                            Debug.WriteLine($"[rtcp] BYE for unrelated ssrc=0x{rtcp_ssrc:X8}");
                         }
                     }
+                    // PT 201 RR / 202 SDES / 204 APP / 207 XR — log-only.
 
                     packetIndex = packetIndex + ((rtcp_length + 1) * 4);
                 }
@@ -3694,18 +4126,15 @@ namespace SoftSled.Components.RTSP {
 
                     setup_messages.RemoveAt(0);
                 } else {
-                    // Send PLAY
-                    RtspRequest play_message = new Rtsp.Messages.RtspRequestPlay();
-                    play_message.RtspUri = new Uri(url);
-                    play_message.Session = session;
-                    play_message.AddHeader(LanguageHeader);
-                    //play_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-                    play_message.AddHeader(SupportedHeader);
-                    play_message.AddHeader(UserAgent);
-                    if (auth_type != null) {
-                        AddAuthorization(play_message, username, password, auth_type, realm, nonce, url);
-                    }
-                    rtsp_client.SendMessage(play_message);
+                    // Send the auto-PLAY — the single PLAY that initial
+                    // playback hangs off, fired after every SETUP has
+                    // its response back. Routes through SendPlayWithCachedParams
+                    // so any startMs/rate that WMC requested via Start
+                    // while we were still doing SETUPs gets folded into
+                    // this PLAY's Range:/Scale:/Speed: headers. Avoids
+                    // the multi-PLAY storm we were producing when Start
+                    // fired a separate Play() before the auto-PLAY.
+                    SendPlayWithCachedParams();
                 }
             }
 
@@ -3752,6 +4181,13 @@ namespace SoftSled.Components.RTSP {
 
         }
 
+        // Flag set by Stop() so the keepalive miss-counter (and any other
+        // background path that observes a socket exception) knows the
+        // disconnect is user-initiated and shouldn't escalate to a
+        // Disconnected event.
+        private volatile bool _stopRequested;
+        private int _keepaliveConsecutiveFailures;
+
         void Timer_Elapsed(object sender, System.Timers.ElapsedEventArgs e) {
             // Send Keepalive message
             // The ONVIF Standard uses SET_PARAMETER as "an optional method to keep an RTSP session alive"
@@ -3759,33 +4195,47 @@ namespace SoftSled.Components.RTSP {
 
             // This code uses GET_PARAMETER (unless OPTIONS report it is not supported, and then it sends OPTIONS as a keepalive)
 
+            if (_stopRequested) return;
 
-            if (server_supports_get_parameter) {
+            try {
+                if (server_supports_get_parameter) {
 
-                Rtsp.Messages.RtspRequest getparam_message = new Rtsp.Messages.RtspRequestGetParameter();
-                getparam_message.RtspUri = new Uri(url);
-                getparam_message.Session = session;
-                getparam_message.AddHeader(LanguageHeader);
-                //getparam_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-                getparam_message.AddHeader(SupportedHeader);
-                getparam_message.AddHeader(UserAgent);
-                if (auth_type != null) {
-                    AddAuthorization(getparam_message, username, password, auth_type, realm, nonce, url);
+                    Rtsp.Messages.RtspRequest getparam_message = new Rtsp.Messages.RtspRequestGetParameter();
+                    getparam_message.RtspUri = new Uri(url);
+                    getparam_message.Session = session;
+                    getparam_message.AddHeader(LanguageHeader);
+                    //getparam_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                    getparam_message.AddHeader(SupportedHeader);
+                    getparam_message.AddHeader(UserAgent);
+                    if (auth_type != null) {
+                        AddAuthorization(getparam_message, username, password, auth_type, realm, nonce, url);
+                    }
+                    rtsp_client.SendMessage(getparam_message);
+
+                } else {
+
+                    Rtsp.Messages.RtspRequest options_message = new Rtsp.Messages.RtspRequestOptions();
+                    options_message.RtspUri = new Uri(url);
+                    options_message.AddHeader(LanguageHeader);
+                    //options_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                    options_message.AddHeader(SupportedHeader);
+                    options_message.AddHeader(UserAgent);
+                    if (auth_type != null) {
+                        AddAuthorization(options_message, username, password, auth_type, realm, nonce, url);
+                    }
+                    rtsp_client.SendMessage(options_message);
                 }
-                rtsp_client.SendMessage(getparam_message);
-
-            } else {
-
-                Rtsp.Messages.RtspRequest options_message = new Rtsp.Messages.RtspRequestOptions();
-                options_message.RtspUri = new Uri(url);
-                options_message.AddHeader(LanguageHeader);
-                //options_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-                options_message.AddHeader(SupportedHeader);
-                options_message.AddHeader(UserAgent);
-                if (auth_type != null) {
-                    AddAuthorization(options_message, username, password, auth_type, realm, nonce, url);
+                // Reset miss counter on every successful send.
+                System.Threading.Interlocked.Exchange(ref _keepaliveConsecutiveFailures, 0);
+            } catch (Exception ex) {
+                int fails = System.Threading.Interlocked.Increment(ref _keepaliveConsecutiveFailures);
+                Debug.WriteLine($"[rtsp] keepalive send failed ({fails} consecutive): {ex.Message}");
+                // Layer 4d: after 2 consecutive keepalive misses, treat
+                // the session as disconnected. (Single misses can be
+                // transient — TCP retransmit cycle, brief CPU stall, etc.)
+                if (fails >= 2 && !_stopRequested) {
+                    RaiseDisconnected(ex);
                 }
-                rtsp_client.SendMessage(options_message);
             }
         }
 
@@ -3845,6 +4295,150 @@ namespace SoftSled.Components.RTSP {
         }
 
         //public void AddWMFPayloadData()
+
+        // ===================================================================
+        //  StreamClock — per-stream RTP↔NTP anchor (Layer 4e(iv))
+        //  ------------------------------------------------------------------
+        //  Set on every RTCP SR (PT=200) for a known SSRC. Read by the
+        //  depacketizers when committing a sample to get the absolute
+        //  presentation time in milliseconds.
+        // ===================================================================
+        private sealed class StreamClock {
+            public uint SSRC;
+            public uint ClockHz;            // from rtpmap; 90000 video / variable audio
+            public ulong AnchorNtp;         // RFC 3550: middle 32 bits of NTP fixed-point
+                                            //   actually we store the FULL 64-bit value
+            public uint AnchorRtp;          // RTP timestamp paired with AnchorNtp
+            public bool HasAnchor;
+
+            /// <summary>Convert an RTP timestamp into an absolute wall-clock
+            /// presentation time in milliseconds. Returns 0 if no SR has
+            /// been received yet for this stream.</summary>
+            public long PtsMs(uint rtpTs) {
+                if (!HasAnchor || ClockHz == 0) return 0;
+                // signed delta handles RTP-timestamp wraparound (~13 h @ 90 kHz)
+                int delta = unchecked((int)(rtpTs - AnchorRtp));
+                long deltaMs = (long)delta * 1000L / ClockHz;
+                return NtpToWallMs(AnchorNtp) + deltaMs;
+            }
+
+            /// <summary>Convert a 64-bit NTP timestamp (RFC 5905 §6) to
+            /// milliseconds since the Unix epoch.</summary>
+            public static long NtpToWallMs(ulong ntp) {
+                // Upper 32 bits = seconds since 1900-01-01 (NTP epoch).
+                // Lower 32 bits = fractional seconds (×2^32).
+                const long unixToNtpSeconds = 2208988800L; // diff between 1900 and 1970 epochs
+                uint secsSinceNtpEpoch = (uint)(ntp >> 32);
+                uint frac = (uint)(ntp & 0xFFFFFFFFu);
+                long unixSecs = (long)secsSinceNtpEpoch - unixToNtpSeconds;
+                long fracMs = (long)((frac / 4294967296.0) * 1000.0);
+                return unixSecs * 1000L + fracMs;
+            }
+        }
+
+        /// <summary>
+        /// Apply an incoming RTCP SR (PT=200) to the matching StreamClock.
+        /// Called from the RTCP compound-packet parser (Layer 4e(iii)).
+        /// </summary>
+        internal void ApplyRtcpSenderReport(uint senderSsrc, ulong ntpTimestamp, uint rtpTimestamp) {
+            if (senderSsrc == _audioServerDataSsrc && _audioServerDataSsrc != 0) {
+                if (_audioClock == null) {
+                    _audioClock = new StreamClock { SSRC = senderSsrc, ClockHz = _audioClockHz };
+                }
+                _audioClock.AnchorNtp = ntpTimestamp;
+                _audioClock.AnchorRtp = rtpTimestamp;
+                _audioClock.HasAnchor = true;
+            } else if (senderSsrc == _videoServerDataSsrc && _videoServerDataSsrc != 0) {
+                if (_videoClock == null) {
+                    _videoClock = new StreamClock { SSRC = senderSsrc, ClockHz = _videoClockHz };
+                }
+                _videoClock.AnchorNtp = ntpTimestamp;
+                _videoClock.AnchorRtp = rtpTimestamp;
+                _videoClock.HasAnchor = true;
+            }
+            // else: SR for an unknown SSRC (e.g. a stream we didn't SETUP) — ignore.
+        }
+
+        /// <summary>
+        /// Monitor a freshly-committed sample's PTS for the spec thresholds.
+        /// Called from inside the audio + video depacketizer callbacks
+        /// (Layer 4f). The check is best-effort — if no SR has anchored
+        /// the per-stream clock yet, we return without firing.
+        /// </summary>
+        private void MonitorPts(bool isAudio, uint rtpTs) {
+            StreamClock clock = isAudio ? _audioClock : _videoClock;
+            if (clock == null || !clock.HasAnchor) return;
+
+            long ptsMs = clock.PtsMs(rtpTs);
+            long prev = isAudio ? _lastAudioPtsMs : _lastVideoPtsMs;
+
+            // First-sample-after-seek capture — used by Layer 4g(b).
+            if (isAudio) {
+                if (System.Threading.Interlocked.CompareExchange(
+                        ref _firstAudioPtsCapturedMs, ptsMs, long.MinValue) == long.MinValue) {
+                    CheckFirstSampleAvSkew();
+                }
+            } else {
+                if (System.Threading.Interlocked.CompareExchange(
+                        ref _firstVideoPtsCapturedMs, ptsMs, long.MinValue) == long.MinValue) {
+                    CheckFirstSampleAvSkew();
+                }
+            }
+
+            // MS-DMCT 2.2.2.1.2.4: behind by >200ms OR ahead by >2000ms vs.
+            // the previous sample on this stream fires PTS_ERROR.
+            if (prev > 0) {
+                long delta = ptsMs - prev;
+                if (delta < -200 || delta > 2000) {
+                    RaisePtsError(new PtsErrorInfo(isAudio, prev, ptsMs));
+                }
+            }
+
+            if (isAudio) _lastAudioPtsMs = ptsMs;
+            else _lastVideoPtsMs = ptsMs;
+        }
+
+        /// <summary>
+        /// Layer 4g(b): once both first-sample PTS values are captured
+        /// after a seek, compare and fire UNRECOVERABLE_SKEW if the gap
+        /// exceeds 3500ms. Only fires once per seek.
+        /// </summary>
+        private void CheckFirstSampleAvSkew() {
+            long a = System.Threading.Interlocked.Read(ref _firstAudioPtsCapturedMs);
+            long v = System.Threading.Interlocked.Read(ref _firstVideoPtsCapturedMs);
+            if (a == long.MinValue || v == long.MinValue) return;  // still waiting
+            if (System.Threading.Interlocked.Exchange(ref _avSkewFiredForThisSeek, 1) != 0) return;
+            long skew = System.Math.Abs(v - a);
+            if (skew > 3500) {
+                RaiseUnrecoverableSkew(new SkewInfo(SkewInfo.Cause.FirstSampleAvSkew, skew));
+            }
+        }
+
+        /// <summary>
+        /// Layer 4g(a): start the decoder-open stopwatch the first time
+        /// a sample is handed to FFME. Called from the producer-submit
+        /// path of whichever pipeline commits first.
+        /// </summary>
+        internal void ArmDecoderOpenStopwatch() {
+            if (System.Threading.Interlocked.Exchange(ref _decoderOpenArmed, 1) == 0) {
+                _decoderOpenSw.Restart();
+            }
+        }
+
+        /// <summary>
+        /// Layer 4g(a): called by the host (via FfmeMediaController) when
+        /// FFME raises MediaOpened. Stops the stopwatch and fires
+        /// UNRECOVERABLE_SKEW if open took longer than 500ms.
+        /// </summary>
+        public void NotifyDecoderOpened() {
+            if (_decoderOpenArmed == 0) return;
+            if (System.Threading.Interlocked.Exchange(ref _decoderOpenFired, 1) != 0) return;
+            _decoderOpenSw.Stop();
+            long openMs = _decoderOpenSw.ElapsedMilliseconds;
+            if (openMs > 500) {
+                RaiseUnrecoverableSkew(new SkewInfo(SkewInfo.Cause.DecoderOpenTooSlow, openMs));
+            }
+        }
 
     }
 

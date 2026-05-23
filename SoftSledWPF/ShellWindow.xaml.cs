@@ -111,6 +111,22 @@ namespace SoftSledWPF {
             // path so it acts as a "leave session" gesture; without that,
             // the only way out would be to alt-F4 the window.
             if (CurrentPage is ExtenderSessionControl session) {
+                // Ctrl+L: local logger overlay toggle. Must be handled
+                // BEFORE ForwardKey so we don't ship it into RDP — the
+                // session-active path catches every key by design, which
+                // is why the previous Ctrl+L attempt did nothing.
+                //
+                // Check the modifier (Ctrl held) AND the bare key (L) —
+                // WPF reports Key.L for both 'l' and 'L' so a single
+                // comparison suffices. Also short-circuits if the user
+                // is pressing a different Ctrl+letter sequence.
+                if (e.Key == Key.L &&
+                    (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control) {
+                    session.ToggleLogger();
+                    e.Handled = true;
+                    return;
+                }
+
                 if (e.Key == Key.Escape) {
                     // Disconnect (cleanly) and let SessionEnded pop us back.
                     session.Stop();

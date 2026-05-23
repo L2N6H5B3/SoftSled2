@@ -58,6 +58,96 @@ namespace SoftSled.Components.Splash {
 
         public SplashRenderHost RenderHost => _host;
 
+        // ============================================================
+        //  Surface-rect lookup for the playback Surface Router
+        //  (Layer 6 of the media playback plan)
+        // ------------------------------------------------------------
+        //  MS-DMCT OpenMedia's Surface ID is the same uint handle that
+        //  the splash channel assigns via SurfacePool_CreateSurface
+        //  (MS-RRSP2 §2.2.4.12.2 — the idNewSurface u32). So when
+        //  AvCtrlHandler hands us a Surface ID, we can look it up in
+        //  the object registry to confirm the surface exists, and then
+        //  position the video element at the surface's screen-space
+        //  rectangle.
+        //
+        //  v1 simplification: full positional traversal (walking from
+        //  SplashSurface up through every SplashVisual that draws it,
+        //  applying transforms) is non-trivial. For the typical case
+        //  WMC creates a single main video surface that fills the
+        //  splash host, so v1 returns the SplashRenderHost's full
+        //  client-area rect as long as the surface exists. The
+        //  refined per-surface coordinates can be a follow-up if/when
+        //  WMC exercises a sub-region surface that we'd otherwise
+        //  miss.
+        // ============================================================
+
+        /// <summary>
+        /// Look up the on-screen rectangle for a splash surface handle.
+        /// Returns false if the handle is unknown.
+        /// </summary>
+        public bool TryGetSurfaceScreenRect(uint surfaceId, out Rect rect) {
+            rect = Rect.Empty;
+            if (_host == null) return false;
+            if (!_registry.TryGetObject(surfaceId, out var obj)) return false;
+            if (!(obj is SoftSled.Components.Splash.Objects.SplashSurface)) {
+                // Handle exists but isn't a surface — ignore.
+                return false;
+            }
+            // v1: full host rect. Computed on the dispatcher thread
+            // since RenderHost is a WPF FrameworkElement.
+            if (_uiDispatcher.CheckAccess()) {
+                rect = new Rect(0, 0, _host.ActualWidth, _host.ActualHeight);
+            } else {
+                Rect captured = Rect.Empty;
+                _uiDispatcher.Invoke(new Action(() => {
+                    captured = new Rect(0, 0, _host.ActualWidth, _host.ActualHeight);
+                }));
+                rect = captured;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Fires when the screen rectangle for some surface ID changes
+        /// (host resized, surface re-bound, etc.). The Surface Router
+        /// subscribes and re-aligns the video element.
+        ///
+        /// v1: fires only when the host size changes (since we map all
+        /// surfaces to the host's bounds). Per-surface positional change
+        /// fanout is a follow-up.
+        /// </summary>
+        public event Action<uint /*surfaceId*/, Rect /*newRect*/> SurfaceScreenRectChanged;
+
+        /// <summary>
+        /// Called by the host's size-changed handler (wired up in
+        /// AttachHost) so we can notify subscribers that "the surface
+        /// rectangle is now X" without them having to poll.
+        /// </summary>
+        private void RaiseSurfaceScreenRectChanged() {
+            var handler = SurfaceScreenRectChanged;
+            if (handler == null) return;
+            // Snapshot once and broadcast the same rect for every
+            // surface handle currently registered. Subscribers know to
+            // filter by the surface ID they care about.
+            Rect host = _host == null
+                        ? Rect.Empty
+                        : new Rect(0, 0, _host.ActualWidth, _host.ActualHeight);
+            foreach (var kv in EnumerateSurfaceIds()) {
+                try { handler(kv, host); }
+                catch (Exception ex) {
+                    _logger?.LogError($"[splash] SurfaceScreenRectChanged subscriber threw: {ex.Message}");
+                }
+            }
+        }
+
+        private System.Collections.Generic.IEnumerable<uint> EnumerateSurfaceIds() {
+            // The registry doesn't currently expose an enumerator;
+            // best-effort: walk the internal dict via reflection-free
+            // accessor would need a new method. For now provide a small
+            // helper inside SplashObjectRegistry that returns the IDs.
+            return _registry.EnumerateSurfaceHandles();
+        }
+
         public SplashController(Logger logger, Dispatcher uiDispatcher, bool payloadBigEndian,
                                 Action<byte[]> sendBytes) {
             _logger          = logger;
@@ -73,7 +163,20 @@ namespace SoftSled.Components.Splash {
         }
 
         public void AttachHost(SplashRenderHost host) {
+            if (_host != null) {
+                try { _host.SizeChanged -= HostSizeChanged; } catch { }
+            }
             _host = host;
+            if (_host != null) {
+                _host.SizeChanged += HostSizeChanged;
+            }
+        }
+
+        private void HostSizeChanged(object sender, SizeChangedEventArgs e) {
+            // v1 surface routing: every registered surface gets the
+            // host's full client rect — so a host resize broadcasts
+            // to every subscriber.
+            RaiseSurfaceScreenRectChanged();
         }
 
         public void Reset() {

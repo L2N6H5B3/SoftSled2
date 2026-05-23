@@ -90,7 +90,6 @@
                  Foreground="#E0E0E0"
                  BorderBrush="#60FFFFFF"
                  IsReadOnly="True"
-                 VerticalScrollBarVisibility="Auto"
-                 Visibility="Collapsed"/>
+                 VerticalScrollBarVisibility="Auto" Visibility="Collapsed"/>
     </Grid>
 </UserControl>

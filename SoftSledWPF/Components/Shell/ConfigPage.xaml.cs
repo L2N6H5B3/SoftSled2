@@ -20,7 +20,7 @@ namespace SoftSledWPF.Components.Shell {
     public partial class ConfigPage : UserControl {
 
         /// <summary>Sub-view currently visible. Used by ESC handler.</summary>
-        private enum View { Root, General, Pairing, Video, Ui, About }
+        private enum View { Root, General, Pairing, Video, Ui, Debugging, About }
         private View _currentView = View.Root;
         private SoftSledConfig _config;
         private bool _suppressWrite;
@@ -117,6 +117,11 @@ namespace SoftSledWPF.Components.Shell {
                 ChkPopups.IsChecked            = _config.EnablePopups;
                 ChkToolbar.IsChecked           = _config.EnableToolbar;
                 ChkMouseInput.IsChecked        = _config.EnableMouseInput;
+                ChkLogger.IsChecked            = _config.EnableLogger;
+                ChkLogDevCaps.IsChecked        = _config.LogDevCapsChannel;
+                ChkLogMcxSess.IsChecked        = _config.LogMcxSessChannel;
+                ChkLogAvCtrl.IsChecked         = _config.LogAvCtrlChannel;
+                ChkLogRdpFastpath.IsChecked    = _config.LogRdpFastpath;
                 RefreshResolutionButton();
                 UpdateAnimationDependencies();
 
@@ -136,12 +141,13 @@ namespace SoftSledWPF.Components.Shell {
 
         private void ShowView(View view) {
             _currentView = view;
-            RootView.Visibility     = view == View.Root     ? Visibility.Visible : Visibility.Collapsed;
-            GeneralView.Visibility  = view == View.General  ? Visibility.Visible : Visibility.Collapsed;
-            PairingView.Visibility  = view == View.Pairing  ? Visibility.Visible : Visibility.Collapsed;
-            VideoView.Visibility    = view == View.Video    ? Visibility.Visible : Visibility.Collapsed;
-            UiView.Visibility       = view == View.Ui       ? Visibility.Visible : Visibility.Collapsed;
-            AboutView.Visibility    = view == View.About    ? Visibility.Visible : Visibility.Collapsed;
+            RootView.Visibility      = view == View.Root      ? Visibility.Visible : Visibility.Collapsed;
+            GeneralView.Visibility   = view == View.General   ? Visibility.Visible : Visibility.Collapsed;
+            PairingView.Visibility   = view == View.Pairing   ? Visibility.Visible : Visibility.Collapsed;
+            VideoView.Visibility     = view == View.Video     ? Visibility.Visible : Visibility.Collapsed;
+            UiView.Visibility        = view == View.Ui        ? Visibility.Visible : Visibility.Collapsed;
+            DebuggingView.Visibility = view == View.Debugging ? Visibility.Visible : Visibility.Collapsed;
+            AboutView.Visibility     = view == View.About     ? Visibility.Visible : Visibility.Collapsed;
 
             BreadcrumbText.Text = view == View.Root ? "" : view.ToString().ToLowerInvariant();
             HeaderText.Text     = view == View.Root ? "settings" : "settings";
@@ -163,6 +169,9 @@ namespace SoftSledWPF.Components.Shell {
                     break;
                 case View.Ui:
                     ChkUiSounds.Focus();
+                    break;
+                case View.Debugging:
+                    ChkLogger.Focus();
                     break;
                 case View.About:
                     // Nothing focusable — focus the page itself so back keys
@@ -189,11 +198,12 @@ namespace SoftSledWPF.Components.Shell {
         }
 
         private void ActivateRoot(ListBoxItem item) {
-            if (item == ItemGeneral)       ShowView(View.General);
-            else if (item == ItemPairing)  ShowView(View.Pairing);
-            else if (item == ItemVideo)    ShowView(View.Video);
-            else if (item == ItemUi)       ShowView(View.Ui);
-            else if (item == ItemAbout)    ShowView(View.About);
+            if (item == ItemGeneral)         ShowView(View.General);
+            else if (item == ItemPairing)    ShowView(View.Pairing);
+            else if (item == ItemVideo)      ShowView(View.Video);
+            else if (item == ItemUi)         ShowView(View.Ui);
+            else if (item == ItemDebugging)  ShowView(View.Debugging);
+            else if (item == ItemAbout)      ShowView(View.About);
         }
 
         // ---- Live tickbox persistence ---------------------------------
@@ -215,6 +225,11 @@ namespace SoftSledWPF.Components.Shell {
             _config.EnablePopups            = ChkPopups.IsChecked == true;
             _config.EnableToolbar           = ChkToolbar.IsChecked == true;
             _config.EnableMouseInput        = ChkMouseInput.IsChecked == true;
+            _config.EnableLogger            = ChkLogger.IsChecked == true;
+            _config.LogDevCapsChannel       = ChkLogDevCaps.IsChecked == true;
+            _config.LogMcxSessChannel       = ChkLogMcxSess.IsChecked == true;
+            _config.LogAvCtrlChannel        = ChkLogAvCtrl.IsChecked == true;
+            _config.LogRdpFastpath          = ChkLogRdpFastpath.IsChecked == true;
 
             try {
                 SoftSledConfigManager.WriteConfig(_config);

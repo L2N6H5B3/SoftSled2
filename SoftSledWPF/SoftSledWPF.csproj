@@ -187,6 +187,9 @@
     <Compile Include="Components\AudioVisual\WmcFastpathOverlayRegionDecoder.cs" />
     <Compile Include="Components\AudioVisual\IMediaController.cs" />
     <Compile Include="Components\AudioVisual\FfmeMediaController.cs" />
+    <Compile Include="Components\AudioVisual\PtsErrorInfo.cs" />
+    <Compile Include="Components\AudioVisual\SkewInfo.cs" />
+    <Compile Include="Components\AudioVisual\SurfaceRouter.cs" />
     <Compile Include="Components\AudioVisual\WmrptPcmNAudioSink.cs" />
     <Compile Include="Components\AudioVisual\Mp3OverRtpAudioSink.cs" />
     <Compile Include="Components\AudioVisual\MpegPsMuxer.cs" />
@@ -228,6 +231,7 @@
     <Compile Include="Components\RTSP\Messages\RTSPRequestAnnounce.cs" />
     <Compile Include="Components\RTSP\Messages\RTSPRequestDescribe.cs" />
     <Compile Include="Components\RTSP\Messages\RTSPRequestGetParameter.cs" />
+    <Compile Include="Components\RTSP\Messages\RTSPRequestSetParameter.cs" />
     <Compile Include="Components\RTSP\Messages\RTSPRequestOptions.cs" />
     <Compile Include="Components\RTSP\Messages\RTSPRequestPause.cs" />
     <Compile Include="Components\RTSP\Messages\RTSPRequestPlay.cs" />

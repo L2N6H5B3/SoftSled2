@@ -8,7 +8,7 @@ namespace SoftSled.Components.Extender {
 
         private readonly WMCRenderMode WMCRenderMode;
         private readonly List<DeviceCapability> Capabilities;
-
+        
         public ExtenderCapabilities() {
 
             // Create List to hold Device Capabilities
@@ -175,7 +175,6 @@ namespace SoftSled.Components.Extender {
         public WMCRenderMode GetRenderMode() {
             return WMCRenderMode;
         }
-
     }
 
     public class DeviceCapability {

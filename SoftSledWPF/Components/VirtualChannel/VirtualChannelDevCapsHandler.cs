@@ -65,10 +65,10 @@ namespace SoftSled.Components.VirtualChannel {
                             // DSPA DevCaps ClassID
                             case "ef22f459-6b7e-48ba-8838-e2bef821df3c":
                                 DSPAServiceHandle = createServiceServiceHandle;
-                                m_logger.LogDebug($"{channelName.ToUpper()}: CreateService DSPA ({DSPAServiceHandle})");
+                                m_logger?.LogDebug($"{channelName.ToUpper()}: CreateService DSPA ({DSPAServiceHandle})");
                                 break;
                             default:
-                                m_logger.LogDebug($"{channelName.ToUpper()}: CreateService ClassID {createServiceClassID} with ServiceID {createServiceServiceID} not available");
+                                m_logger?.LogDebug($"{channelName.ToUpper()}: CreateService ClassID {createServiceClassID} with ServiceID {createServiceServiceID} not available");
                                 break;
                         }
 
@@ -93,11 +93,11 @@ namespace SoftSled.Components.VirtualChannel {
 
                         // If this is the DSPA Service
                         if (deleteServiceServiceHandle == DSPAServiceHandle) {
-                            m_logger.LogDebug($"{channelName.ToUpper()}: DeleteService DSPA ({DSPAServiceHandle})");
+                            m_logger?.LogDebug($"{channelName.ToUpper()}: DeleteService DSPA ({DSPAServiceHandle})");
                             // Clear the DSPA Service
                             DSPAServiceHandle = 0;
                         } else {
-                            m_logger.LogDebug($"{channelName.ToUpper()}: DeleteService Handle ({deleteServiceServiceHandle}) not found");
+                            m_logger?.LogDebug($"{channelName.ToUpper()}: DeleteService Handle ({deleteServiceServiceHandle}) not found");
                         }
 
                         // Initialise DeleteService Response
@@ -114,7 +114,7 @@ namespace SoftSled.Components.VirtualChannel {
                     // Unknown Request
                     else {
 
-                        m_logger.LogDebug($"{channelName.ToUpper()}: Unknown DSLR Request {dispatchFunctionHandle} not implemented");
+                        m_logger?.LogDebug($"{channelName.ToUpper()}: Unknown DSLR Request {dispatchFunctionHandle} not implemented");
 
                     }
 
@@ -135,7 +135,7 @@ namespace SoftSled.Components.VirtualChannel {
                         int GetStringPropertyPayloadLength = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2);
                         string GetStringPropertyPayloadPropertyName = DataUtilities.GetByteArrayString(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4, GetStringPropertyPayloadLength);
 
-                        m_logger.LogDebug($"{channelName.ToUpper()}: GetStringProperty ({GetStringPropertyPayloadPropertyName.Replace("\0", "")})");
+                        m_logger?.LogDebug($"{channelName.ToUpper()}: GetStringProperty ({GetStringPropertyPayloadPropertyName.Replace("\0", "")})");
 
                         byte[] response = null;
 
@@ -149,7 +149,7 @@ namespace SoftSled.Components.VirtualChannel {
                                 );
                                 break;
                             case "PRT":
-                                m_logger.LogDebug($"{channelName.ToUpper()}: PRT String");
+                                m_logger?.LogDebug($"{channelName.ToUpper()}: PRT String");
                                 // Initialise GetStringProperty Response
                                 response = DSLRCommunication.GetStringPropertyResponse(
                                    DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
@@ -169,7 +169,7 @@ namespace SoftSled.Components.VirtualChannel {
                                 ////response = DSLRCommunication.GetStringPropertyNullResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
                                 //break;
                             case "XTY":
-                                m_logger.LogDebug($"{channelName.ToUpper()}: XTY String");
+                                m_logger?.LogDebug($"{channelName.ToUpper()}: XTY String");
                                 // Initialise GetStringProperty Response
                                 response = DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
@@ -184,7 +184,7 @@ namespace SoftSled.Components.VirtualChannel {
                                 );
                                 break;
                             default:
-                                m_logger.LogDebug($"{channelName.ToUpper()}: GetStringProperty ({GetStringPropertyPayloadPropertyName}) not available");
+                                m_logger?.LogDebug($"{channelName.ToUpper()}: GetStringProperty ({GetStringPropertyPayloadPropertyName}) not available");
                                 break;
                         }
 
@@ -210,11 +210,11 @@ namespace SoftSled.Components.VirtualChannel {
                         var devCapsEntry = deviceCapabilities.FirstOrDefault(xx => xx.Name.StartsWith(GetDWORDPropertyPayloadPropertyName.Replace("\0", "")));
                         if (devCapsEntry.Enabled) {
                             response = DSLRCommunication.DeviceCapabilityTrueGetDWORDPropertyResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
-                            m_logger.LogDebug($"{channelName.ToUpper()}: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName.Replace("\0", "")}) True");
+                            m_logger?.LogDebug($"{channelName.ToUpper()}: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName.Replace("\0", "")}) True");
                             
                         } else {
                             response = DSLRCommunication.DeviceCapabilityFalseGetDWORDPropertyResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
-                            m_logger.LogDebug($"{channelName.ToUpper()}: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName.Replace("\0", "")}) False");
+                            m_logger?.LogDebug($"{channelName.ToUpper()}: GetDWORDProperty ({GetDWORDPropertyPayloadPropertyName.Replace("\0", "")}) False");
                         }
 
                         // Encapsulate the Response (Doesn't seem to work without this?)
@@ -225,7 +225,7 @@ namespace SoftSled.Components.VirtualChannel {
 
                     } else {
 
-                        m_logger.LogDebug($"{channelName.ToUpper()}: Unknown DSPA Request {dispatchFunctionHandle} not implemented");
+                        m_logger?.LogDebug($"{channelName.ToUpper()}: Unknown DSPA Request {dispatchFunctionHandle} not implemented");
 
                     }
 
@@ -233,17 +233,17 @@ namespace SoftSled.Components.VirtualChannel {
 
                 } else {
 
-                    m_logger.LogDebug($"{channelName.ToUpper()}: Unknown {dispatchServiceHandle} Request {dispatchFunctionHandle} not implemented");
+                    m_logger?.LogDebug($"{channelName.ToUpper()}: Unknown {dispatchServiceHandle} Request {dispatchFunctionHandle} not implemented");
 
                 }
 
             } else if (dispatchCallingConvention == 2) {
 
-                m_logger.LogDebug($"{channelName.ToUpper()}: Response {dispatchRequestHandle} not implemented");
+                m_logger?.LogDebug($"{channelName.ToUpper()}: Response {dispatchRequestHandle} not implemented");
 
             } else {
 
-                m_logger.LogDebug($"{channelName.ToUpper()}: Unknown CallingConvention {dispatchCallingConvention} not implemented");
+                m_logger?.LogDebug($"{channelName.ToUpper()}: Unknown CallingConvention {dispatchCallingConvention} not implemented");
 
             }
         }

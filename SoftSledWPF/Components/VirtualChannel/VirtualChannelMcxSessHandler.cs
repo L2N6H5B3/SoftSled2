@@ -59,7 +59,7 @@ namespace SoftSled.Components.VirtualChannel {
                             // DSMN ClassID
                             case "a30dc60e-1e2c-44f2-bfd1-17e51c0cdf19":
                                 DSMNServiceHandle = createServiceServiceHandle;
-                                m_logger.LogDebug($"MCXSESS: CreateService DSMN ({DSMNServiceHandle})");
+                                m_logger?.LogDebug($"MCXSESS: CreateService DSMN ({DSMNServiceHandle})");
                                 // Create new StatusChangedArgs
                                 StatusChangedArgs args = new StatusChangedArgs {
                                     // Set the StatusChangedArgs Response Data
@@ -70,7 +70,7 @@ namespace SoftSled.Components.VirtualChannel {
                                 StatusChanged(this, args);
                                 break;
                             default:
-                                m_logger.LogDebug($"MCXSESS: CreateService ClassID {createServiceClassID} with ServiceID {createServiceServiceID} not available");
+                                m_logger?.LogDebug($"MCXSESS: CreateService ClassID {createServiceClassID} with ServiceID {createServiceServiceID} not available");
                                 break;
                         }
 
@@ -95,11 +95,11 @@ namespace SoftSled.Components.VirtualChannel {
 
                         // If this is the DSMN Service
                         if (deleteServiceServiceHandle == DSMNServiceHandle) {
-                            m_logger.LogDebug($"MCXSESS: DeleteService DSMN ({DSMNServiceHandle})");
+                            m_logger?.LogDebug($"MCXSESS: DeleteService DSMN ({DSMNServiceHandle})");
                             // Clear the DSMN Service
                             DSMNServiceHandle = 0;
                         } else {
-                            m_logger.LogDebug($"MCXSESS: DeleteService Handle ({deleteServiceServiceHandle}) not found");
+                            m_logger?.LogDebug($"MCXSESS: DeleteService Handle ({deleteServiceServiceHandle}) not found");
                         }
 
                         // Initialise DeleteService Response
@@ -116,7 +116,7 @@ namespace SoftSled.Components.VirtualChannel {
                     // Unknown Request
                     else {
 
-                        m_logger.LogDebug($"MCXSESS: Unknown DSLR Request {dispatchFunctionHandle} not implemented");
+                        m_logger?.LogDebug($"MCXSESS: Unknown DSLR Request {dispatchFunctionHandle} not implemented");
 
                     }
 
@@ -131,7 +131,7 @@ namespace SoftSled.Components.VirtualChannel {
                     // ShellDisconnect Request
                     if (dispatchFunctionHandle == 0) {
 
-                        m_logger.LogDebug("MCXSESS: ShellDisconnect");
+                        m_logger?.LogDebug("MCXSESS: ShellDisconnect");
 
                         // Get ShellDisconnect Data
                         int ShellDisconnectPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
@@ -202,7 +202,7 @@ namespace SoftSled.Components.VirtualChannel {
                         // Raise Response Event
                         StatusChanged(this, args);
 
-                        m_logger.LogInfo("Experience closed");
+                        m_logger?.LogInfo("Experience closed");
 
                         // Initialise ShellDisconnect Response
                         byte[] response = DSLRCommunication.ShellDisconnectResponse(
@@ -218,7 +218,7 @@ namespace SoftSled.Components.VirtualChannel {
                     // Heartbeat Request
                     else if (dispatchFunctionHandle == 1) {
 
-                        //m_logger.LogDebug("MCXSESS: Heartbeat");
+                        //m_logger?.LogDebug("MCXSESS: Heartbeat");
 
                         // Get Heartbeat Data
                         int HeartbeatPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
@@ -239,7 +239,7 @@ namespace SoftSled.Components.VirtualChannel {
                     // ShellIsActive Request
                     else if (dispatchFunctionHandle == 2) {
 
-                        //m_logger.LogDebug("MCXSESS: ShellIsActive");
+                        //m_logger?.LogDebug("MCXSESS: ShellIsActive");
 
                         // Create new StatusChangedArgs
                         StatusChangedArgs args = new StatusChangedArgs {
@@ -265,7 +265,7 @@ namespace SoftSled.Components.VirtualChannel {
                     // GetQWaveSinkInfo Request
                     else if (dispatchFunctionHandle == 3) {
 
-                        //m_logger.LogDebug("MCXSESS: GetQWaveSinkInfo");
+                        //m_logger?.LogDebug("MCXSESS: GetQWaveSinkInfo");
 
                         // Get GetQWaveSinkInfo Data
                         int GetQWaveSinkInfoPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
@@ -285,7 +285,7 @@ namespace SoftSled.Components.VirtualChannel {
                     // Unknown Request
                     else {
 
-                        //m_logger.LogDebug($"MCXSESS: Unknown Function ({dispatchFunctionHandle})");
+                        //m_logger?.LogDebug($"MCXSESS: Unknown Function ({dispatchFunctionHandle})");
 
                         // Get Unknown Data
                         int UnknownPayloadSize = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize);
@@ -293,7 +293,7 @@ namespace SoftSled.Components.VirtualChannel {
                         byte[] UnknownPayloadData;
                         if (UnknownPayloadSize > 0) {
                             UnknownPayloadData = DataUtilities.GetByteSubArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2, UnknownPayloadSize);
-                            m_logger.LogDebug("MCXSESS: " + BitConverter.ToString(UnknownPayloadData));
+                            m_logger?.LogDebug("MCXSESS: " + BitConverter.ToString(UnknownPayloadData));
                             System.Diagnostics.Debug.WriteLine("MCXSESS BYTES: " + BitConverter.ToString(UnknownPayloadData));
                             //System.Diagnostics.Debug.WriteLine("MCXSESS ASCII: " + Encoding.ASCII.GetString(UnknownPayloadData));
                             //System.Diagnostics.Debug.WriteLine("MCXSESS    UN: " + Encoding.Unicode.GetString(UnknownPayloadData));
@@ -319,18 +319,18 @@ namespace SoftSled.Components.VirtualChannel {
 
                 } else {
 
-                    m_logger.LogDebug($"MCXSESS: Unknown {dispatchServiceHandle} Request {dispatchFunctionHandle} not implemented");
+                    m_logger?.LogDebug($"MCXSESS: Unknown {dispatchServiceHandle} Request {dispatchFunctionHandle} not implemented");
 
                 }
             }
             //else if (dispatchCallingConvention == 2) {
 
-            //    m_logger.LogDebug($"MCXSESS: Unknown CallingConvention '{dispatchCallingConvention}' with Function '{dispatchRequestHandle}' not implemented");
+            //    m_logger?.LogDebug($"MCXSESS: Unknown CallingConvention '{dispatchCallingConvention}' with Function '{dispatchRequestHandle}' not implemented");
 
             //} 
             else {
 
-                m_logger.LogDebug($"MCXSESS: Unknown CallingConvention '{dispatchCallingConvention}' with Function '{dispatchRequestHandle}' not implemented");
+                m_logger?.LogDebug($"MCXSESS: Unknown CallingConvention '{dispatchCallingConvention}' with Function '{dispatchRequestHandle}' not implemented");
 
             }
         }

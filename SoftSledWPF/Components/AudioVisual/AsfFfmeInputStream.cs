@@ -179,19 +179,37 @@ namespace SoftSled.Components.AudioVisual {
                 n = _producer.Read(_scratch, 0, toRead);
             } catch (Exception ex) {
                 _log?.LogError($"[asf-ffme] Read exception: {ex.Message}");
-                return -1;  // signal error to FFmpeg
+                // Any negative value flags "error" to libav; we
+                // deliberately pick AVERROR(EIO) (-5 in POSIX) for the
+                // sake of meaningful logs, but any non-zero negative
+                // works — the demuxer's behaviour is identical.
+                return -5;
             }
 
             if (n <= 0) {
-                // 0 = EOF. FFmpeg's avio convention is to return AVERROR_EOF
-                // (negative) or 0. FFME treats <=0 as end-of-stream; either
-                // works.
-                return 0;
+                // Returning a literal 0 from a custom-IO Read callback
+                // triggers libav's "Invalid return value 0 for stream
+                // protocol" warning (libavformat/avio.c retry_transfer_wrapper)
+                // — FFmpeg's API requires AVERROR_EOF for end-of-stream,
+                // not 0. Returning AVERROR_EOF cleanly tells the demuxer
+                // "no more data ever" so it can finalise any in-flight
+                // frames and let Media.Close finish without spurious
+                // protocol-level warnings.
+                //
+                // n < 0 (cancellation thrown during disposal) is treated
+                // as EOF too — semantically there's no more data coming.
+                return AVERROR_EOF;
             }
 
             Marshal.Copy(_scratch, 0, (IntPtr)targetBuffer, n);
             return n;
         }
+
+        // FFERRTAG('E','O','F',' ') = -(('E') | ('O'<<8) | ('F'<<16) | (' '<<24))
+        //                           = -(0x20464F45) = -541478725 (0xDFB9B0BB as int32)
+        // Defined here rather than pulled from FFmpeg.AutoGen so the file
+        // doesn't add a heavy dependency just for one int literal.
+        private const int AVERROR_EOF = unchecked((int)0xDFB9B0BB);
 
         public long Seek(void* opaque, long offset, int whence) {
             // Non-seekable RTSP stream. libav's custom-IO Seek callback

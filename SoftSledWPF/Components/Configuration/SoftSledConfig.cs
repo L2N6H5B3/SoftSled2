@@ -47,6 +47,26 @@ namespace SoftSled.Components.Configuration {
         // unaffected. Default ON.
         public bool EnableMouseInput = true;
 
+        // When true, the on-screen log overlay (loggerTextBox in
+        // ExtenderSessionControl) is visible at session start. Independently
+        // toggleable at runtime via Ctrl+L. Default OFF — the overlay is
+        // a developer diagnostic, not something the average couch user
+        // wants on top of the WMC UI.
+        public bool EnableLogger = false;
+
+        // Per-virtual-channel + fastpath log toggles. Each gates whether
+        // the corresponding handler's diagnostic output reaches the
+        // logger (and the on-screen overlay). Persisted only — no
+        // call sites consume these yet; the handlers still log
+        // unconditionally. Wire-up is intentionally deferred until the
+        // per-channel volume becomes a problem worth filtering. Default
+        // OFF so a future enable doesn't surprise users with a wall of
+        // text.
+        public bool LogDevCapsChannel = false;
+        public bool LogMcxSessChannel = false;
+        public bool LogAvCtrlChannel  = false;
+        public bool LogRdpFastpath    = false;
+
         // Initial desktop / session resolution requested from the RDP
         // server. Picked from the resolution overlay in the Video sub-
         // page.

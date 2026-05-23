@@ -42,6 +42,7 @@ namespace SoftSledWPF.Components.Shell {
         private VirtualChannelSplashHandler SplashHandler;
 
         private SoftSled.Components.Splash.SplashController _splashController;
+        private SoftSled.Components.AudioVisual.SurfaceRouter _surfaceRouter;
         private const bool SplashPayloadBigEndian = true;
 
         private SoftSled.Components.AudioVisual.WmcFastpathAudioPlayer _audioPlayer;
@@ -157,21 +158,21 @@ namespace SoftSledWPF.Components.Shell {
         // !_sessionActive || !_mouseEnabled || bitmap not ready.
 
         private void AttachMouseHandlers() {
-            rdpDisplay.MouseMove   += RdpDisplay_MouseMove;
-            rdpDisplay.MouseDown   += RdpDisplay_MouseDown;
-            rdpDisplay.MouseUp     += RdpDisplay_MouseUp;
-            rdpDisplay.MouseWheel  += RdpDisplay_MouseWheel;
-            rdpDisplay.MouseLeave  += RdpDisplay_MouseLeave;
-            rdpDisplay.Focusable    = true;
+            rdpDisplay.MouseMove += RdpDisplay_MouseMove;
+            rdpDisplay.MouseDown += RdpDisplay_MouseDown;
+            rdpDisplay.MouseUp += RdpDisplay_MouseUp;
+            rdpDisplay.MouseWheel += RdpDisplay_MouseWheel;
+            rdpDisplay.MouseLeave += RdpDisplay_MouseLeave;
+            rdpDisplay.Focusable = true;
             ApplyMouseCursorPolicy();
         }
 
         private void DetachMouseHandlers() {
-            try { rdpDisplay.MouseMove   -= RdpDisplay_MouseMove; }   catch { }
-            try { rdpDisplay.MouseDown   -= RdpDisplay_MouseDown; }   catch { }
-            try { rdpDisplay.MouseUp     -= RdpDisplay_MouseUp; }     catch { }
-            try { rdpDisplay.MouseWheel  -= RdpDisplay_MouseWheel; }  catch { }
-            try { rdpDisplay.MouseLeave  -= RdpDisplay_MouseLeave; }  catch { }
+            try { rdpDisplay.MouseMove -= RdpDisplay_MouseMove; } catch { }
+            try { rdpDisplay.MouseDown -= RdpDisplay_MouseDown; } catch { }
+            try { rdpDisplay.MouseUp -= RdpDisplay_MouseUp; } catch { }
+            try { rdpDisplay.MouseWheel -= RdpDisplay_MouseWheel; } catch { }
+            try { rdpDisplay.MouseLeave -= RdpDisplay_MouseLeave; } catch { }
             rdpDisplay.Cursor = null;
         }
 
@@ -193,11 +194,11 @@ namespace SoftSledWPF.Components.Shell {
                 return false;
 
             double scale = Math.Min(
-                rdpDisplay.ActualWidth  / bmp.PixelWidth,
+                rdpDisplay.ActualWidth / bmp.PixelWidth,
                 rdpDisplay.ActualHeight / bmp.PixelHeight);
             if (scale <= 0) return false;
 
-            double offX = (rdpDisplay.ActualWidth  - bmp.PixelWidth  * scale) / 2.0;
+            double offX = (rdpDisplay.ActualWidth - bmp.PixelWidth * scale) / 2.0;
             double offY = (rdpDisplay.ActualHeight - bmp.PixelHeight * scale) / 2.0;
 
             double rx = (wpfPt.X - offX) / scale;
@@ -360,8 +361,11 @@ namespace SoftSledWPF.Components.Shell {
             InitialiseLogger();
             EnsureFfmeInitialised();
 
+            // Load the SoftSled Config
+            var cfg = SoftSledConfigManager.ReadConfig();
+            // Load the Extender Capabilities
             m_capabilities = new ExtenderCapabilities();
-
+            // Create the FreeRDP Client
             freeRdpClient = new FreeRdpClient();
             freeRdpClient.DataReceived += FreeRdpClient_DataReceived;
             freeRdpClient.StateChanged += FreeRdpClient_StateChanged;
@@ -369,18 +373,22 @@ namespace SoftSledWPF.Components.Shell {
             foreach (var ch in new[] { "McxSess", "MCECaps", "devcaps", "avctrl", "VCHD", "splash" })
                 freeRdpClient.RegisterChannel(ch);
 
-            _audioPlayer = new SoftSled.Components.AudioVisual.WmcFastpathAudioPlayer(m_logger);
+
+            // Create Fastpath Audio Player for UI Sounds
+            _audioPlayer = new SoftSled.Components.AudioVisual.WmcFastpathAudioPlayer(cfg.LogRdpFastpath ? m_logger : null);
+            // Enable Fastpath Audio Dumping
             string audioDumpDir = Environment.GetEnvironmentVariable("SOFTSLED_AUDIO_DUMP");
             if (!string.IsNullOrWhiteSpace(audioDumpDir)) {
                 _audioDumper = new SoftSled.Components.AudioVisual.WmcFastpathAudioDumper(
                     m_logger, audioDumpDir);
             }
+            // Enable Fastpath Raw Dumping
             string rawDumpDir = Environment.GetEnvironmentVariable("SOFTSLED_FASTPATH_RAW_DUMP");
             if (!string.IsNullOrWhiteSpace(rawDumpDir)) {
                 _rawDumper = new SoftSled.Components.AudioVisual.WmcFastpathRawDumper(
                     m_logger, rawDumpDir);
             }
-            _overlayDecoder = new SoftSled.Components.AudioVisual.WmcFastpathOverlayRegionDecoder(m_logger);
+            _overlayDecoder = new SoftSled.Components.AudioVisual.WmcFastpathOverlayRegionDecoder(cfg.LogRdpFastpath ? m_logger : null);
             _overlayDecoder.OverlayRegionChanged += OnOverlayRegionChanged;
             _overlayDecoder.ZoomModeChanged += OnZoomModeChanged;
 
@@ -394,11 +402,13 @@ namespace SoftSledWPF.Components.Shell {
 
             MediaCanvas.SizeChanged += MediaCanvas_SizeChanged;
 
-            McxSessHandler = new VirtualChannelMcxSessHandler(m_logger);
+           
+
+            McxSessHandler = new VirtualChannelMcxSessHandler(cfg.LogMcxSessChannel ? m_logger : null);
             McxSessHandler.VirtualChannelSend += On_VirtualChannelSend;
-            DevCapsHandler = new VirtualChannelDevCapsHandler(m_logger, m_capabilities.GetDeviceCapabilities());
+            DevCapsHandler = new VirtualChannelDevCapsHandler(cfg.LogDevCapsChannel ? m_logger : null, m_capabilities.GetDeviceCapabilities());
             DevCapsHandler.VirtualChannelSend += On_VirtualChannelSend;
-            AvCtrlHandler = new VirtualChannelAvCtrlHandler(m_logger);
+            AvCtrlHandler = new VirtualChannelAvCtrlHandler(cfg.LogAvCtrlChannel ? m_logger : null);
             AvCtrlHandler.VirtualChannelSend += On_VirtualChannelSend;
             SplashHandler = new VirtualChannelSplashHandler(m_logger);
             SplashHandler.VirtualChannelSend += On_VirtualChannelSend;
@@ -410,6 +420,18 @@ namespace SoftSledWPF.Components.Shell {
                 m_logger, Dispatcher, SplashPayloadBigEndian, SplashHandler.SendBytes);
             _splashController.AttachHost(splashHost);
             SplashHandler.AttachController(_splashController);
+
+            // Surface routing for DMCT OpenMedia. In GDI mode this is a
+            // single-surface fallback; in RUI mode it ties the video
+            // element's position to the splash surface identified by
+            // the incoming Surface ID. AvCtrlHandler fires
+            // VideoSurfaceRequested → SurfaceRouter.RouteVideoToSurface.
+            var renderMode = m_capabilities?.GetRenderMode()
+                             ?? SoftSled.Components.Extender.WMCRenderMode.GDI;
+            _surfaceRouter = new SoftSled.Components.AudioVisual.SurfaceRouter(
+                renderMode, MediaCanvas, Media, _splashController, m_logger);
+            AvCtrlHandler.VideoSurfaceRequested += sid => _surfaceRouter.RouteVideoToSurface(sid);
+            AvCtrlHandler.VideoPipelineClosed += () => _surfaceRouter.ReleaseSurface();
 
             _videoOpenComplete = new System.Threading.Tasks.TaskCompletionSource<bool>(
                 System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
@@ -456,10 +478,8 @@ namespace SoftSledWPF.Components.Shell {
 
             AvCtrlHandler.VideoPipelineClosed += () =>
                 Dispatcher.BeginInvoke(new Action(async () => {
-                    try { await Media.Close(); }
-                    catch (Exception ex) { m_logger.LogError($"[ffme] Media.Close failed: {ex.Message}"); }
-                    try { await MediaAudio.Close(); }
-                    catch (Exception ex) { m_logger.LogError($"[ffme] MediaAudio.Close failed: {ex.Message}"); }
+                    try { await Media.Close(); } catch (Exception ex) { m_logger.LogError($"[ffme] Media.Close failed: {ex.Message}"); }
+                    try { await MediaAudio.Close(); } catch (Exception ex) { m_logger.LogError($"[ffme] MediaAudio.Close failed: {ex.Message}"); }
                     Media.Visibility = Visibility.Collapsed;
                     _lastOverlay = null;
                     _videoOpenComplete?.TrySetResult(false);
@@ -777,6 +797,52 @@ namespace SoftSledWPF.Components.Shell {
         void InitialiseLogger() {
             m_logger = new TextBoxLogger(loggerTextBox, Window.GetWindow(this));
             m_logger.IsLoggingDebug = true;
+
+            // Apply the persistent EnableLogger toggle from config. The
+            // textbox starts Collapsed in XAML so the default ("not shown")
+            // requires no change; if config asks for it on, show it now.
+            try {
+                if (SoftSledConfigManager.ReadConfig().EnableLogger) {
+                    SetLoggerVisible(true);
+                }
+            } catch { /* config read failure → leave hidden */ }
+        }
+
+        /// <summary>
+        /// Show or hide the on-screen logger textbox. Called by:
+        ///   * <see cref="InitialiseLogger"/> at session start (reads config)
+        ///   * <see cref="ToggleLogger"/> when the user presses Ctrl+L
+        ///   * the Debugging config-page checkbox handler in the shell
+        ///
+        /// Idempotent and safe to call from any thread (marshals to UI).
+        /// </summary>
+        public void SetLoggerVisible(bool visible) {
+            if (!Dispatcher.CheckAccess()) {
+                Dispatcher.BeginInvoke(new Action(() => SetLoggerVisible(visible)));
+                return;
+            }
+            if (loggerTextBox != null) {
+                loggerTextBox.Visibility = visible
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+        }
+
+        /// <summary>
+        /// Flip the logger textbox visibility. Used by the Ctrl+L shortcut
+        /// in <see cref="ShellWindow"/> — provides a transient on/off toggle
+        /// without touching the persistent <c>EnableLogger</c> config
+        /// (so a quick "let me peek at the log" doesn't permanently change
+        /// the user's preference).
+        /// </summary>
+        public void ToggleLogger() {
+            if (!Dispatcher.CheckAccess()) {
+                Dispatcher.BeginInvoke(new Action(ToggleLogger));
+                return;
+            }
+            if (loggerTextBox == null) return;
+            bool visible = loggerTextBox.Visibility == Visibility.Visible;
+            SetLoggerVisible(!visible);
         }
 
         private void FreeRdpClient_DataReceived(object sender, DataReceived e) {
@@ -924,7 +990,7 @@ namespace SoftSledWPF.Components.Shell {
             // pre-picker default for config files written before the
             // SessionWidth/Height fields existed (XmlSerializer leaves
             // missing int fields at 0).
-            uint desktopWidth  = currConfig.SessionWidth  > 0 ? (uint)currConfig.SessionWidth  : 1920u;
+            uint desktopWidth = currConfig.SessionWidth > 0 ? (uint)currConfig.SessionWidth : 1920u;
             uint desktopHeight = currConfig.SessionHeight > 0 ? (uint)currConfig.SessionHeight : 1200u;
             m_logger.LogInfo($"FreeRDP: requested desktop {desktopWidth}x{desktopHeight}");
             freeRdpClient.SetInitialDesktopSize(desktopWidth, desktopHeight);
@@ -939,8 +1005,7 @@ namespace SoftSledWPF.Components.Shell {
         }
 
         private void DisconnectRdp() {
-            try { freeRdpClient?.Disconnect(); }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"FreeRDP disconnect error: {ex.Message}"); }
+            try { freeRdpClient?.Disconnect(); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"FreeRDP disconnect error: {ex.Message}"); }
             rdpDisplay.Source = null;
         }
     }
