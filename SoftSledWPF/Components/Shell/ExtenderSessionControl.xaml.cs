@@ -52,6 +52,7 @@ namespace SoftSledWPF.Components.Shell {
         private SoftSledNative.FastpathCallback _fastpathDispatcher;
         private SoftSled.Components.AudioVisual.WmcFastpathOverlayRegionDecoder.OverlayRegion _lastOverlay;
         private SoftSled.Components.AudioVisual.FfmeMediaController _ffmeController;
+        private SoftSled.Components.AudioVisual.Playback.SoftSledPlaybackEngine _playbackEngine;
 
         private System.Threading.Tasks.TaskCompletionSource<bool> _videoOpenComplete;
 
@@ -413,8 +414,17 @@ namespace SoftSledWPF.Components.Shell {
             SplashHandler = new VirtualChannelSplashHandler(m_logger);
             SplashHandler.VirtualChannelSend += On_VirtualChannelSend;
 
-            _ffmeController = new SoftSled.Components.AudioVisual.FfmeMediaController(Media, m_logger);
-            AvCtrlHandler.MediaController = _ffmeController;
+            // Direct-libav playback engine — replaces the previous
+            // FfmeMediaController. The engine drives VideoSurface
+            // (WriteableBitmap blit) for video and NAudio for audio;
+            // exposes the same IMediaController surface AvCtrlHandler
+            // expects, so no change above this layer. The engine is
+            // also handed to the RTSPClient inside OpenMedia (below)
+            // via AttachRtspClient → SetPlaybackEngine, so depacketizer
+            // MAUs route directly to the libav decoders.
+            _playbackEngine = new SoftSled.Components.AudioVisual.Playback.SoftSledPlaybackEngine(
+                VideoSurface, m_logger);
+            AvCtrlHandler.MediaController = _playbackEngine;
 
             _splashController = new SoftSled.Components.Splash.SplashController(
                 m_logger, Dispatcher, SplashPayloadBigEndian, SplashHandler.SendBytes);
@@ -428,8 +438,12 @@ namespace SoftSledWPF.Components.Shell {
             // VideoSurfaceRequested → SurfaceRouter.RouteVideoToSurface.
             var renderMode = m_capabilities?.GetRenderMode()
                              ?? SoftSled.Components.Extender.WMCRenderMode.GDI;
+            // Surface router targets the new VideoSurface Image (driven by
+            // the libav engine) rather than the legacy FFME Media element.
+            // Both are FrameworkElement, so SurfaceRouter's Canvas.Set*/
+            // Width/Height repositioning works unchanged.
             _surfaceRouter = new SoftSled.Components.AudioVisual.SurfaceRouter(
-                renderMode, MediaCanvas, Media, _splashController, m_logger);
+                renderMode, MediaCanvas, VideoSurface, _splashController, m_logger);
             AvCtrlHandler.VideoSurfaceRequested += sid => _surfaceRouter.RouteVideoToSurface(sid);
             AvCtrlHandler.VideoPipelineClosed += () => _surfaceRouter.ReleaseSurface();
 
@@ -533,6 +547,11 @@ namespace SoftSledWPF.Components.Shell {
             if (AvCtrlHandler != null) AvCtrlHandler.MediaController = null;
             try { _ffmeController?.Dispose(); } catch { }
             _ffmeController = null;
+            // Dispose the direct-libav engine — closes decoders, frees
+            // libav contexts, stops the NAudio output device, releases
+            // the WriteableBitmap.
+            try { _playbackEngine?.Dispose(); } catch { }
+            _playbackEngine = null;
             if (_overlayDecoder != null) {
                 _overlayDecoder.OverlayRegionChanged -= OnOverlayRegionChanged;
                 _overlayDecoder.ZoomModeChanged -= OnZoomModeChanged;

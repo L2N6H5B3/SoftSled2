@@ -16,18 +16,34 @@
          without process exit. -->
     <Grid>
         <Canvas x:Name="MediaCanvas" ClipToBounds="True">
+            
+            <!-- Legacy FFME elements. Kept in XAML to satisfy existing
+                 code-behind references during the engine migration; both
+                 are inert (no Source assigned, no Open() call). To be
+                 removed in the cleanup pass after the direct-libav
+                 engine is fully validated. -->
             <ffme:MediaElement x:Name="Media"
                        Canvas.Left="0" Canvas.Top="0"
                        Background="Black"
-                       LoadedBehavior="Play"
+                       LoadedBehavior="Manual"
                        UnloadedBehavior="Manual"
                        Visibility="Collapsed"/>
             <ffme:MediaElement x:Name="MediaAudio"
                        Canvas.Left="-100" Canvas.Top="-100"
                        Width="1" Height="1"
-                       LoadedBehavior="Play"
+                       LoadedBehavior="Manual"
                        UnloadedBehavior="Manual"
-                       Visibility="Visible"/>
+                       Visibility="Collapsed"/>
+            <!-- Direct-libav playback target. The SoftSledPlaybackEngine
+            owns a WriteableBitmap and assigns it as VideoSurface.Source
+            on the first decoded frame; the engine's WpfVideoRenderer
+            blits subsequent frames via Lock/WritePixels/AddDirtyRect.
+            Audio is rendered to NAudio (no UI element required). -->
+            <Image x:Name="VideoSurface"
+                       Canvas.Left="0" Canvas.Top="0"
+                       Stretch="Uniform"
+                       RenderOptions.BitmapScalingMode="HighQuality"
+                       Visibility="Collapsed"/>
         </Canvas>
 
         <Image x:Name="rdpDisplay"

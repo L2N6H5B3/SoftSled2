@@ -190,6 +190,16 @@
     <Compile Include="Components\AudioVisual\PtsErrorInfo.cs" />
     <Compile Include="Components\AudioVisual\SkewInfo.cs" />
     <Compile Include="Components\AudioVisual\SurfaceRouter.cs" />
+    <Compile Include="Components\AudioVisual\Playback\PlaybackClock.cs" />
+    <Compile Include="Components\AudioVisual\Playback\LibAvDecoder.cs" />
+    <Compile Include="Components\AudioVisual\Playback\VideoFrameSample.cs" />
+    <Compile Include="Components\AudioVisual\Playback\VideoDecoder.cs" />
+    <Compile Include="Components\AudioVisual\Playback\WpfVideoRenderer.cs" />
+    <Compile Include="Components\AudioVisual\Playback\AudioFrameSample.cs" />
+    <Compile Include="Components\AudioVisual\Playback\AudioDecoder.cs" />
+    <Compile Include="Components\AudioVisual\Playback\NAudioRenderer.cs" />
+    <Compile Include="Components\AudioVisual\Playback\CodecRegistry.cs" />
+    <Compile Include="Components\AudioVisual\Playback\SoftSledPlaybackEngine.cs" />
     <Compile Include="Components\AudioVisual\WmrptPcmNAudioSink.cs" />
     <Compile Include="Components\AudioVisual\Mp3OverRtpAudioSink.cs" />
     <Compile Include="Components\AudioVisual\MpegPsMuxer.cs" />

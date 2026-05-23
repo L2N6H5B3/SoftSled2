@@ -259,6 +259,24 @@ namespace SoftSled.Components.RTSP {
             WmrtpWrapped = 2,
         }
 
+        // Direct-libav playback engine. When non-null, the depacketizer
+        // event handlers route MAUs straight here (and the FFME muxer
+        // cascade below is bypassed). Set by ExtenderSessionControl via
+        // SetPlaybackEngine after the engine is constructed; cleared on
+        // Stop. The engine implements IMediaController and is what
+        // AvCtrlHandler talks to for OpenMedia / Start / Pause / Stop /
+        // GetPosition / etc.
+        private SoftSled.Components.AudioVisual.Playback.SoftSledPlaybackEngine _playbackEngine;
+
+        /// <summary>
+        /// Bind (or unbind, with null) the direct-libav playback engine.
+        /// Once attached, depacketizer MAUs route to the engine instead
+        /// of the legacy FFME PS/TS muxer pipelines.
+        /// </summary>
+        public void SetPlaybackEngine(SoftSled.Components.AudioVisual.Playback.SoftSledPlaybackEngine engine) {
+            _playbackEngine = engine;
+        }
+
         // RTCP Receiver Report state. Phase-0c follow-up: WMPNss paces audio
         // at ~20% real-time. The first RR attempt (8-byte empty form) had no
         // effect — we now send a RFC 3550 §6.4.2 conformant RR with one
@@ -349,6 +367,17 @@ namespace SoftSled.Components.RTSP {
                 // attempt so we measure FFME's open latency from this point.
                 MonitorPts(isAudio: false, rtpTs: eventData.timestamp);
                 ArmDecoderOpenStopwatch();
+
+                // Direct-libav playback engine path. Replaces the FFME
+                // PS/TS muxer cascade below — engine takes the raw MAU,
+                // converts the RTP timestamp to media-ms via the per-
+                // stream RTP clock, and submits to its libav VideoDecoder.
+                if (_playbackEngine != null) {
+                    _playbackEngine.OnDepacketizedVideo(eventData.data,
+                                                        eventData.timestamp,
+                                                        eventData.SyncPoint);
+                    return;
+                }
 
                 // MPEG-TS unified container (preferred for modern codecs).
                 // Same idea as the PS path but uses 188-byte TS packets
@@ -462,6 +491,13 @@ namespace SoftSled.Components.RTSP {
                 // videoDepacketizer.NalUnitReady above.
                 MonitorPts(isAudio: true, rtpTs: eventData.timestamp);
                 ArmDecoderOpenStopwatch();
+
+                // Direct-libav playback engine path (mirrors video).
+                if (_playbackEngine != null) {
+                    _playbackEngine.OnDepacketizedAudio(eventData.data,
+                                                        eventData.timestamp);
+                    return;
+                }
 
                 // MPEG-TS unified path (preferred for modern codecs).
                 // PCM samples go in as raw LE bytes; muxer applies any
@@ -2483,6 +2519,9 @@ namespace SoftSled.Components.RTSP {
                 _wireAudioCodec = codec;
                 Debug.WriteLine($"[wire-commit] audio codec={codec}");
                 CommitDiagLog($"COMMIT audio={codec} (videoSoFar={_wireVideoCodec ?? "(none)"})");
+                // Notify the direct-libav engine (if attached) so it can
+                // construct the AudioDecoder + NAudioRenderer pair.
+                NotifyEngineAudioCommit(codec);
                 TryFinalizePipelineSetup();
             }
         }
@@ -2494,8 +2533,56 @@ namespace SoftSled.Components.RTSP {
                 _wireVideoCodec = codec;
                 Debug.WriteLine($"[wire-commit] video codec={codec}");
                 CommitDiagLog($"COMMIT video={codec} (audioSoFar={_wireAudioCodec ?? "(none)"})");
+                NotifyEngineVideoCommit(codec);
                 TryFinalizePipelineSetup();
             }
+        }
+
+        /// <summary>Push a video-codec-committed notification to the
+        /// playback engine with the SDP-derived format details for that
+        /// PT. No-op when the engine isn't attached (= legacy FFME path
+        /// chosen, or session torn down).</summary>
+        private void NotifyEngineVideoCommit(string wireCodec) {
+            var engine = _playbackEngine;
+            if (engine == null) return;
+            // Find the first PT in the SDP dict whose Codec equals the
+            // wire codec (and Type=Video). That gives us the FormatParameter
+            // for the AM_Media_Format / extradata derivation.
+            foreach (var kv in wmfPayloadDataDict) {
+                var entry = kv.Value;
+                if (entry == null) continue;
+                if (entry.Type != MediaType.Video) continue;
+                if (!string.Equals(entry.Codec, wireCodec, StringComparison.OrdinalIgnoreCase)) continue;
+                try {
+                    engine.OnVideoCodecCommitted(wireCodec, entry.AM_Media_Format,
+                                                 entry.FormatParameter,
+                                                 (uint)entry.ClockHz);
+                } catch (Exception ex) {
+                    Debug.WriteLine($"[engine] OnVideoCodecCommitted threw: {ex.Message}");
+                }
+                return;
+            }
+            Debug.WriteLine($"[engine] no SDP entry for video wire codec '{wireCodec}'");
+        }
+
+        private void NotifyEngineAudioCommit(string wireCodec) {
+            var engine = _playbackEngine;
+            if (engine == null) return;
+            foreach (var kv in wmfPayloadDataDict) {
+                var entry = kv.Value;
+                if (entry == null) continue;
+                if (entry.Type != MediaType.Audio) continue;
+                if (!string.Equals(entry.Codec, wireCodec, StringComparison.OrdinalIgnoreCase)) continue;
+                try {
+                    engine.OnAudioCodecCommitted(wireCodec, entry.AM_Media_Format,
+                                                 entry.FormatParameter,
+                                                 (uint)entry.ClockHz);
+                } catch (Exception ex) {
+                    Debug.WriteLine($"[engine] OnAudioCodecCommitted threw: {ex.Message}");
+                }
+                return;
+            }
+            Debug.WriteLine($"[engine] no SDP entry for audio wire codec '{wireCodec}'");
         }
 
         // Diagnostic log for the wire-commit / FinalizePipelineSetup /
