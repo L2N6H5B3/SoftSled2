@@ -1,0 +1,390 @@
+using SoftSled.Components.Configuration;
+using System;
+using System.Reflection;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+
+namespace SoftSledWPF.Components.Shell {
+    /// <summary>
+    /// WMC-styled nested settings page. The root menu lists categories
+    /// (General / Extender / Video / About); selecting one swaps the
+    /// visible sub-view. Backspace/ESC pops one level — when already at
+    /// the root we raise <see cref="CloseRequested"/> so the shell pops
+    /// us back to the landing page.
+    ///
+    /// Tickboxes read live from <see cref="SoftSledConfig"/> on entry and
+    /// persist via <see cref="SoftSledConfigManager.WriteConfig"/> on
+    /// every click — there is no separate Save button.
+    /// </summary>
+    public partial class ConfigPage : UserControl {
+
+        /// <summary>Sub-view currently visible. Used by ESC handler.</summary>
+        private enum View { Root, General, Pairing, Video, Ui, About }
+        private View _currentView = View.Root;
+        private SoftSledConfig _config;
+        private bool _suppressWrite;
+
+        /// <summary>Shell hooks this to know when to swap back to landing.</summary>
+        public event EventHandler CloseRequested;
+
+        /// <summary>Raised when the user unpairs — shell may want to update banners.</summary>
+        public event EventHandler ConfigChanged;
+
+        /// <summary>Raised when the user toggles the full-screen tickbox so
+        /// the shell can re-apply window state without waiting for restart.</summary>
+        public event EventHandler<bool> RunFullScreenChanged;
+
+        /// <summary>One row in the resolution picker.</summary>
+        private struct Resolution {
+            public int Width, Height;
+            public string Label;   // Short marketing name ("HD", "WUXGA")
+            public string Aspect;  // "4:3", "16:9", "16:10"
+            public Resolution(int w, int h, string label, string aspect) {
+                Width = w; Height = h; Label = label; Aspect = aspect;
+            }
+            public string Display =>
+                $"{Width} × {Height}    {Aspect}" +
+                (string.IsNullOrEmpty(Label) ? "" : "   " + Label);
+        }
+
+        // Static catalogue of pickable resolutions. Grouped by aspect so
+        // the list reads top-to-bottom from smallest 4:3 to largest 16:10.
+        // Keep entries that the average extender host is realistically
+        // willing to negotiate — going much above 4K causes some hosts
+        // to fall back without a clear error.
+        private static readonly Resolution[] _resolutions = {
+            // 4:3
+            new Resolution(640,  480,  "VGA",        "4:3"),
+            new Resolution(800,  600,  "SVGA",       "4:3"),
+            new Resolution(1024, 768,  "XGA",        "4:3"),
+            new Resolution(1280, 960,  "",           "4:3"),
+            new Resolution(1400, 1050, "SXGA+",      "4:3"),
+            new Resolution(1600, 1200, "UXGA",       "4:3"),
+            // 16:9
+            new Resolution(1280, 720,  "HD",         "16:9"),
+            new Resolution(1366, 768,  "",           "16:9"),
+            new Resolution(1600, 900,  "HD+",        "16:9"),
+            new Resolution(1920, 1080, "Full HD",    "16:9"),
+            new Resolution(2560, 1440, "QHD",        "16:9"),
+            new Resolution(3840, 2160, "4K UHD",     "16:9"),
+            // 16:10
+            new Resolution(1280, 800,  "",           "16:10"),
+            new Resolution(1440, 900,  "",           "16:10"),
+            new Resolution(1680, 1050, "WSXGA+",     "16:10"),
+            new Resolution(1920, 1200, "WUXGA",      "16:10"),
+            new Resolution(2560, 1600, "WQXGA",      "16:10"),
+        };
+
+        public ConfigPage() {
+            InitializeComponent();
+            this.Loaded += ConfigPage_Loaded;
+            // WPF CheckBox toggles on Space by default but not Enter. The
+            // WMC remote uses Enter as the universal "activate", so we
+            // intercept it on the page and route it back through the
+            // CheckBox's own click logic (which fires Click -> OnConfigChanged).
+            this.PreviewKeyDown += ConfigPage_PreviewKeyDown;
+        }
+
+        private void ConfigPage_PreviewKeyDown(object sender, KeyEventArgs e) {
+            if (e.Key != Key.Enter) return;
+            if (Keyboard.FocusedElement is CheckBox cb) {
+                cb.IsChecked = !(cb.IsChecked == true);
+                // Manually raise Click so OnConfigChanged runs and persists.
+                cb.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, cb));
+                e.Handled = true;
+            }
+        }
+
+        private void ConfigPage_Loaded(object sender, RoutedEventArgs e) {
+            ReloadConfigIntoUi();
+            ShowView(View.Root);
+        }
+
+        private void ReloadConfigIntoUi() {
+            _config = SoftSledConfigManager.ReadConfig();
+            _suppressWrite = true;
+            try {
+                ChkAutoStart.IsChecked         = _config.AutoStartWmcOnOpen;
+                ChkFullScreen.IsChecked        = _config.RunFullScreen;
+                ChkCloseOnWmcClose.IsChecked   = _config.CloseOnWmcClose;
+                ChkRemoteRendering.IsChecked   = _config.EnableRemoteRendering;
+                Chk2DAnimations.IsChecked      = _config.Enable2DAnimations;
+                ChkIntenseAnimations.IsChecked = _config.EnableIntenseAnimations;
+                ChkOverscan.IsChecked          = _config.EnableOverscanMargin;
+                ChkHdContent.IsChecked         = _config.EnableHdContent;
+                ChkUiSounds.IsChecked          = _config.EnableUiSounds;
+                ChkPopups.IsChecked            = _config.EnablePopups;
+                ChkToolbar.IsChecked           = _config.EnableToolbar;
+                ChkMouseInput.IsChecked        = _config.EnableMouseInput;
+                RefreshResolutionButton();
+                UpdateAnimationDependencies();
+
+                PairingStatusText.Text = _config.IsPaired
+                    ? $"Paired with {_config.RdpLoginHost} (user {_config.RdpLoginUserName})"
+                    : "Not paired — choose Start Extender from the main menu to pair.";
+                UnpairButton.IsEnabled = _config.IsPaired;
+
+                AboutVersionText.Text = "Version " +
+                    Assembly.GetExecutingAssembly().GetName().Version;
+            } finally {
+                _suppressWrite = false;
+            }
+        }
+
+        // ---- Navigation between sub-views -----------------------------
+
+        private void ShowView(View view) {
+            _currentView = view;
+            RootView.Visibility     = view == View.Root     ? Visibility.Visible : Visibility.Collapsed;
+            GeneralView.Visibility  = view == View.General  ? Visibility.Visible : Visibility.Collapsed;
+            PairingView.Visibility  = view == View.Pairing  ? Visibility.Visible : Visibility.Collapsed;
+            VideoView.Visibility    = view == View.Video    ? Visibility.Visible : Visibility.Collapsed;
+            UiView.Visibility       = view == View.Ui       ? Visibility.Visible : Visibility.Collapsed;
+            AboutView.Visibility    = view == View.About    ? Visibility.Visible : Visibility.Collapsed;
+
+            BreadcrumbText.Text = view == View.Root ? "" : view.ToString().ToLowerInvariant();
+            HeaderText.Text     = view == View.Root ? "settings" : "settings";
+
+            // Re-focus appropriately so the remote keeps working without a click.
+            switch (view) {
+                case View.Root:
+                    RootMenu.Focus();
+                    if (RootMenu.SelectedItem is ListBoxItem rlbi) rlbi.Focus();
+                    break;
+                case View.General:
+                    ChkAutoStart.Focus();
+                    break;
+                case View.Pairing:
+                    UnpairButton.Focus();
+                    break;
+                case View.Video:
+                    ChkRemoteRendering.Focus();
+                    break;
+                case View.Ui:
+                    ChkUiSounds.Focus();
+                    break;
+                case View.About:
+                    // Nothing focusable — focus the page itself so back keys
+                    // still route here.
+                    this.Focus();
+                    break;
+            }
+        }
+
+        private void RootMenu_KeyDown(object sender, KeyEventArgs e) {
+            if (e.Key == Key.Enter || e.Key == Key.Space) {
+                ActivateRoot(RootMenu.SelectedItem as ListBoxItem);
+                e.Handled = true;
+            }
+        }
+
+        private void RootMenu_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) {
+            // Single-click activation: walk back up from the hit-tested
+            // element to the owning ListBoxItem so clicks on empty list
+            // space are ignored.
+            var item = ItemsControl.ContainerFromElement(
+                RootMenu, e.OriginalSource as DependencyObject) as ListBoxItem;
+            if (item != null) ActivateRoot(item);
+        }
+
+        private void ActivateRoot(ListBoxItem item) {
+            if (item == ItemGeneral)       ShowView(View.General);
+            else if (item == ItemPairing)  ShowView(View.Pairing);
+            else if (item == ItemVideo)    ShowView(View.Video);
+            else if (item == ItemUi)       ShowView(View.Ui);
+            else if (item == ItemAbout)    ShowView(View.About);
+        }
+
+        // ---- Live tickbox persistence ---------------------------------
+
+        private void OnConfigChanged(object sender, RoutedEventArgs e) {
+            if (_suppressWrite || _config == null) return;
+
+            bool prevFullScreen = _config.RunFullScreen;
+
+            _config.AutoStartWmcOnOpen      = ChkAutoStart.IsChecked == true;
+            _config.RunFullScreen           = ChkFullScreen.IsChecked == true;
+            _config.CloseOnWmcClose         = ChkCloseOnWmcClose.IsChecked == true;
+            _config.EnableRemoteRendering   = ChkRemoteRendering.IsChecked == true;
+            _config.Enable2DAnimations      = Chk2DAnimations.IsChecked == true;
+            _config.EnableIntenseAnimations = ChkIntenseAnimations.IsChecked == true;
+            _config.EnableOverscanMargin    = ChkOverscan.IsChecked == true;
+            _config.EnableHdContent         = ChkHdContent.IsChecked == true;
+            _config.EnableUiSounds          = ChkUiSounds.IsChecked == true;
+            _config.EnablePopups            = ChkPopups.IsChecked == true;
+            _config.EnableToolbar           = ChkToolbar.IsChecked == true;
+            _config.EnableMouseInput        = ChkMouseInput.IsChecked == true;
+
+            try {
+                SoftSledConfigManager.WriteConfig(_config);
+            } catch (Exception ex) {
+                MessageBox.Show("Failed to save settings: " + ex.Message);
+                return;
+            }
+
+            ConfigChanged?.Invoke(this, EventArgs.Empty);
+            if (prevFullScreen != _config.RunFullScreen) {
+                RunFullScreenChanged?.Invoke(this, _config.RunFullScreen);
+            }
+
+            // Remote rendering takes ownership of the animation pipeline
+            // on the host side, so the local 2D / Intense tickboxes have
+            // no effect while it's on. Re-evaluate after any change.
+            UpdateAnimationDependencies();
+        }
+
+        /// <summary>
+        /// Disable the 2D / Intense animation tickboxes whenever Remote
+        /// Rendering is enabled — they only affect the local rendering
+        /// path. Their persisted values are left untouched so flipping
+        /// Remote Rendering back off restores the previous state.
+        /// </summary>
+        private void UpdateAnimationDependencies() {
+            bool remote = ChkRemoteRendering.IsChecked == true;
+            Chk2DAnimations.IsEnabled      = !remote;
+            ChkIntenseAnimations.IsEnabled = !remote;
+        }
+
+        // ---- Unpair flow ----------------------------------------------
+
+        private void UnpairButton_Click(object sender, RoutedEventArgs e) {
+            ConfirmOverlay.Visibility = Visibility.Visible;
+            ConfirmNo.Focus();
+        }
+
+        private void ConfirmYes_Click(object sender, RoutedEventArgs e) {
+            try {
+                _config.IsPaired = false;
+                _config.DeviceUDN = "";
+                _config.RdpLoginHost = "";
+                _config.RdpLoginUserName = "";
+                _config.RdpLoginPassword = "";
+                SoftSledConfigManager.WriteConfig(_config);
+                ConfigChanged?.Invoke(this, EventArgs.Empty);
+            } catch (Exception ex) {
+                MessageBox.Show("Failed to unpair: " + ex.Message);
+            } finally {
+                ConfirmOverlay.Visibility = Visibility.Collapsed;
+                ReloadConfigIntoUi();
+                UnpairButton.Focus();
+            }
+        }
+
+        private void ConfirmNo_Click(object sender, RoutedEventArgs e) {
+            ConfirmOverlay.Visibility = Visibility.Collapsed;
+            UnpairButton.Focus();
+        }
+
+        // ---- Resolution picker ----------------------------------------
+
+        /// <summary>
+        /// Update the picker button label to reflect whatever is currently
+        /// in <see cref="_config"/>. Called on reload and after a pick.
+        /// </summary>
+        private void RefreshResolutionButton() {
+            if (_config == null) { BtnResolution.Content = "—"; return; }
+            BtnResolution.Content =
+                $"{_config.SessionWidth} × {_config.SessionHeight}";
+        }
+
+        private void BtnResolution_Click(object sender, RoutedEventArgs e) {
+            // Populate fresh each time so future code-driven changes to
+            // the _resolutions catalogue surface without an app restart.
+            ResolutionList.Items.Clear();
+            int selectedIndex = -1;
+            for (int i = 0; i < _resolutions.Length; i++) {
+                var r = _resolutions[i];
+                var item = new ListBoxItem { Content = r.Display, Tag = r };
+                ResolutionList.Items.Add(item);
+                if (r.Width == _config.SessionWidth &&
+                    r.Height == _config.SessionHeight) {
+                    selectedIndex = i;
+                }
+            }
+            // If the persisted resolution isn't in the catalogue (e.g.
+            // user hand-edited the config), still let them open the list
+            // and pick a known one — just don't pre-select anything.
+            if (selectedIndex >= 0) {
+                ResolutionList.SelectedIndex = selectedIndex;
+                ResolutionList.ScrollIntoView(ResolutionList.SelectedItem);
+            }
+
+            ResolutionOverlay.Visibility = Visibility.Visible;
+
+            // Defer focus so the items have a chance to materialise their
+            // containers — focusing too early picks up the ListBox itself
+            // and arrow keys don't move selection until the user clicks.
+            Dispatcher.BeginInvoke(new Action(() => {
+                ResolutionList.Focus();
+                if (ResolutionList.SelectedItem is ListBoxItem lbi) lbi.Focus();
+            }), System.Windows.Threading.DispatcherPriority.Background);
+        }
+
+        private void ResolutionList_KeyDown(object sender, KeyEventArgs e) {
+            if (e.Key == Key.Enter || e.Key == Key.Space) {
+                CommitResolution(ResolutionList.SelectedItem as ListBoxItem);
+                e.Handled = true;
+            }
+        }
+
+        private void ResolutionList_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) {
+            var item = ItemsControl.ContainerFromElement(
+                ResolutionList, e.OriginalSource as DependencyObject) as ListBoxItem;
+            if (item != null) CommitResolution(item);
+        }
+
+        private void ResolutionCancel_Click(object sender, RoutedEventArgs e) {
+            CloseResolutionOverlay();
+        }
+
+        private void CommitResolution(ListBoxItem item) {
+            if (item == null || _config == null) return;
+            if (!(item.Tag is Resolution r)) return;
+
+            _config.SessionWidth  = r.Width;
+            _config.SessionHeight = r.Height;
+            try {
+                SoftSledConfigManager.WriteConfig(_config);
+            } catch (Exception ex) {
+                MessageBox.Show("Failed to save resolution: " + ex.Message);
+                return;
+            }
+            ConfigChanged?.Invoke(this, EventArgs.Empty);
+            RefreshResolutionButton();
+            CloseResolutionOverlay();
+        }
+
+        private void CloseResolutionOverlay() {
+            ResolutionOverlay.Visibility = Visibility.Collapsed;
+            BtnResolution.Focus();
+        }
+
+        // ---- Back navigation routed from the shell --------------------
+
+        /// <summary>
+        /// Called by ShellWindow when ESC or Backspace is pressed and not
+        /// otherwise handled. Returns true if we consumed the back (popped
+        /// a sub-view); false if the shell should pop us off the stack.
+        /// </summary>
+        public bool HandleBack() {
+            // Modal overlays always win (close them before falling back
+            // to the sub-view / root navigation).
+            if (ResolutionOverlay.Visibility == Visibility.Visible) {
+                CloseResolutionOverlay();
+                return true;
+            }
+            if (ConfirmOverlay.Visibility == Visibility.Visible) {
+                ConfirmOverlay.Visibility = Visibility.Collapsed;
+                UnpairButton.Focus();
+                return true;
+            }
+            if (_currentView != View.Root) {
+                ShowView(View.Root);
+                return true;
+            }
+            CloseRequested?.Invoke(this, EventArgs.Empty);
+            return true; // shell still hears CloseRequested and pops
+        }
+    }
+}

@@ -1,0 +1,43 @@
+<UserControl x:Class="SoftSledWPF.Components.Shell.LandingPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             Background="Transparent"
+             FocusManager.FocusedElement="{Binding ElementName=MenuListBox}"
+             d:DesignHeight="720" d:DesignWidth="1280">
+    <Viewbox Stretch="Uniform">
+        <!-- 16:9 design canvas. Viewbox lets the same layout fill any
+             window size including the F11 fullscreen state. -->
+        <Grid Width="1280" Height="720">
+
+            <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" Margin="100,80,0,0">
+                <TextBlock Text="softsled" Style="{StaticResource WmcTitleStyle}" FontSize="64"/>
+                <TextBlock x:Name="StatusText" Style="{StaticResource WmcSubtitleStyle}"/>
+            </StackPanel>
+
+            <!-- Main menu in WMC style: vertical list, large hit targets,
+                 arrow-key + remote friendly. -->
+            <ListBox x:Name="MenuListBox"
+                     Style="{StaticResource WmcListBoxStyle}"
+                     ItemContainerStyle="{StaticResource WmcListItemStyle}"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Center"
+                     Width="520"
+                     KeyDown="MenuListBox_KeyDown"
+                     MouseLeftButtonUp="MenuListBox_MouseLeftButtonUp">
+                <ListBoxItem x:Name="ItemStart"    Content="Start Extender" IsSelected="True"/>
+                <ListBoxItem x:Name="ItemSettings" Content="Settings"/>
+                <ListBoxItem x:Name="ItemQuit"     Content="Quit"/>
+            </ListBox>
+
+            <TextBlock Text="Press F11 to toggle full screen"
+                       Style="{StaticResource WmcBodyStyle}"
+                       Foreground="{StaticResource WmcSubtleTextBrush}"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Bottom"
+                       Margin="0,0,40,30"/>
+        </Grid>
+    </Viewbox>
+</UserControl>

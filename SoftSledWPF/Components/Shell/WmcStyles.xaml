@@ -1,0 +1,218 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Common WMC-ish look + feel reused across LandingPage / ConfigPage /
+         PairingPage. Light, low-saturation text on transparent backgrounds so
+         the shared wmc-background.jpg shows through. Kept in one dictionary
+         so a future restyle is one-stop. -->
+
+    <SolidColorBrush x:Key="WmcTextBrush"        Color="#F2F2F2"/>
+    <SolidColorBrush x:Key="WmcSubtleTextBrush"  Color="#80FFFFFF"/>
+    <SolidColorBrush x:Key="WmcAccentBrush"      Color="#FF1FB6F0"/>
+    <SolidColorBrush x:Key="WmcDimOverlayBrush"  Color="#80000000"/>
+    <SolidColorBrush x:Key="WmcSelectionBorderBrush" Color="#A0FFFFFF"/>
+
+    <LinearGradientBrush x:Key="WmcSelectionFillBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#60FFFFFF" Offset="0"/>
+        <GradientStop Color="#15FFFFFF" Offset="0.5"/>
+        <GradientStop Color="#28FFFFFF" Offset="1"/>
+    </LinearGradientBrush>
+
+    <!-- Title block (e.g. 'settings', 'general'). -->
+    <Style x:Key="WmcTitleStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource WmcSubtleTextBrush}"/>
+        <Setter Property="FontFamily" Value="Segoe UI Light"/>
+        <Setter Property="FontSize"   Value="48"/>
+        <Setter Property="Margin"     Value="0,0,0,16"/>
+    </Style>
+
+    <Style x:Key="WmcSubtitleStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource WmcSubtleTextBrush}"/>
+        <Setter Property="FontFamily" Value="Segoe UI Light"/>
+        <Setter Property="FontSize"   Value="22"/>
+        <Setter Property="Margin"     Value="0,0,0,8"/>
+    </Style>
+
+    <Style x:Key="WmcBodyStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource WmcTextBrush}"/>
+        <Setter Property="FontFamily" Value="Segoe UI"/>
+        <Setter Property="FontSize"   Value="18"/>
+        <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+
+    <!-- ListBox container — transparent so background bleeds through. -->
+    <Style x:Key="WmcListBoxStyle" TargetType="ListBox">
+        <Setter Property="Background"      Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Hidden"/>
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility"   Value="Hidden"/>
+        <Setter Property="KeyboardNavigation.DirectionalNavigation"   Value="Cycle"/>
+    </Style>
+
+    <!-- Generic WMC list-item: rounded outline, gradient on focus/select.
+         Used for the landing page, config root menu, and config subpages. -->
+    <Style x:Key="WmcListItemStyle" TargetType="ListBoxItem">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource WmcTextBrush}"/>
+        <Setter Property="FontSize"   Value="22"/>
+        <Setter Property="FontFamily" Value="Segoe UI"/>
+        <Setter Property="Padding"    Value="20,10"/>
+        <Setter Property="Margin"     Value="0,2"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <!-- Suppress the default WPF dotted focus rectangle — the
+             template's BorderBrush trigger already gives a much nicer
+             WMC-style indicator. -->
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="ItemBorder"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="Transparent"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Margin="0,0,0,4">
+                        <ContentPresenter x:Name="ContentSite"
+                                          VerticalAlignment="Center"
+                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          Margin="{TemplateBinding Padding}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <!-- IsSelected drives the WMC focus look. Keep
+                             IsMouseOver as a softer hover so mouse users
+                             aren't left in the dark either. -->
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter Property="Foreground" Value="White"/>
+                            <Setter TargetName="ItemBorder" Property="BorderBrush" Value="{StaticResource WmcSelectionBorderBrush}"/>
+                            <Setter TargetName="ItemBorder" Property="Background"  Value="{StaticResource WmcSelectionFillBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Foreground" Value="White"/>
+                            <Setter TargetName="ItemBorder" Property="BorderBrush" Value="#40FFFFFF"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- WMC-ish button. Used for back navigation, Unpair, Confirm/Cancel
+         dialogs. Same focus look as the list item. -->
+    <Style x:Key="WmcButtonStyle" TargetType="Button">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource WmcTextBrush}"/>
+        <Setter Property="FontSize"   Value="20"/>
+        <Setter Property="FontFamily" Value="Segoe UI"/>
+        <Setter Property="Padding"    Value="20,8"/>
+        <Setter Property="MinWidth"   Value="120"/>
+        <Setter Property="Margin"     Value="6"/>
+        <Setter Property="Cursor"     Value="Hand"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="BtnBorder"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="#60FFFFFF"
+                            BorderThickness="1"
+                            CornerRadius="6">
+                        <ContentPresenter HorizontalAlignment="Center"
+                                          VerticalAlignment="Center"
+                                          Margin="{TemplateBinding Padding}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsFocused" Value="True">
+                            <Setter TargetName="BtnBorder" Property="BorderBrush" Value="{StaticResource WmcSelectionBorderBrush}"/>
+                            <Setter TargetName="BtnBorder" Property="Background"  Value="{StaticResource WmcSelectionFillBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="BtnBorder" Property="BorderBrush" Value="#C0FFFFFF"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="BtnBorder" Property="Background" Value="#40FFFFFF"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Tickbox: square outline that fills when checked. Bigger than the
+         WPF default so it reads from couch distance. -->
+    <Style x:Key="WmcCheckBoxStyle" TargetType="CheckBox">
+        <Setter Property="Foreground" Value="{StaticResource WmcTextBrush}"/>
+        <Setter Property="FontSize"   Value="20"/>
+        <Setter Property="FontFamily" Value="Segoe UI"/>
+        <Setter Property="Padding"    Value="10,0,0,0"/>
+        <Setter Property="Margin"     Value="0,2"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="VerticalContentAlignment"   Value="Center"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <Border x:Name="RowBorder"
+                            Background="Transparent"
+                            BorderBrush="Transparent"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="10,8"
+                            Margin="0,0,0,4">
+                        <StackPanel Orientation="Horizontal">
+                            <Grid Width="28" Height="28" VerticalAlignment="Center">
+                                <Border x:Name="BoxBorder"
+                                        BorderBrush="#A0FFFFFF"
+                                        BorderThickness="2"
+                                        CornerRadius="3"
+                                        Background="#20000000"/>
+                                <!-- Tick mark — drawn as a Path so it stays
+                                     crisp at any size. -->
+                                <Path x:Name="Tick"
+                                      Data="M 5,14 L 12,21 23,8"
+                                      Stroke="White"
+                                      StrokeThickness="3"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round"
+                                      Visibility="Collapsed"/>
+                            </Grid>
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </StackPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Tick" Property="Visibility" Value="Visible"/>
+                            <Setter TargetName="BoxBorder" Property="Background" Value="#4000B6F0"/>
+                            <Setter TargetName="BoxBorder" Property="BorderBrush" Value="{StaticResource WmcAccentBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsFocused" Value="True">
+                            <Setter TargetName="RowBorder" Property="BorderBrush" Value="{StaticResource WmcSelectionBorderBrush}"/>
+                            <Setter TargetName="RowBorder" Property="Background"  Value="{StaticResource WmcSelectionFillBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="RowBorder" Property="BorderBrush" Value="{StaticResource WmcSelectionBorderBrush}"/>
+                            <Setter TargetName="RowBorder" Property="Background"  Value="{StaticResource WmcSelectionFillBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="RowBorder" Property="BorderBrush" Value="#40FFFFFF"/>
+                        </Trigger>
+                        <!-- Disabled state: dim everything and drop the
+                             focus ring so it's visually obvious the box
+                             can't be toggled. -->
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground"          Value="#60FFFFFF"/>
+                            <Setter TargetName="BoxBorder" Property="BorderBrush" Value="#40FFFFFF"/>
+                            <Setter TargetName="BoxBorder" Property="Background"  Value="#10000000"/>
+                            <Setter TargetName="Tick"      Property="Stroke"      Value="#60FFFFFF"/>
+                            <Setter TargetName="RowBorder" Property="BorderBrush" Value="Transparent"/>
+                            <Setter TargetName="RowBorder" Property="Background"  Value="Transparent"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+</ResourceDictionary>
