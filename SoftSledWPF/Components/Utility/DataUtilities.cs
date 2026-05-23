@@ -36,37 +36,37 @@ namespace SoftSled.Components.Utility {
             return Encoding.UTF8.GetString(result);
         }
 
-        public static int Get4ByteInt(byte[] byteArray, int startPosition) {
+        public static int Get2ByteInt(byte[] byteArray, int startPosition, bool convertEndianness = true) {
+
+            byte[] result = GetByteSubArray(byteArray, startPosition, 2);
+
+            if (BitConverter.IsLittleEndian && convertEndianness) {
+                Array.Reverse(result);
+            }
+
+            return BitConverter.ToInt16(result, 0);
+        }
+
+        public static int Get4ByteInt(byte[] byteArray, int startPosition, bool convertEndianness = true) {
 
             byte[] result = GetByteSubArray(byteArray, startPosition, 4);
 
-            if (BitConverter.IsLittleEndian) {
+            if (BitConverter.IsLittleEndian && convertEndianness) {
                 Array.Reverse(result);
             }
 
             return BitConverter.ToInt32(result, 0);
         }
 
-        public static long Get8ByteInt(byte[] byteArray, int startPosition) {
+        public static long Get8ByteInt(byte[] byteArray, int startPosition, bool convertEndianness = true) {
 
             byte[] result = GetByteSubArray(byteArray, startPosition, 8);
 
-            if (BitConverter.IsLittleEndian) {
+            if (BitConverter.IsLittleEndian && convertEndianness) {
                 Array.Reverse(result);
             }
 
             return BitConverter.ToInt64(result, 0);
-        }
-
-        public static int Get2ByteInt(byte[] byteArray, int startPosition) {
-
-            byte[] result = GetByteSubArray(byteArray, startPosition, 2);
-
-            if (BitConverter.IsLittleEndian) {
-                Array.Reverse(result);
-            }
-
-            return BitConverter.ToInt16(result, 0);
         }
 
         public static byte[] GetInt4Byte(int integer) {
@@ -174,6 +174,17 @@ namespace SoftSled.Components.Utility {
             byte[] resultArray = result.ToArray();
             // Return the created Byte Array
             return resultArray;
+        }
+
+        public static byte[] HexStringToByteArray(string hex) {
+            if (hex.Length % 2 != 0)
+                throw new ArgumentException("The hex string must have an even length.");
+
+            byte[] bytes = new byte[hex.Length / 2];
+            for (int i = 0; i < hex.Length; i += 2) {
+                bytes[i / 2] = Convert.ToByte(hex.Substring(i, 2), 16);
+            }
+            return bytes;
         }
     }
 }

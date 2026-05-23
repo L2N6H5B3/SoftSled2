@@ -94,9 +94,6 @@
     <ApplicationIcon>wmc.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="AxInterop.MSTSCLib">
-      <HintPath>..\SoftSled\obj\x86\Debug\AxInterop.MSTSCLib.dll</HintPath>
-    </Reference>
     <Reference Include="BouncyCastle.Crypto, Version=1.9.0.0, Culture=neutral, PublicKeyToken=0e99375e54769942, processorArchitecture=MSIL">
       <HintPath>..\packages\Portable.BouncyCastle.1.9.0\lib\net40\BouncyCastle.Crypto.dll</HintPath>
     </Reference>
@@ -176,6 +173,10 @@
     </Compile>
     <Compile Include="Components\AudioVisual\AsfFfmeInputStream.cs" />
     <Compile Include="Components\AudioVisual\AsfStreamProducer.cs" />
+    <Compile Include="Components\AudioVisual\FormatStructures\AM_Media_Format.cs" />
+    <Compile Include="Components\AudioVisual\FormatStructures\VIDEOINFOHEADER.cs" />
+    <Compile Include="Components\AudioVisual\FormatStructures\VIDEOINFOHEADER2.cs" />
+    <Compile Include="Components\AudioVisual\FormatStructures\WAVEFORMATEX.cs" />
     <Compile Include="Components\AudioVisual\MsWmsRtspClient.cs" />
     <Compile Include="Components\AudioVisual\WindowsSystemAudio.cs" />
     <Compile Include="Components\AudioVisual\WmrptAudioDepacketizer.cs" />
@@ -390,6 +391,14 @@
     <Resource Include="Resources\icon\wmc.ico" />
     <Resource Include="Resources\image\wmc-background.jpg" />
     <None Include="Resources\wmc-background.jpg" />
+    <Content Include="native\x86\freerdp-client3.dll" />
+    <Content Include="native\x86\freerdp3.dll" />
+    <Content Include="native\x86\libcrypto-3.dll" />
+    <Content Include="native\x86\libssl-3.dll" />
+    <Content Include="native\x86\openh264-7.dll" />
+    <Content Include="native\x86\softsled-rdp.dll" />
+    <Content Include="native\x86\winpr3.dll" />
+    <Content Include="native\x86\zd.dll" />
     <Content Include="Tools\ffmpeg\x64\avcodec-58.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -425,5 +434,6 @@
     </Content>
     <Resource Include="wmc.bmp" />
   </ItemGroup>
+  <ItemGroup />
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

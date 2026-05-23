@@ -1,4 +1,4 @@
-﻿using SoftSled.Components;
+﻿using SoftSled.Components.Utility;
 
 namespace SoftSled.Components.AudioVisual.FormatStructures {
     public class VIDEOINFOHEADER2 {
