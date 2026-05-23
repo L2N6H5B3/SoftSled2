@@ -22,7 +22,6 @@ namespace SoftSled.Components.AudioVisual.Playback {
         private SwsContext* _sws;
         private int _swsSrcW, _swsSrcH;
         private AVPixelFormat _swsSrcFmt = AVPixelFormat.AV_PIX_FMT_NONE;
-        private byte[] _rentBuffer;     // reused per-frame BGRA buffer when sizes match
 
         public VideoDecoder(AVCodecID codecId, byte[] extradata,
                             Action<VideoFrameSample> onFrame, Logger log)
@@ -38,6 +37,18 @@ namespace SoftSled.Components.AudioVisual.Playback {
 
             // (Re)allocate sws context if format or size changed. Common
             // case: never (single-resolution stream).
+            //
+            // SWS_POINT is intentional, not a quality compromise: source and
+            // destination dimensions are identical (we don't scale), so
+            // sws_scale here is just a pixel-format converter (YUV420P /
+            // NV12 / etc → BGRA). With same-size conversion the
+            // interpolation choice has no effect on output quality but a
+            // ~3× effect on throughput — POINT is essentially the fast
+            // path for "memcpy with format unpack" and is the right
+            // choice when no resampling is taking place. (Output will
+            // get stretched by the WPF renderer if the Image element is
+            // sized differently, but that's a GPU-side bilinear stretch
+            // and free.)
             if (_sws == null || srcW != _swsSrcW || srcH != _swsSrcH || srcFmt != _swsSrcFmt) {
                 if (_sws != null) {
                     ffmpeg.sws_freeContext(_sws);
@@ -46,7 +57,7 @@ namespace SoftSled.Components.AudioVisual.Playback {
                 _sws = ffmpeg.sws_getContext(
                     srcW, srcH, srcFmt,
                     srcW, srcH, AVPixelFormat.AV_PIX_FMT_BGRA,
-                    ffmpeg.SWS_BILINEAR, null, null, null);
+                    ffmpeg.SWS_POINT, null, null, null);
                 if (_sws == null) {
                     Log?.LogError($"[libav-video] sws_getContext failed for " +
                                   $"{srcW}x{srcH} {srcFmt} → BGRA");
@@ -55,18 +66,25 @@ namespace SoftSled.Components.AudioVisual.Playback {
                 _swsSrcW = srcW;
                 _swsSrcH = srcH;
                 _swsSrcFmt = srcFmt;
-                _rentBuffer = null;     // force re-alloc on size change
             }
 
             int dstStride = srcW * 4;       // BGRA32 = 4 bytes/pixel, tightly packed
             int dstBytes = dstStride * srcH;
-            if (_rentBuffer == null || _rentBuffer.Length < dstBytes) {
-                _rentBuffer = new byte[dstBytes];
-            }
+
+            // Rent a buffer from the pool. At 1080p that's ~8 MB which
+            // would otherwise hit the LOH and trigger frequent Gen-2
+            // collections at 60 fps. The renderer returns the buffer to
+            // the pool via VideoFrameSample.Release() once the bitmap
+            // blit is complete, so steady-state same-resolution streams
+            // cycle through a small fixed set of buffers indefinitely.
+            byte[] dstBuf = BufferPool.Rent(dstBytes);
 
             // sws_scale writes into a uint8_t** plane array. For BGRA (packed)
-            // there's only one plane; pass dst as plane 0.
-            fixed (byte* dst = _rentBuffer) {
+            // there's only one plane; pass dst as plane 0. Writing
+            // straight into the pooled (eventually-rendered) buffer
+            // skips the previous Buffer.BlockCopy step entirely — at
+            // 1080p that was 8 MB of memory bandwidth per frame.
+            fixed (byte* dst = dstBuf) {
                 byte_ptrArray4 dstPlanes = new byte_ptrArray4();
                 dstPlanes[0] = dst;
                 int_array4 dstStrides = new int_array4();
@@ -76,23 +94,17 @@ namespace SoftSled.Components.AudioVisual.Playback {
                     dstPlanes, dstStrides);
                 if (scaled <= 0) {
                     Log?.LogError($"[libav-video] sws_scale returned {scaled}");
+                    BufferPool.Return(dstBuf);
                     return;
                 }
             }
-
-            // Copy out of the rent buffer so the next frame can reuse it
-            // without racing the renderer. (We could pool VideoFrameSamples
-            // too, but a fresh byte[] per frame at ~24 fps for 720p is only
-            // ~85 MB/s of GC pressure — fine for a desktop app.)
-            byte[] copy = new byte[dstBytes];
-            Buffer.BlockCopy(_rentBuffer, 0, copy, 0, dstBytes);
 
             VideoFrameSample sample = new VideoFrameSample {
                 PresentationMs = ptsMs,
                 Width = srcW,
                 Height = srcH,
                 Stride = dstStride,
-                Bgra32 = copy,
+                Bgra32 = dstBuf,
             };
             _onFrame(sample);
         }

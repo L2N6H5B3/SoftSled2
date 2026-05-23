@@ -38,7 +38,11 @@ namespace SoftSled.Components.AudioVisual.Playback {
         private readonly PlaybackClock _clock;
         private readonly Logger _log;
         private readonly ConcurrentQueue<VideoFrameSample> _queue = new ConcurrentQueue<VideoFrameSample>();
-        private const int MaxQueuedFrames = 32;
+        // 60-frame cap = ~1 s of headroom at 60 fps for the rendering
+        // tick to catch up after a brief CPU stall, without unbounded
+        // memory growth. Pooled buffers mean the per-frame cost is
+        // negligible past the first few.
+        private const int MaxQueuedFrames = 60;
 
         private WriteableBitmap _bitmap;
         private int _bitmapW, _bitmapH;
@@ -47,6 +51,16 @@ namespace SoftSled.Components.AudioVisual.Playback {
         private long _framesDroppedOverflow; // dropped at enqueue because queue full
         private bool _disposed;
         private EventHandler _renderingHandler;
+
+        // FPS counter — runs over a sliding ~1 s window and logs at the
+        // boundary. Cheap (one Interlocked + one Stopwatch read per
+        // presented frame) and gives a clean steady-state fps number
+        // in the log without per-frame log spam.
+        private long _fpsWindowStartMs;
+        private long _fpsWindowPresented;
+        private long _fpsWindowDroppedLate;
+        private long _fpsWindowDroppedOverflow;
+        private readonly System.Diagnostics.Stopwatch _fpsSw = System.Diagnostics.Stopwatch.StartNew();
 
         public WpfVideoRenderer(Image target, PlaybackClock clock, Logger log) {
             _target = target ?? throw new ArgumentNullException(nameof(target));
@@ -69,8 +83,11 @@ namespace SoftSled.Components.AudioVisual.Playback {
                 // Drop oldest to bound memory. Live RTSP can produce
                 // bursts faster than 60 Hz can drain them; a 32-frame
                 // ceiling caps memory at ~30 MB for 720p without
-                // adding visible latency.
-                if (_queue.TryDequeue(out _)) {
+                // adding visible latency. Release the dropped frame's
+                // pixel buffer back to the pool so it doesn't linger.
+                if (_queue.TryDequeue(out var dropped)) {
+                    dropped?.Release();
+                    Interlocked.Increment(ref _fpsWindowDroppedOverflow);
                     long n = Interlocked.Increment(ref _framesDroppedOverflow);
                     if ((n & 0x1F) == 1) {
                         _log?.LogError($"[wpf-video] queue overflow, dropped oldest " +
@@ -89,18 +106,30 @@ namespace SoftSled.Components.AudioVisual.Playback {
 
             // Drain all frames whose presentation time has arrived. Keep
             // the last one to actually blit (the others are "late" and
-            // would only produce visible jutter if we tried to blit
-            // them all).
+            // would only produce visible judder if we tried to blit
+            // them all). Skipped frames have their pixel buffers
+            // released back to the pool immediately.
             VideoFrameSample dueFrame = null;
             while (_queue.TryPeek(out var head) && head.PresentationMs <= now) {
                 if (!_queue.TryDequeue(out head)) break;
-                if (dueFrame != null) Interlocked.Increment(ref _framesDroppedLate);
+                if (dueFrame != null) {
+                    dueFrame.Release();
+                    Interlocked.Increment(ref _framesDroppedLate);
+                    Interlocked.Increment(ref _fpsWindowDroppedLate);
+                }
                 dueFrame = head;
             }
             if (dueFrame == null) return;
 
-            Present(dueFrame);
-            Interlocked.Increment(ref _framesPresented);
+            try {
+                Present(dueFrame);
+                Interlocked.Increment(ref _framesPresented);
+                Interlocked.Increment(ref _fpsWindowPresented);
+            } finally {
+                dueFrame.Release();
+            }
+
+            MaybeLogFps(now);
         }
 
         private void Present(VideoFrameSample frame) {
@@ -125,6 +154,27 @@ namespace SoftSled.Components.AudioVisual.Playback {
             }
         }
 
+        private void MaybeLogFps(long nowMediaMs) {
+            // Log every ~1 second of WALL time (Stopwatch). Reading the
+            // clock isn't enough — at non-1× rates media-time advances
+            // differently from wall-time, and we want fps in user-
+            // perception terms (frames per real second).
+            long wallMs = _fpsSw.ElapsedMilliseconds;
+            long sinceStart = wallMs - _fpsWindowStartMs;
+            if (sinceStart < 1000) return;
+
+            long presented = Interlocked.Exchange(ref _fpsWindowPresented, 0);
+            long droppedLate = Interlocked.Exchange(ref _fpsWindowDroppedLate, 0);
+            long droppedOverflow = Interlocked.Exchange(ref _fpsWindowDroppedOverflow, 0);
+            _fpsWindowStartMs = wallMs;
+
+            double fps = presented * 1000.0 / sinceStart;
+            _log?.LogInfo($"[wpf-video] fps={fps:F1} " +
+                          $"presented={presented} droppedLate={droppedLate} " +
+                          $"droppedOverflow={droppedOverflow} window={sinceStart}ms " +
+                          $"queueDepth={_queue.Count}");
+        }
+
         public void Dispose() {
             if (_disposed) return;
             _disposed = true;
@@ -137,7 +187,14 @@ namespace SoftSled.Components.AudioVisual.Playback {
                     _target.Source = null;
                 });
             } catch { }
-            while (_queue.TryDequeue(out _)) { }
+            // Return any queued frames' buffers to the pool, then clear
+            // the pool itself — these per-session buffers are sized to
+            // the just-finished stream's resolution and would otherwise
+            // hold ~30-60 MB of LOH for the lifetime of the process.
+            while (_queue.TryDequeue(out var leftover)) {
+                leftover?.Release();
+            }
+            BufferPool.Clear();
             _log?.LogInfo($"[wpf-video] disposed: presented={_framesPresented} " +
                           $"droppedLate={_framesDroppedLate} droppedOverflow={_framesDroppedOverflow}");
         }
