@@ -1,0 +1,45 @@
+<Window x:Class="SoftSledWPF.ShellWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:SoftSledWPF"
+        xmlns:shell="clr-namespace:SoftSledWPF.Components.Shell"
+        mc:Ignorable="d"
+        Title="SoftSled"
+        Icon="/wmc.ico"
+        Width="1280"
+        Height="720"
+        MinWidth="800"
+        MinHeight="450"
+        WindowStartupLocation="CenterScreen"
+        Background="Black">
+
+    <!-- Resources: pull in the shared WMC styles AND the wmc-background
+         image so every page renders against the same backdrop. We host
+         everything inside a single Window so transitions between landing,
+         settings, pairing and the live session are just ContentControl
+         swaps — no window flicker. -->
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/Components/Shell/WmcStyles.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <Grid>
+        <!-- Static WMC background. Image is a build-time Resource so this
+             works regardless of working directory. The opacity overlay
+             dims the background slightly under page content to keep text
+             legible. -->
+        <Grid.Background>
+            <ImageBrush ImageSource="/wmc-background.jpg" Stretch="UniformToFill"/>
+        </Grid.Background>
+
+        <Rectangle Fill="#30000000" IsHitTestVisible="False"/>
+
+        <!-- All pages live here; ShellWindow code-behind sets the Content. -->
+        <ContentControl x:Name="PageHost"/>
+    </Grid>
+</Window>

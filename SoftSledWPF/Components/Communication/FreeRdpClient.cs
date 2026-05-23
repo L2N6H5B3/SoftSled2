@@ -35,6 +35,7 @@ namespace SoftSled.Components.Communication {
         private readonly SoftSledNative.StateCallback _stateCb;
         private readonly SoftSledNative.ChannelCallback _channelCb;
         private readonly SoftSledNative.PaintCallback _paintCb;
+        private readonly SoftSledNative.PaintRectsCallback _paintRectsCb;
         // Held alive only while a consumer has registered one. Native code
         // would reach into a collected delegate thunk and crash without this.
         private SoftSledNative.FastpathCallback _fastpathCb;
@@ -44,6 +45,18 @@ namespace SoftSled.Components.Communication {
         private readonly Dispatcher _uiDispatcher;
         private SoftSledNative.FramebufferInfo _fbInfo;
         private WriteableBitmap _bitmap;
+
+        // Paint coalescer: worker-thread paint callbacks union into _pendingRect
+        // under _paintLock. A single BeginInvoke drains the union on the UI
+        // thread. Multiple frames that arrive while the UI thread is busy collapse
+        // into one composite blit — caps Dispatcher queue depth at one and keeps
+        // GFX/H.264 burst frames from stalling the UI. _flushAction is allocated
+        // once to avoid per-paint closure allocation.
+        private readonly object _paintLock = new object();
+        private bool _paintDispatchPending;
+        private bool _pendingRectValid;
+        private int _pendingRX, _pendingRY, _pendingRW, _pendingRH;
+        private readonly Action _flushAction;
 
         public event EventHandler<DataReceived> DataReceived;
         public event EventHandler<StateChangedEventArgs> StateChanged;
@@ -71,9 +84,11 @@ namespace SoftSled.Components.Communication {
             _uiDispatcher = Application.Current?.Dispatcher
                             ?? Dispatcher.CurrentDispatcher;
 
-            _stateCb   = OnNativeStateChanged;
-            _channelCb = OnNativeChannelData;
-            _paintCb   = OnNativePaint;
+            _stateCb      = OnNativeStateChanged;
+            _channelCb    = OnNativeChannelData;
+            _paintCb      = OnNativePaint;
+            _paintRectsCb = OnNativePaintRects;
+            _flushAction  = FlushPendingPaint;
             SoftSledNative.softsled_set_state_callback  (_handle, _stateCb,   IntPtr.Zero);
             SoftSledNative.softsled_set_channel_callback(_handle, _channelCb, IntPtr.Zero);
         }
@@ -126,6 +141,7 @@ namespace SoftSled.Components.Communication {
             // tell the native side to disconnect.
             try {
                 SoftSledNative.softsled_set_paint_callback(_handle, null, IntPtr.Zero);
+                SoftSledNative.softsled_set_paint_rects_callback(_handle, null, IntPtr.Zero);
                 SoftSledNative.softsled_set_fastpath_callback(_handle, null, IntPtr.Zero);
                 if (_uiDispatcher != null && !_uiDispatcher.HasShutdownStarted)
                     _uiDispatcher.Invoke(() => { /* drain */ });
@@ -153,6 +169,26 @@ namespace SoftSled.Components.Communication {
 
         public bool SendKeyUp(byte scancode, bool extended = false) =>
             SendKey(scancode, extended, release: true);
+
+        /// <summary>Send a single RDP mouse event. <paramref name="x"/>/<paramref name="y"/>
+        /// are framebuffer-pixel coordinates. <paramref name="flags"/> is a bitmask of
+        /// <c>SoftSledNative.PTR_FLAGS_*</c> (MOVE / DOWN / BUTTON1-3 / WHEEL /
+        /// WHEEL_NEGATIVE plus low-9-bit wheel magnitude). The call returns
+        /// immediately — the shim's async input thread handles the actual FreeRDP
+        /// send, so this never blocks the WPF UI thread on RDP transport latency.</summary>
+        public bool SendMouse(ushort flags, ushort x, ushort y) {
+            if (_handle == IntPtr.Zero) return false;
+            return SoftSledNative.softsled_send_mouse_event(_handle, flags, x, y)
+                   == (int)SoftSledNative.Result.Ok;
+        }
+
+        /// <summary>Send an extended mouse event (X1/X2 side buttons).
+        /// <paramref name="flags"/> uses the <c>PTR_XFLAGS_*</c> set, not <c>PTR_FLAGS_*</c>.</summary>
+        public bool SendExtendedMouse(ushort flags, ushort x, ushort y) {
+            if (_handle == IntPtr.Zero) return false;
+            return SoftSledNative.softsled_send_extended_mouse_event(_handle, flags, x, y)
+                   == (int)SoftSledNative.Result.Ok;
+        }
 
         /// <summary>
         /// Register a callback for fast-path updates of unknown types (e.g. WMC's
@@ -210,7 +246,14 @@ namespace SoftSled.Components.Communication {
                 _bitmap.Unlock();
 
                 // Now safe to start receiving per-frame dirty-rect callbacks.
-                SoftSledNative.softsled_set_paint_callback(_handle, _paintCb, IntPtr.Zero);
+                // Prefer the multi-rect path — once GFX/H.264 is on, frames carry
+                // many small surface-tile rects whose union over-blits a lot of
+                // unchanged pixels. The shim treats the rects callback as taking
+                // precedence over the single-rect one when both are set, so we
+                // wire both: rects for normal operation, single-rect as a safety
+                // net if the rects path ever gets unregistered.
+                SoftSledNative.softsled_set_paint_callback      (_handle, _paintCb,      IntPtr.Zero);
+                SoftSledNative.softsled_set_paint_rects_callback(_handle, _paintRectsCb, IntPtr.Zero);
                 FrameReady?.Invoke(this, EventArgs.Empty);
             };
             // Synchronous: we want the bitmap allocated before any paint
@@ -218,22 +261,38 @@ namespace SoftSled.Components.Communication {
             _uiDispatcher.Invoke(init);
         }
 
-        // Paint callback fires on the FreeRDP worker thread. Marshal a
-        // dirty-rect blit onto the UI dispatcher at Render priority. We
-        // re-read the cached fbInfo each time — pointer is stable for the
-        // lifetime of the connection.
+        // Single-rect paint callback — only fires if the shim couldn't route
+        // through the multi-rect path (e.g. allocation failure). Both paths
+        // funnel into the same coalescer.
         private void OnNativePaint(IntPtr user, int x, int y, int w, int h) {
+            QueueRect(x, y, w, h);
+        }
+
+        // Multi-rect paint callback. <paramref name="rects"/> points at shim-owned
+        // memory holding <paramref name="count"/> SoftSledNative.Rect structs;
+        // valid only for the duration of the call. We read each one and union
+        // them into _pendingRect.
+        private void OnNativePaintRects(IntPtr user, IntPtr rects, uint count) {
+            if (rects == IntPtr.Zero || count == 0) return;
+            int sz = Marshal.SizeOf(typeof(SoftSledNative.Rect));
+            for (uint i = 0; i < count; i++) {
+                var r = (SoftSledNative.Rect)Marshal.PtrToStructure(
+                    new IntPtr(rects.ToInt64() + i * sz), typeof(SoftSledNative.Rect));
+                QueueRect(r.X, r.Y, r.W, r.H);
+            }
+        }
+
+        // Worker-thread side of the coalescer. Unions the new rect into the
+        // pending one; if no dispatch is currently in flight, posts a single
+        // BeginInvoke at Render priority. The dispatcher closure (FlushPendingPaint)
+        // drains and clears the pending rect, then the next worker frame is free
+        // to re-post.
+        private void QueueRect(int x, int y, int w, int h) {
             if (w <= 0 || h <= 0) return;
-            // Snapshot the struct so a concurrent disconnect that clears
-            // _fbInfo can't null the pointer mid-marshal. We deliberately do
-            // NOT touch _bitmap here — its PixelWidth/PixelHeight are
-            // DependencyProperty getters with thread affinity and would
-            // throw "calling thread cannot access this object" off the UI
-            // thread. The framebuffer struct fields are equivalent and safe.
             SoftSledNative.FramebufferInfo fb = _fbInfo;
             if (fb.Pixels == IntPtr.Zero) return;
 
-            // Clip rect into the framebuffer bounds (defence against odd server data).
+            // Clip into framebuffer bounds.
             int bw = (int)fb.Width, bh = (int)fb.Height;
             if (x < 0) { w += x; x = 0; }
             if (y < 0) { h += y; y = 0; }
@@ -241,22 +300,70 @@ namespace SoftSled.Components.Communication {
             if (y + h > bh) h = bh - y;
             if (w <= 0 || h <= 0) return;
 
-            int xx = x, yy = y, ww = w, hh = h;
+            bool needDispatch;
+            lock (_paintLock) {
+                if (!_pendingRectValid) {
+                    _pendingRX = x; _pendingRY = y; _pendingRW = w; _pendingRH = h;
+                    _pendingRectValid = true;
+                } else {
+                    // Union with existing pending rect.
+                    int x2 = Math.Max(_pendingRX + _pendingRW, x + w);
+                    int y2 = Math.Max(_pendingRY + _pendingRH, y + h);
+                    _pendingRX = Math.Min(_pendingRX, x);
+                    _pendingRY = Math.Min(_pendingRY, y);
+                    _pendingRW = x2 - _pendingRX;
+                    _pendingRH = y2 - _pendingRY;
+                }
+                needDispatch = !_paintDispatchPending;
+                if (needDispatch) _paintDispatchPending = true;
+            }
+
+            if (needDispatch) {
+                try {
+                    // Reuse cached _flushAction — no per-frame closure allocation.
+                    _uiDispatcher.BeginInvoke(DispatcherPriority.Render, _flushAction);
+                } catch {
+                    /* dispatcher shutting down — clear pending so we don't spin */
+                    lock (_paintLock) {
+                        _paintDispatchPending = false;
+                        _pendingRectValid = false;
+                    }
+                }
+            }
+        }
+
+        // UI-thread drain. Snapshots the pending rect (under lock), clears it,
+        // then blits once. The cleared pending state means subsequent worker
+        // frames will re-post a fresh BeginInvoke and the union starts over.
+        private void FlushPendingPaint() {
+            int rx, ry, rw, rh;
+            lock (_paintLock) {
+                _paintDispatchPending = false;
+                if (!_pendingRectValid) return;
+                rx = _pendingRX; ry = _pendingRY; rw = _pendingRW; rh = _pendingRH;
+                _pendingRectValid = false;
+            }
+
+            var b = _bitmap;
+            var f = _fbInfo;
+            if (b == null || f.Pixels == IntPtr.Zero || rw <= 0 || rh <= 0) return;
+
+            // sourceBufferSize must span the entire region addressed by
+            // sourceRect within sourceBuffer. We pass the whole framebuffer
+            // base pointer (f.Pixels) and a non-zero sourceRect, so WPF reads
+            // (ry + rh) rows × stride from f.Pixels — meaning the buffer size
+            // we declare must cover at least the full framebuffer, not just
+            // the dirty rows. Anything smaller throws "Buffer not large
+            // enough to copy memory".
+            int stride = (int)f.Stride;
+            int bufSize = stride * (int)f.Height;
+            var rect = new Int32Rect(rx, ry, rw, rh);
+            b.Lock();
             try {
-                _uiDispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() => {
-                    var b = _bitmap;
-                    var f = _fbInfo;
-                    if (b == null || f.Pixels == IntPtr.Zero) return;
-                    var rect = new Int32Rect(xx, yy, ww, hh);
-                    b.Lock();
-                    b.WritePixels(rect, f.Pixels,
-                                  (int)(f.Stride * f.Height),
-                                  (int)f.Stride, xx, yy);
-                    b.AddDirtyRect(rect);
-                    b.Unlock();
-                }));
-            } catch {
-                /* dispatcher shutting down — drop the frame */
+                b.WritePixels(rect, f.Pixels, bufSize, stride, rx, ry);
+                b.AddDirtyRect(rect);
+            } finally {
+                b.Unlock();
             }
         }
 
@@ -281,9 +388,10 @@ namespace SoftSled.Components.Communication {
         public void Dispose() {
             if (_handle != IntPtr.Zero) {
                 try {
-                    // Clear paint cb first so no further frame dispatches are
+                    // Clear paint cbs first so no further frame dispatches are
                     // queued onto the (possibly-shutting-down) UI dispatcher.
                     SoftSledNative.softsled_set_paint_callback(_handle, null, IntPtr.Zero);
+                    SoftSledNative.softsled_set_paint_rects_callback(_handle, null, IntPtr.Zero);
                     SoftSledNative.softsled_set_fastpath_callback(_handle, null, IntPtr.Zero);
                 } catch { }
                 try { SoftSledNative.softsled_disconnect(_handle); } catch { }

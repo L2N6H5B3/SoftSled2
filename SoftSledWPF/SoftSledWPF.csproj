@@ -24,10 +24,10 @@
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
-    <!-- Run as 64-bit on 64-bit Windows. Required because the FreeRDP shim
-         (softsled-rdp.dll + freerdp3.dll + winpr3.dll under native\x64) is
-         built x64 only; loading it from a 32-bit process throws
-         BadImageFormatException. -->
+    <!-- Run as 64-bit on 64-bit Windows by default. The FreeRDP shim
+         (softsled-rdp.dll + freerdp3.dll + winpr3.dll) ships in both
+         native\x64 and native\x86; App.OnStartup picks the matching folder
+         from Environment.Is64BitProcess. -->
     <Prefer32Bit>false</Prefer32Bit>
     <LangVersion>7.3</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -146,15 +146,27 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </ApplicationDefinition>
-    <Page Include="HomeWindow.xaml">
-      <SubType>Designer</SubType>
-      <Generator>MSBuild:Compile</Generator>
-    </Page>
-    <Page Include="FullScreenWindow.xaml">
+    <Page Include="ShellWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
-    <Page Include="MainWindow.xaml">
+    <Page Include="Components\Shell\WmcStyles.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Components\Shell\LandingPage.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Components\Shell\ConfigPage.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Components\Shell\PairingPage.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Components\Shell\ExtenderSessionControl.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
@@ -256,18 +268,27 @@
     <Compile Include="Components\Splash\SplashWireReassembler.cs" />
     <Compile Include="Components\VirtualChannel\VirtualChannelAvCtrlHandler.cs" />
     <Compile Include="Components\VirtualChannel\VirtualChannelSplashHandler.cs" />
-    <Compile Include="Components\VirtualChannel\VirtualChannelMCECapsHandler.cs" />
     <Compile Include="Components\VirtualChannel\VirtualChannelDevCapsHandler.cs" />
     <Compile Include="Components\VirtualChannel\VirtualChannelMcxSessHandler.cs" />
     <Compile Include="Components\VirtualChannel\VirtualChannelSendArgs.cs" />
-    <Compile Include="HomeWindow.xaml.cs">
-      <DependentUpon>HomeWindow.xaml</DependentUpon>
+    <Compile Include="ShellWindow.xaml.cs">
+      <DependentUpon>ShellWindow.xaml</DependentUpon>
+      <SubType>Code</SubType>
     </Compile>
-    <Compile Include="FullScreenWindow.xaml.cs">
-      <DependentUpon>FullScreenWindow.xaml</DependentUpon>
+    <Compile Include="Components\Shell\LandingPage.xaml.cs">
+      <DependentUpon>LandingPage.xaml</DependentUpon>
+      <SubType>Code</SubType>
     </Compile>
-    <Compile Include="MainWindow.xaml.cs">
-      <DependentUpon>MainWindow.xaml</DependentUpon>
+    <Compile Include="Components\Shell\ConfigPage.xaml.cs">
+      <DependentUpon>ConfigPage.xaml</DependentUpon>
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="Components\Shell\PairingPage.xaml.cs">
+      <DependentUpon>PairingPage.xaml</DependentUpon>
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="Components\Shell\ExtenderSessionControl.xaml.cs">
+      <DependentUpon>ExtenderSessionControl.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
   </ItemGroup>
@@ -318,6 +339,21 @@
     </None>
     <None Include="native\x64\zd.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <!-- OpenH264 runtime decoder, loaded by freerdp3.dll at session start
+         when the host negotiates RDPGFX with H.264. Required for the
+         AVC444/H.264 path; without it FreeRDP silently falls back to
+         RemoteFX/progressive. -->
+    <None Include="native\x64\openh264-7.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <!-- x86 build of the shim and its deps. Copied alongside x64; App.OnStartup
+         calls SetDllDirectory pointing at whichever matches the host bitness.
+         Glob form keeps the csproj quiet about a folder that may not yet exist
+         (the x86 native build is opt-in until someone runs the parallel CMake). -->
+    <None Include="native\x86\**\*.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>native\x86\%(RecursiveDir)%(FileName)%(Extension)</Link>
     </None>
     <None Include="packages.config" />
     <None Include="Properties\Settings.settings">

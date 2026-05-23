@@ -1,9 +1,17 @@
-﻿<Application x:Class="SoftSledWPF.App"
+<Application x:Class="SoftSledWPF.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:SoftSledWPF"
-             StartupUri="MainWindow.xaml">
+             StartupUri="ShellWindow.xaml">
     <Application.Resources>
-         
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- App-level merge so ad-hoc UserControls created in code
+                     (e.g. dialogs) can find the WMC styles without each
+                     re-merging. ShellWindow merges it locally too for
+                     designer support. -->
+                <ResourceDictionary Source="/Components/Shell/WmcStyles.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
     </Application.Resources>
 </Application>
