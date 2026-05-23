@@ -112,6 +112,7 @@ namespace SoftSledWPF.Components.Shell {
                 Chk2DAnimations.IsChecked      = _config.Enable2DAnimations;
                 ChkIntenseAnimations.IsChecked = _config.EnableIntenseAnimations;
                 ChkOverscan.IsChecked          = _config.EnableOverscanMargin;
+                ChkD3DImage.IsChecked          = _config.EnableD3DImage;
                 ChkHdContent.IsChecked         = _config.EnableHdContent;
                 ChkUiSounds.IsChecked          = _config.EnableUiSounds;
                 ChkPopups.IsChecked            = _config.EnablePopups;
@@ -220,6 +221,7 @@ namespace SoftSledWPF.Components.Shell {
             _config.Enable2DAnimations      = Chk2DAnimations.IsChecked == true;
             _config.EnableIntenseAnimations = ChkIntenseAnimations.IsChecked == true;
             _config.EnableOverscanMargin    = ChkOverscan.IsChecked == true;
+            _config.EnableD3DImage          = ChkD3DImage.IsChecked == true;
             _config.EnableHdContent         = ChkHdContent.IsChecked == true;
             _config.EnableUiSounds          = ChkUiSounds.IsChecked == true;
             _config.EnablePopups            = ChkPopups.IsChecked == true;

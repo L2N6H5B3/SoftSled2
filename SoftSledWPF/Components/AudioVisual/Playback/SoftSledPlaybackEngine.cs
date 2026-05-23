@@ -1,4 +1,5 @@
 using SoftSled.Components.AudioVisual.FormatStructures;
+using SoftSled.Components.Configuration;
 using SoftSled.Components.Diagnostics;
 using System;
 using System.Threading;
@@ -40,15 +41,14 @@ namespace SoftSled.Components.AudioVisual.Playback {
         private SoftSled.Components.RTSP.RTSPClient _rtsp;
 
         // Per-stream decoder + renderer state. Both null until the
-        // corresponding codec commits.
+        // corresponding codec commits. The renderer is held through
+        // IVideoRenderer so the engine doesn't care whether it's the
+        // WriteableBitmap path (WpfVideoRenderer) or the D3DImage
+        // GPU-backed path (D3DImageVideoRenderer) — the choice is
+        // driven by SoftSledConfig.EnableD3DImage and made at the
+        // point of codec commit.
         private VideoDecoder _videoDecoder;
-        // D3DImage-backed renderer replaces the WriteableBitmap path
-        // (WpfVideoRenderer) — the old path was bottle-necked by the
-        // WPF compositor having to upload the changed bitmap pixels to
-        // the GPU every composition cycle. D3DImage references a
-        // GPU-resident D3D9 surface, so the compositor's per-tick work
-        // for video drops to "reference + composite" with no upload.
-        private D3DImageVideoRenderer _videoRenderer;
+        private IVideoRenderer _videoRenderer;
         private AudioDecoder _audioDecoder;
         private NAudioRenderer _audioRenderer;
 
@@ -230,7 +230,25 @@ namespace SoftSled.Components.AudioVisual.Playback {
             _videoRtpClockHz = rtpClockHz > 0 ? rtpClockHz : 90000u;
             _isVideoSession = true;
             try {
-                _videoRenderer = new D3DImageVideoRenderer(_videoTarget, _clock, _log);
+                // Renderer selection is read live at codec-commit time
+                // (not at engine construction) so a config flip between
+                // sessions takes effect on the next Start without
+                // restarting the app. Failing to read the config
+                // (corrupt file, unwriteable settings dir) falls back
+                // to the safe WriteableBitmap path.
+                bool useD3DImage = false;
+                try { useD3DImage = SoftSledConfigManager.ReadConfig().EnableD3DImage; }
+                catch (Exception ex) {
+                    _log?.LogError($"[engine] EnableD3DImage read failed, defaulting to " +
+                                   $"WriteableBitmap path: {ex.Message}");
+                }
+                if (useD3DImage) {
+                    _videoRenderer = new D3DImageVideoRenderer(_videoTarget, _clock, _log);
+                    _log?.LogInfo("[engine] video renderer: D3DImageVideoRenderer (config: EnableD3DImage=true)");
+                } else {
+                    _videoRenderer = new WpfVideoRenderer(_videoTarget, _clock, _log);
+                    _log?.LogInfo("[engine] video renderer: WpfVideoRenderer (config: EnableD3DImage=false)");
+                }
                 _videoDecoder = new VideoDecoder(plan.CodecId, plan.Extradata,
                     OnVideoFrameDecoded, _log);
                 _videoDecoder.Start();

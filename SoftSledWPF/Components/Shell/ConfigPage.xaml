@@ -118,6 +118,10 @@
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Enable Overscan Margin"
                               Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkD3DImage"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Enable D3DImage (experimental — GPU-backed video surface)"
+                              Click="OnConfigChanged"/>
 
                     <!-- Resolution picker. The button shows the current
                          selection; clicking opens the ResolutionOverlay

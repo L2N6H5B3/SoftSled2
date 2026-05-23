@@ -194,6 +194,7 @@
     <Compile Include="Components\AudioVisual\Playback\LibAvDecoder.cs" />
     <Compile Include="Components\AudioVisual\Playback\VideoFrameSample.cs" />
     <Compile Include="Components\AudioVisual\Playback\VideoDecoder.cs" />
+    <Compile Include="Components\AudioVisual\Playback\IVideoRenderer.cs" />
     <Compile Include="Components\AudioVisual\Playback\WpfVideoRenderer.cs" />
     <Compile Include="Components\AudioVisual\Playback\D3D9Interop.cs" />
     <Compile Include="Components\AudioVisual\Playback\D3DImageVideoRenderer.cs" />

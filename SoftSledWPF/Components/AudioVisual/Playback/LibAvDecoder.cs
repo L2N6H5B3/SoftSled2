@@ -90,6 +90,28 @@ namespace SoftSled.Components.AudioVisual.Playback {
                 CodecCtx->extradata_size = _extradata.Length;
             }
 
+            // Enable multi-threaded decode — this is the single biggest
+            // throughput knob for software video decode and the reason
+            // FFME (which sets it by default) produced smooth playback
+            // on the same hardware where our direct-libav path was
+            // capping at ~10 fps.
+            //
+            // thread_count = 0 lets libav pick (typically = number of
+            // logical cores). thread_type combines FRAME + SLICE:
+            //   * FF_THREAD_FRAME (=1): decode frame N+1 in parallel
+            //     with frame N. Big win for I/P/B-heavy codecs like
+            //     MPEG-2 and H.264; adds ~(N-1) frames of latency,
+            //     absorbed by our clock-driven renderer.
+            //   * FF_THREAD_SLICE (=2): parallel slice decode within a
+            //     frame. Helps when the encoder used multiple slices
+            //     per frame (common for H.264, rarer for MPEG-2);
+            //     no latency cost. libav's H.264 decoder uses this
+            //     transparently when supported.
+            // Audio decoders ignore both fields (single-threaded by
+            // design), so this is safe to set unconditionally.
+            CodecCtx->thread_count = 0;
+            CodecCtx->thread_type  = 1 /* FF_THREAD_FRAME */ | 2 /* FF_THREAD_SLICE */;
+
             // Subclass hook to set codec-specific context fields (sample_rate /
             // channels for raw PCM, etc.) BEFORE avcodec_open2 runs.
             ConfigureContext(CodecCtx);
@@ -104,7 +126,9 @@ namespace SoftSled.Components.AudioVisual.Playback {
             }
 
             Log?.LogInfo($"[libav-{_streamLabel}] codec opened: {_codecId} " +
-                         $"(extradata={(_extradata?.Length ?? 0)}B)");
+                         $"(extradata={(_extradata?.Length ?? 0)}B, " +
+                         $"threads={CodecCtx->thread_count}, " +
+                         $"active_thread_type=0x{CodecCtx->active_thread_type:X})");
 
             _worker = new Thread(WorkerLoop) {
                 IsBackground = true,

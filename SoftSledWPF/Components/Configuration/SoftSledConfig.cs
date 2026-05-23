@@ -73,5 +73,17 @@ namespace SoftSled.Components.Configuration {
         public int SessionWidth  = 1280;
         public int SessionHeight = 720;
 
+        // Video renderer selection. When false (default) the playback
+        // engine uses the software WriteableBitmap path
+        // (WpfVideoRenderer) — proven, no GPU dependency. When true it
+        // uses the D3DImage path (D3DImageVideoRenderer) — Phase-1
+        // GPU-backed surface, intended to free the WPF compositor from
+        // per-frame upload work. Defaults to OFF because both currently
+        // measure the same steady-state fps on the test hardware; the
+        // toggle lets future testing flip without a rebuild and gives
+        // a safe fallback if the D3DImage path misbehaves on a given
+        // GPU / driver combo.
+        public bool EnableD3DImage = false;
+
     }
 }

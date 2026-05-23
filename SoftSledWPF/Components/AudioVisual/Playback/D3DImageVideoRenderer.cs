@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace SoftSled.Components.AudioVisual.Playback {
 
@@ -51,21 +52,35 @@ namespace SoftSled.Components.AudioVisual.Playback {
     ///   <item><see cref="EnqueueFrame"/>: producer hand-off from the
     ///   decoder thread. Thread-safe bounded queue, drops oldest on
     ///   overflow.</item>
-    ///   <item>WPF <c>CompositionTarget.Rendering</c> tick (UI thread):
-    ///   picks the latest due frame from the queue, locks the D3D9
-    ///   surface, memcpys the BGRA bytes in, unlocks, and tells
-    ///   D3DImage which rect changed.</item>
+    ///   <item><see cref="Timer"/>-driven tick (~16 ms / 60 Hz). The
+    ///   timer callback marshals to the UI thread via
+    ///   <see cref="Dispatcher.BeginInvoke"/> at
+    ///   <see cref="DispatcherPriority.Render"/>. On the UI thread we
+    ///   pick the latest due frame, lock the D3D9 surface, memcpy the
+    ///   BGRA bytes in, unlock, and tell D3DImage which rect changed.
+    ///   Decoupling from <c>CompositionTarget.Rendering</c> matters
+    ///   because that tick gets throttled under load (RDP + splash +
+    ///   video can pin it to ~10 Hz, dropping ~70% of source frames);
+    ///   the timer keeps the renderer paced at the source rate while
+    ///   the compositor composes at whatever rate it can.</item>
     ///   <item><see cref="Dispose"/>: releases the D3D9 device + surface,
     ///   drops the D3DImage off the target.</item>
     /// </list>
     /// </summary>
-    internal sealed class D3DImageVideoRenderer : IDisposable {
+    internal sealed class D3DImageVideoRenderer : IVideoRenderer {
 
         private readonly Image _target;
+        private readonly Dispatcher _dispatcher;
         private readonly PlaybackClock _clock;
         private readonly Logger _log;
         private readonly ConcurrentQueue<VideoFrameSample> _queue = new ConcurrentQueue<VideoFrameSample>();
         private const int MaxQueuedFrames = 60;     // ~1 s @ 60 fps headroom
+
+        // ~16 ms = 60 Hz tick. Matches WpfVideoRenderer for direct
+        // comparison; the timer never blocks waiting for the UI thread,
+        // a re-entrancy guard coalesces ticks if the compositor falls
+        // behind.
+        private const int TickPeriodMs = 16;
 
         // D3D9 + D3DImage state. All UI-thread-owned after construction.
         private IntPtr _d3d9Ex;
@@ -87,17 +102,27 @@ namespace SoftSled.Components.AudioVisual.Playback {
         private readonly System.Diagnostics.Stopwatch _fpsSw = System.Diagnostics.Stopwatch.StartNew();
 
         private bool _disposed;
-        private EventHandler _renderingHandler;
+
+        // Timer + re-entrancy guard. _tickPending ensures we never queue
+        // more than one Render-priority dispatcher item at a time —
+        // otherwise a slow Lock/memcpy/Unlock could let multiple items
+        // pile up and amplify backpressure.
+        private Timer _tickTimer;
+        private int _tickPending;
+        private readonly Action _doTickAction;
 
         public D3DImageVideoRenderer(Image target, PlaybackClock clock, Logger log) {
             _target = target ?? throw new ArgumentNullException(nameof(target));
+            _dispatcher = _target.Dispatcher;
             _clock = clock ?? throw new ArgumentNullException(nameof(clock));
             _log = log;
+
+            _doTickAction = DoTick;
 
             // All D3D9 + D3DImage initialisation has to happen on the UI
             // thread (WPF requirement for D3DImage; D3D9 device works
             // anywhere but we keep it consistent for simpler teardown).
-            _target.Dispatcher.BeginInvoke(new Action(InitOnUiThread));
+            _dispatcher.BeginInvoke(new Action(InitOnUiThread));
         }
 
         private void InitOnUiThread() {
@@ -155,10 +180,14 @@ namespace SoftSled.Components.AudioVisual.Playback {
                 _target.Source = _d3dImage;
                 _target.Visibility = Visibility.Visible;
 
-                _renderingHandler = OnRenderingTick;
-                CompositionTarget.Rendering += _renderingHandler;
+                // Start the timer only after init succeeds — otherwise
+                // a tick could fire while _device / _d3dImage are still
+                // being assembled. With the timer started here, the
+                // first tick after init sees a ready surface.
+                _tickTimer = new Timer(OnTimerTick, null, TickPeriodMs, TickPeriodMs);
 
-                _log?.LogInfo($"[d3d-video] D3D9Ex device + D3DImage ready");
+                _log?.LogInfo($"[d3d-video] D3D9Ex device + D3DImage ready " +
+                              "(timer-driven blit, 60 Hz target)");
             } catch (Exception ex) {
                 _log?.LogError($"[d3d-video] init failed: {ex.Message}");
             }
@@ -184,35 +213,57 @@ namespace SoftSled.Components.AudioVisual.Playback {
             _queue.Enqueue(sample);
         }
 
-        // ---- UI thread ----
+        // ---- Timer thread ----
 
-        private void OnRenderingTick(object sender, EventArgs e) {
-            if (_disposed || _device == IntPtr.Zero || _d3dImage == null) return;
-            long now = _clock.CurrentMediaTimeMs;
-
-            // Drain due frames; keep only the most recent (same liveness
-            // policy as WpfVideoRenderer).
-            VideoFrameSample dueFrame = null;
-            while (_queue.TryPeek(out var head) && head.PresentationMs <= now) {
-                if (!_queue.TryDequeue(out head)) break;
-                if (dueFrame != null) {
-                    dueFrame.Release();
-                    Interlocked.Increment(ref _framesDroppedLate);
-                    Interlocked.Increment(ref _fpsWindowDroppedLate);
-                }
-                dueFrame = head;
-            }
-            if (dueFrame == null) return;
-
+        private void OnTimerTick(object state) {
+            if (_disposed) return;
+            // Coalesce: if the previous Render-priority item hasn't run
+            // yet (compositor under load), skip queuing another one. The
+            // pending dispatcher item will drain whatever is queued when
+            // it finally runs, so no frames are missed — they just batch.
+            if (Interlocked.Exchange(ref _tickPending, 1) != 0) return;
             try {
-                Present(dueFrame);
-                Interlocked.Increment(ref _framesPresented);
-                Interlocked.Increment(ref _fpsWindowPresented);
-            } finally {
-                dueFrame.Release();
+                _dispatcher.BeginInvoke(_doTickAction, DispatcherPriority.Render);
+            } catch {
+                // Dispatcher may be shutting down — drop the tick and
+                // clear the guard so the next one can try.
+                Interlocked.Exchange(ref _tickPending, 0);
             }
+        }
 
-            MaybeLogFps();
+        // ---- UI thread (dispatcher) ----
+
+        private void DoTick() {
+            try {
+                if (_disposed || _device == IntPtr.Zero || _d3dImage == null) return;
+                long now = _clock.CurrentMediaTimeMs;
+
+                // Drain due frames; keep only the most recent (same liveness
+                // policy as WpfVideoRenderer).
+                VideoFrameSample dueFrame = null;
+                while (_queue.TryPeek(out var head) && head.PresentationMs <= now) {
+                    if (!_queue.TryDequeue(out head)) break;
+                    if (dueFrame != null) {
+                        dueFrame.Release();
+                        Interlocked.Increment(ref _framesDroppedLate);
+                        Interlocked.Increment(ref _fpsWindowDroppedLate);
+                    }
+                    dueFrame = head;
+                }
+                if (dueFrame == null) return;
+
+                try {
+                    Present(dueFrame);
+                    Interlocked.Increment(ref _framesPresented);
+                    Interlocked.Increment(ref _fpsWindowPresented);
+                } finally {
+                    dueFrame.Release();
+                }
+
+                MaybeLogFps();
+            } finally {
+                Interlocked.Exchange(ref _tickPending, 0);
+            }
         }
 
         private void Present(VideoFrameSample frame) {
@@ -301,12 +352,14 @@ namespace SoftSled.Components.AudioVisual.Playback {
         public void Dispose() {
             if (_disposed) return;
             _disposed = true;
+            // Stop the timer first so no new dispatcher items get queued
+            // while we're tearing down the D3D objects.
             try {
-                _target.Dispatcher.Invoke(() => {
-                    if (_renderingHandler != null) {
-                        CompositionTarget.Rendering -= _renderingHandler;
-                        _renderingHandler = null;
-                    }
+                _tickTimer?.Dispose();
+                _tickTimer = null;
+            } catch { }
+            try {
+                _dispatcher.Invoke(() => {
                     if (_d3dImage != null) {
                         try {
                             _d3dImage.Lock();

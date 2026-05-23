@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 
 namespace SoftSled.Components.AudioVisual.Playback {
 
@@ -16,12 +17,23 @@ namespace SoftSled.Components.AudioVisual.Playback {
     /// from the decoder thread; presents them on the dispatcher in sync
     /// with the <see cref="PlaybackClock"/>.
     ///
-    /// Tick driver: <c>CompositionTarget.Rendering</c> fires on every WPF
-    /// composition pass (~60 Hz with vsync). Each tick we read the
-    /// clock, drain all queued frames with <c>PresentationMs ≤ now</c>,
-    /// keep only the most recent one (frame drop on lag is the right
-    /// behaviour for live RTSP — better than building up latency), and
-    /// blit it into the bitmap.
+    /// Tick driver: a <see cref="Timer"/> firing at ~16 ms (60 Hz target).
+    /// Each tick the timer callback (running on a thread-pool thread)
+    /// marshals to the UI thread via <see cref="Dispatcher.BeginInvoke"/>
+    /// at <see cref="DispatcherPriority.Render"/>, then drains all
+    /// queued frames with <c>PresentationMs ≤ now</c>, keeps only the
+    /// most recent (frame drop on lag is the right behaviour for live
+    /// RTSP — better than building up latency), and blits it into the
+    /// bitmap.
+    ///
+    /// <para>Why a timer instead of <c>CompositionTarget.Rendering</c>?
+    /// The compositor tick gets throttled under load (observed ~10 Hz
+    /// with combined RDP + splash + video work). FFME-style smoothness
+    /// requires a renderer that paces itself at the source frame rate
+    /// regardless of when the compositor next runs — the timer hits at
+    /// 60 Hz, queues a Render-priority dispatcher item per tick, and
+    /// keeps the bitmap fresh; the compositor composes at its own
+    /// rate but always sees an up-to-date frame.</para>
     ///
     /// Bitmap allocation: deferred to the first frame so we use the
     /// stream's actual dimensions. On a resolution change (rare; e.g. a
@@ -32,9 +44,10 @@ namespace SoftSled.Components.AudioVisual.Playback {
     /// allocator and dispatcher marshalling there is proven to handle
     /// 30+ fps without tearing.
     /// </summary>
-    internal sealed class WpfVideoRenderer : IDisposable {
+    internal sealed class WpfVideoRenderer : IVideoRenderer {
 
         private readonly Image _target;
+        private readonly Dispatcher _dispatcher;
         private readonly PlaybackClock _clock;
         private readonly Logger _log;
         private readonly ConcurrentQueue<VideoFrameSample> _queue = new ConcurrentQueue<VideoFrameSample>();
@@ -44,13 +57,26 @@ namespace SoftSled.Components.AudioVisual.Playback {
         // negligible past the first few.
         private const int MaxQueuedFrames = 60;
 
+        // ~16 ms = 60 Hz tick. We coalesce multiple due frames per tick
+        // (keep only the newest), so this is effectively an upper bound
+        // on how late a frame can be displayed — actual display rate
+        // adapts to the source.
+        private const int TickPeriodMs = 16;
+
         private WriteableBitmap _bitmap;
         private int _bitmapW, _bitmapH;
         private long _framesPresented;
         private long _framesDroppedLate;     // dropped because a newer frame was also due
         private long _framesDroppedOverflow; // dropped at enqueue because queue full
         private bool _disposed;
-        private EventHandler _renderingHandler;
+
+        // Timer + re-entrancy guard. _tickPending ensures we never queue
+        // more than one Render-priority dispatcher item at a time —
+        // otherwise a slow blit could let multiple items pile up and
+        // amplify backpressure.
+        private Timer _tickTimer;
+        private int _tickPending;
+        private readonly Action _doTickAction;
 
         // FPS counter — runs over a sliding ~1 s window and logs at the
         // boundary. Cheap (one Interlocked + one Stopwatch read per
@@ -64,15 +90,16 @@ namespace SoftSled.Components.AudioVisual.Playback {
 
         public WpfVideoRenderer(Image target, PlaybackClock clock, Logger log) {
             _target = target ?? throw new ArgumentNullException(nameof(target));
+            _dispatcher = _target.Dispatcher;
             _clock = clock ?? throw new ArgumentNullException(nameof(clock));
             _log = log;
 
-            _renderingHandler = OnRenderingTick;
-            // Hook on the UI thread.
-            _target.Dispatcher.BeginInvoke(new Action(() => {
-                if (_disposed) return;
-                CompositionTarget.Rendering += _renderingHandler;
-            }));
+            _doTickAction = DoTick;
+            // Timer starts immediately; the first tick simply finds an
+            // empty queue and returns. Cheaper than deferring the timer
+            // start until the first frame arrives.
+            _tickTimer = new Timer(OnTimerTick, null, TickPeriodMs, TickPeriodMs);
+            _log?.LogInfo("[wpf-video] renderer started (timer-driven blit, 60 Hz target)");
         }
 
         /// <summary>Enqueue a decoded frame for presentation. Safe from
@@ -81,8 +108,8 @@ namespace SoftSled.Components.AudioVisual.Playback {
             if (_disposed || sample == null) return;
             if (_queue.Count >= MaxQueuedFrames) {
                 // Drop oldest to bound memory. Live RTSP can produce
-                // bursts faster than 60 Hz can drain them; a 32-frame
-                // ceiling caps memory at ~30 MB for 720p without
+                // bursts faster than 60 Hz can drain them; a 60-frame
+                // ceiling caps memory at ~60 MB for 720p without
                 // adding visible latency. Release the dropped frame's
                 // pixel buffer back to the pool so it doesn't linger.
                 if (_queue.TryDequeue(out var dropped)) {
@@ -98,38 +125,60 @@ namespace SoftSled.Components.AudioVisual.Playback {
             _queue.Enqueue(sample);
         }
 
-        // -- UI thread (CompositionTarget.Rendering) --
+        // -- Timer thread --
 
-        private void OnRenderingTick(object sender, EventArgs e) {
+        private void OnTimerTick(object state) {
             if (_disposed) return;
-            long now = _clock.CurrentMediaTimeMs;
-
-            // Drain all frames whose presentation time has arrived. Keep
-            // the last one to actually blit (the others are "late" and
-            // would only produce visible judder if we tried to blit
-            // them all). Skipped frames have their pixel buffers
-            // released back to the pool immediately.
-            VideoFrameSample dueFrame = null;
-            while (_queue.TryPeek(out var head) && head.PresentationMs <= now) {
-                if (!_queue.TryDequeue(out head)) break;
-                if (dueFrame != null) {
-                    dueFrame.Release();
-                    Interlocked.Increment(ref _framesDroppedLate);
-                    Interlocked.Increment(ref _fpsWindowDroppedLate);
-                }
-                dueFrame = head;
-            }
-            if (dueFrame == null) return;
-
+            // Coalesce: if the previous Render-priority item hasn't run
+            // yet (compositor under load), skip queuing another one. The
+            // dispatcher item will drain whatever is queued when it
+            // finally runs, so no frames are missed — they just batch.
+            if (Interlocked.Exchange(ref _tickPending, 1) != 0) return;
             try {
-                Present(dueFrame);
-                Interlocked.Increment(ref _framesPresented);
-                Interlocked.Increment(ref _fpsWindowPresented);
-            } finally {
-                dueFrame.Release();
+                _dispatcher.BeginInvoke(_doTickAction, DispatcherPriority.Render);
+            } catch {
+                // Dispatcher may be shutting down — drop the tick and
+                // clear the guard so the next one can try.
+                Interlocked.Exchange(ref _tickPending, 0);
             }
+        }
 
-            MaybeLogFps(now);
+        // -- UI thread (dispatcher) --
+
+        private void DoTick() {
+            try {
+                if (_disposed) return;
+                long now = _clock.CurrentMediaTimeMs;
+
+                // Drain all frames whose presentation time has arrived. Keep
+                // the last one to actually blit (the others are "late" and
+                // would only produce visible judder if we tried to blit
+                // them all). Skipped frames have their pixel buffers
+                // released back to the pool immediately.
+                VideoFrameSample dueFrame = null;
+                while (_queue.TryPeek(out var head) && head.PresentationMs <= now) {
+                    if (!_queue.TryDequeue(out head)) break;
+                    if (dueFrame != null) {
+                        dueFrame.Release();
+                        Interlocked.Increment(ref _framesDroppedLate);
+                        Interlocked.Increment(ref _fpsWindowDroppedLate);
+                    }
+                    dueFrame = head;
+                }
+                if (dueFrame == null) return;
+
+                try {
+                    Present(dueFrame);
+                    Interlocked.Increment(ref _framesPresented);
+                    Interlocked.Increment(ref _fpsWindowPresented);
+                } finally {
+                    dueFrame.Release();
+                }
+
+                MaybeLogFps();
+            } finally {
+                Interlocked.Exchange(ref _tickPending, 0);
+            }
         }
 
         private void Present(VideoFrameSample frame) {
@@ -154,7 +203,7 @@ namespace SoftSled.Components.AudioVisual.Playback {
             }
         }
 
-        private void MaybeLogFps(long nowMediaMs) {
+        private void MaybeLogFps() {
             // Log every ~1 second of WALL time (Stopwatch). Reading the
             // clock isn't enough — at non-1× rates media-time advances
             // differently from wall-time, and we want fps in user-
@@ -178,14 +227,13 @@ namespace SoftSled.Components.AudioVisual.Playback {
         public void Dispose() {
             if (_disposed) return;
             _disposed = true;
+            // Stop the timer first so no new dispatcher items get queued.
             try {
-                _target.Dispatcher.Invoke(() => {
-                    if (_renderingHandler != null) {
-                        CompositionTarget.Rendering -= _renderingHandler;
-                        _renderingHandler = null;
-                    }
-                    _target.Source = null;
-                });
+                _tickTimer?.Dispose();
+                _tickTimer = null;
+            } catch { }
+            try {
+                _dispatcher.Invoke(() => { _target.Source = null; });
             } catch { }
             // Return any queued frames' buffers to the pool, then clear
             // the pool itself — these per-session buffers are sized to
