@@ -78,6 +78,24 @@ namespace SoftSled.Components.AudioVisual {
         private long _latestVideoPtsTicks;
         private long _latestAudioPtsTicks;
 
+        // Added to every computed per-stream PTS before emission. Stays
+        // at 0 in normal sessions; bumped by Reanchor to preserve
+        // monotonicity across server-side seeks / rate changes.
+        //
+        // Why: on a server-side PLAY-with-Range or PLAY-with-Scale, the
+        // server starts emitting RTP packets with timestamps anchored at
+        // the new media position. If we re-base the muxer against the new
+        // RTP timestamps the computed PTS resets near 0, which regresses
+        // relative to what we've already emitted. libav's PS demuxer then
+        // sees a DTS discontinuity going backwards, drops the offending
+        // samples, and the audio decoder stalls. Adding an offset that
+        // pushes the next computed PTS just past lastEmittedPts gives
+        // libav a normal-looking monotonically-increasing PTS series
+        // with a small (~100 ms) bridge gap that the renderer reads as
+        // a tiny stall — never as a regression.
+        private long _videoOutputPtsOffsetTicks;
+        private long _audioOutputPtsOffsetTicks;
+
         // ----- Diagnostic accessors ---------------------------------------
 
         public bool VideoAnchored => _videoAnchored;
@@ -113,7 +131,8 @@ namespace SoftSled.Components.AudioVisual {
                 _videoBaseTs   = rtpTs;
                 _videoAnchored = true;
             }
-            long pts33 = ComputePts33(rtpTs, _videoBaseTs);
+            long pts33 = (ComputePts33(rtpTs, _videoBaseTs) + _videoOutputPtsOffsetTicks)
+                         & 0x1FFFFFFFFL;
             _latestVideoPtsTicks = pts33;
             return BuildPackWithPes(VideoStreamId, frameBytes, pts33, includeSystemHeader: !_systemHeaderEmitted);
         }
@@ -127,7 +146,8 @@ namespace SoftSled.Components.AudioVisual {
                 _audioBaseTs   = rtpTs;
                 _audioAnchored = true;
             }
-            long pts33 = ComputePts33(rtpTs, _audioBaseTs);
+            long pts33 = (ComputePts33(rtpTs, _audioBaseTs) + _audioOutputPtsOffsetTicks)
+                         & 0x1FFFFFFFFL;
             _latestAudioPtsTicks = pts33;
             return BuildPackWithPes(AudioStreamId, frameBytes, pts33, includeSystemHeader: !_systemHeaderEmitted);
         }
@@ -157,6 +177,57 @@ namespace SoftSled.Components.AudioVisual {
             if (_videoAnchored) return;
             _videoBaseTs   = rtpTs;
             _videoAnchored = true;
+        }
+
+        /// <summary>
+        /// Re-anchor the per-stream PTS bases mid-session after a server
+        /// <c>PLAY</c>-with-<c>Range:</c> or <c>PLAY</c>-with-<c>Scale:</c>.
+        /// Pass either RTP timestamp as <c>null</c> to leave that stream
+        /// untouched (e.g. audio-only trick play where only video's
+        /// anchor is changing).
+        ///
+        /// Unlike <see cref="SetAudioBaseTs"/> / <see cref="SetVideoBaseTs"/>,
+        /// this method intentionally OVERWRITES already-set anchors. It
+        /// also bumps an internal output-PTS offset such that the first
+        /// post-reanchor sample's emitted PTS picks up just past the
+        /// last pre-reanchor sample's, giving libav's PS demuxer a
+        /// monotonically-increasing PTS series across the seek instead
+        /// of regressing back to (or near) zero. The bridge gap is
+        /// ~100 ms — large enough to never be mistaken for a regression
+        /// or unsorted DTS, small enough that the renderer just sees a
+        /// brief stall.
+        ///
+        /// Also clears <c>_systemHeaderEmitted</c> so the next emitted
+        /// pack carries a fresh PS system header — legal at any
+        /// "natural" boundary per the PS spec, and a useful hint to
+        /// libav that stream parameters may have changed.
+        /// </summary>
+        public void Reanchor(uint? newAudioRtpTs, uint? newVideoRtpTs) {
+            // ~100 ms @ 90 kHz: one video frame interval at 10 fps and
+            // multiple frames at 30/60 fps — never small enough to look
+            // like a regression, never large enough to look like a real
+            // skip.
+            const long BridgeGapTicks = 9000;
+
+            if (newVideoRtpTs.HasValue) {
+                _videoBaseTs = newVideoRtpTs.Value;
+                _videoAnchored = true;
+                // Next computed PTS will be ~0 (the new sample's RTP ts
+                // equals the new base). Adding lastEmitted + bridge
+                // means the first post-reanchor PTS comes out just
+                // above the last pre-reanchor PTS.
+                _videoOutputPtsOffsetTicks = _latestVideoPtsTicks + BridgeGapTicks;
+            }
+            if (newAudioRtpTs.HasValue) {
+                _audioBaseTs = newAudioRtpTs.Value;
+                _audioAnchored = true;
+                _audioOutputPtsOffsetTicks = _latestAudioPtsTicks + BridgeGapTicks;
+            }
+
+            // Re-emit the system header on the next pack so libav can
+            // re-probe stream timing if it wants. Cheap; the header
+            // is small.
+            _systemHeaderEmitted = false;
         }
 
         /// <summary>

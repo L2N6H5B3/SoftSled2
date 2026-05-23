@@ -542,35 +542,36 @@ namespace SoftSled.Components.VirtualChannel {
                             }
                         }
 
-                        // Trick-play (rate ≠ 1.0) is INTENTIONALLY suppressed in v1.
+                        // Rate forwarding. Always invoke SetRateAsync — even
+                        // for rate=1.0 — because WMC's "return from FF/RW
+                        // to normal speed" arrives as a Start with rate=1.0,
+                        // and we MUST flip the server out of trick-play
+                        // mode (PLAY without Scale/Speed headers) when that
+                        // happens. Skipping SetRateAsync at 1.0 would leave
+                        // the server stuck at Scale=3 with audio dropped.
                         //
-                        // Observed empirically: when we forwarded the rate to the
-                        // server via RTSP PLAY-with-Scale, WMPNss responded fine
-                        // (200 OK, RTP-Info echoed) but then stopped sending audio
-                        // packets — DLNA convention is to drop audio during
-                        // FF/RW since it's unintelligible at non-1x speeds.
-                        // FFME's master clock is locked to the audio stream, so
-                        // as soon as the audio buffer drained, the entire
-                        // pipeline froze: 50 video frames buffered, 0 audio,
-                        // ~12 s of frozen picture until the user gave up.
+                        // Wire-level safety:
+                        //   * RTSPClient.Play / SetRate are wire-idempotent
+                        //     (skip the wire write if the cached state
+                        //     already matches), so the very first 1.0
+                        //     after session start (auto-PLAY already
+                        //     emitted) is a free no-op.
+                        //   * SetRateAsync also no-ops the FFME SpeedRatio
+                        //     when it's already at the target value.
                         //
-                        // Proper trick play needs a video-clock-master fallback in
-                        // the FFME pipeline + the muxer's per-stream PTS bases
-                        // re-anchored on every PLAY-with-Range/Scale while
-                        // preserving DTS monotonicity for libav. That's a
-                        // separate work item.
-                        //
-                        // Until then, swallow the rate request so playback
-                        // continues uninterrupted at 1x. WMC's transport UI may
-                        // briefly show "FF 3×" but the stream itself keeps
-                        // running rather than freezing.
-                        if (isExplicitRate) {
-                            m_logger?.LogInfo(
-                                $"AVCTRL: Start RequestedPlayRate={rate}x — trick play " +
-                                "not yet supported, ignoring (playback continues at 1x).");
-                            // Intentionally NOT calling _mediaController.SetRateAsync —
-                            // the wire PLAY-with-Scale it emits triggers WMPNss to
-                            // drop audio and freeze FFME.
+                        // The actual routing decision (client-side via
+                        // SpeedRatio vs. server-side via RTSP Scale) lives
+                        // inside SetRateAsync.
+                        bool clientSide =
+                            System.Math.Abs(rate) >= 0.5 && System.Math.Abs(rate) <= 2.0
+                            && rate > 0;
+                        m_logger?.LogInfo(
+                            $"AVCTRL: Start RequestedPlayRate={rate}x — forwarding " +
+                            $"({(clientSide ? "client-side via FFME SpeedRatio" : "server-side via RTSP PLAY-with-Scale")})" +
+                            (isExplicitRate ? "" : " [normal 1× — also drives any required FF/RW exit]"));
+                        try { _ = _mediaController?.SetRateAsync(rate); }
+                        catch (Exception ex) {
+                            m_logger?.LogError($"AVCTRL: SetRateAsync failed: {ex.Message}");
                         }
 
                         // Drive FFME Play. Fire-and-forget — FFME may not

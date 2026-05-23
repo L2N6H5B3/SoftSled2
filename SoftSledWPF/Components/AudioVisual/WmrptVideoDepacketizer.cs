@@ -70,6 +70,37 @@ namespace SoftSled.Components.AudioVisual {
         public event EventHandler<EventData> NalUnitReady;
 
         /// <summary>
+        /// Clear all per-SSRC reassembly state. Called by RTSPClient
+        /// after a server-side seek / rate change (PLAY-with-Range or
+        /// PLAY-with-Scale): the server resumes streaming from a new
+        /// position with new RTP sequence numbers, and our per-stream
+        /// <see cref="StreamState.ExpectedNextSeq"/> tracker would
+        /// otherwise see the discontinuity as packet loss and flag a
+        /// long run of MAUs as <c>PostLoss</c> — which the consumer
+        /// drops until the next IDR. By clearing the trackers we
+        /// accept the first post-seek packet as a fresh start (the
+        /// server is responsible for sending a usable starting frame
+        /// after a seek anyway, so post-loss handling isn't useful
+        /// here).
+        ///
+        /// Also drops any in-flight fragment assembly — those bytes
+        /// are from the pre-seek stream and would corrupt the next
+        /// MAU if appended to a post-seek packet.
+        /// </summary>
+        public void ResetPostLossState() {
+            foreach (var kv in _streams) {
+                var s = kv.Value;
+                s.Fragments = null;
+                s.ExpectedNextSeq = null;
+                s.PendingPostLossFlag = false;
+                s.FirstFragmentSync = false;
+                s.FirstFragmentDiscont = false;
+                s.FirstFragmentEncrypt = false;
+                s.FirstFragmentTs = 0;
+            }
+        }
+
+        /// <summary>
         /// Process the WMRTP payload of one RTP packet (data after the 12-byte RTP header
         /// and after any RTP extension).
         /// </summary>

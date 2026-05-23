@@ -99,6 +99,12 @@ namespace SoftSled.Components.AudioVisual {
             bool isAudioOnly = !HasVideo;
             OnInitializing = (config, source) => {
                 config.ForcedInputFormat = _forcedInputFormat;
+                // NOTE: IsTimeSyncDisabled lives on MediaOptions (set via
+                // MediaElement.MediaOpening), not on ContainerConfiguration
+                // here. Wired in ExtenderSessionControl's MediaOpening
+                // handler so per-stream clocks are disconnected and the
+                // video element keeps advancing when the server drops
+                // audio during trick play.
                 if (isAudioOnly) {
                     // MP3/AC-3/WAV: one frame header is enough to commit
                     // codec parameters. 32 KB probesize, 500 ms analyze.

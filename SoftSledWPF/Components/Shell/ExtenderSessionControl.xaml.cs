@@ -702,6 +702,26 @@ namespace SoftSledWPF.Components.Shell {
                                                      $"duration={e.Info.Duration} streams=[{streams}]");
                         }
                     } catch { }
+                    // Disconnect FFME's per-stream clocks so the video element
+                    // keeps advancing on its own PTS clock even when the audio
+                    // buffer drains. WMPNss-class servers stop sending audio
+                    // during server-side trick play (DLNA convention — audio
+                    // at 3×/10× would be unintelligible); without this, the
+                    // pipeline freezes on the missing audio while 50 video
+                    // frames sit unused in the buffer. A/V sync at 1× then
+                    // relies on the muxer's authoritative PES PTS values
+                    // (sourced from the wire's per-stream RTP timestamps,
+                    // anchored against PLAY-response RTP-Info), which is the
+                    // correct source of truth for RTSP playback anyway.
+                    try { e.Options.IsTimeSyncDisabled = true; } catch { }
+                };
+                // Apply the same clock-disconnect to the secondary audio-only
+                // FFME element (PCM path). The audio element doesn't directly
+                // suffer from the trick-play freeze (no video to wait on), but
+                // we keep the option symmetric so any future change to the
+                // PCM pipeline doesn't surprise us with sync behaviour.
+                MediaAudio.MediaOpening += (s, e) => {
+                    try { e.Options.IsTimeSyncDisabled = true; } catch { }
                 };
                 Media.MediaOpened += (s, e) => {
                     try {

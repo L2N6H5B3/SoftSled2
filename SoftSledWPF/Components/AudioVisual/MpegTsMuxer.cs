@@ -110,6 +110,15 @@ namespace SoftSled.Components.AudioVisual {
         private double _latestAudioPtsMs;
         private double _latestVideoPtsMs;
 
+        // Output-PTS offsets in 90 kHz ticks. Stay at 0 in normal
+        // sessions; bumped by Reanchor to preserve monotonicity across
+        // server-side seeks / rate changes. See MpegPsMuxer for the
+        // full rationale — the TS path needs the same machinery
+        // because libav's TS demuxer is just as strict about DTS
+        // monotonicity as the PS demuxer.
+        private ulong _audioOutputPtsOffset90k;
+        private ulong _videoOutputPtsOffset90k;
+
         // Continuity counter (4 bits) per PID
         private byte _ccVideo;
         private byte _ccAudio;
@@ -133,8 +142,59 @@ namespace SoftSled.Components.AudioVisual {
             _pcmBitsPerSample = bitsPerSample;
         }
 
-        public void SetAudioBaseTs(uint rtptime) { _audioBaseTs = rtptime; _audioAnchored = true; }
-        public void SetVideoBaseTs(uint rtptime) { _videoBaseTs = rtptime; _videoAnchored = true; }
+        /// <summary>
+        /// One-shot per-stream anchor from the first PLAY response's
+        /// RTP-Info. Symmetric to MpegPsMuxer: subsequent calls are
+        /// silently ignored — the muxer commits to the first base it
+        /// receives and stays on it for the duration of the session.
+        /// Mid-session re-anchoring (after a server seek or rate
+        /// change) goes through <see cref="Reanchor"/> instead, which
+        /// also takes care of output-PTS monotonicity.
+        /// </summary>
+        public void SetAudioBaseTs(uint rtptime) {
+            if (_audioAnchored) return;
+            _audioBaseTs = rtptime;
+            _audioAnchored = true;
+        }
+        public void SetVideoBaseTs(uint rtptime) {
+            if (_videoAnchored) return;
+            _videoBaseTs = rtptime;
+            _videoAnchored = true;
+        }
+
+        /// <summary>
+        /// Re-anchor the per-stream PTS bases mid-session after a
+        /// server PLAY-with-Range / PLAY-with-Scale. Mirrors
+        /// <see cref="MpegPsMuxer.Reanchor"/> — overwrites the base
+        /// AND bumps an output-PTS offset so the next computed PTS
+        /// picks up just past the last emitted PTS rather than
+        /// regressing toward zero. Pass either RTP timestamp as
+        /// <c>null</c> to leave that stream untouched. Bridge gap
+        /// is ~100 ms.
+        /// </summary>
+        public void Reanchor(uint? newAudioRtpTs, uint? newVideoRtpTs) {
+            const ulong BridgeGap90k = 9000;  // 100 ms @ 90 kHz
+
+            if (newVideoRtpTs.HasValue) {
+                _videoBaseTs = newVideoRtpTs.Value;
+                _videoAnchored = true;
+                // Latest video PTS is stored as milliseconds; convert
+                // back to 90 kHz ticks before adding the bridge.
+                _videoOutputPtsOffset90k =
+                    (ulong)(long)(_latestVideoPtsMs * 90.0) + BridgeGap90k;
+            }
+            if (newAudioRtpTs.HasValue) {
+                _audioBaseTs = newAudioRtpTs.Value;
+                _audioAnchored = true;
+                _audioOutputPtsOffset90k =
+                    (ulong)(long)(_latestAudioPtsMs * 90.0) + BridgeGap90k;
+            }
+
+            // Force a fresh PAT/PMT at the next access unit so libav
+            // re-reads stream tables (cheap, ~200 B) after the seek.
+            _lastPatPmtPtsMs = double.MinValue;
+            _lastPcrPtsMs    = double.MinValue;
+        }
 
         /// <summary>
         /// Set the per-stream RTP timestamp clock rate (Hz). Determined
@@ -167,7 +227,8 @@ namespace SoftSled.Components.AudioVisual {
         public byte[] MuxVideoAccessUnit(byte[] accessUnit, uint rtpTimestamp, bool isKeyframe) {
             if (accessUnit == null || accessUnit.Length == 0) return Array.Empty<byte>();
             if (!_videoAnchored) { _videoBaseTs = rtpTimestamp; _videoAnchored = true; }
-            ulong pts90k = ComputePts90k(rtpTimestamp, _videoBaseTs, _videoClockHz);
+            ulong pts90k = (ComputePts90k(rtpTimestamp, _videoBaseTs, _videoClockHz)
+                            + _videoOutputPtsOffset90k) & 0x1FFFFFFFFUL;
             _latestVideoPtsMs = pts90k / 90.0;
 
             using (var ms = new MemoryStream()) {
@@ -197,7 +258,8 @@ namespace SoftSled.Components.AudioVisual {
         public byte[] MuxAudioFrame(byte[] frame, uint rtpTimestamp) {
             if (frame == null || frame.Length == 0) return Array.Empty<byte>();
             if (!_audioAnchored) { _audioBaseTs = rtpTimestamp; _audioAnchored = true; }
-            ulong pts90k = ComputePts90k(rtpTimestamp, _audioBaseTs, _audioClockHz);
+            ulong pts90k = (ComputePts90k(rtpTimestamp, _audioBaseTs, _audioClockHz)
+                            + _audioOutputPtsOffset90k) & 0x1FFFFFFFFUL;
             _latestAudioPtsMs = pts90k / 90.0;
 
             byte[] esPayload;

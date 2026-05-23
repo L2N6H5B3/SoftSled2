@@ -200,48 +200,83 @@ namespace SoftSled.Components.AudioVisual {
 
         public async Task SetRateAsync(double rate) {
             if (_disposed) return;
-            if (rate <= 0.0) {
-                _log?.LogDebug($"[ffme-mc] SetRateAsync({rate}) — non-positive rate, deferring to RTSP only");
-            }
             _pendingRate = rate;
 
-            // RTSP-side: send PLAY with Scale/Speed. The server rebuilds
-            // the stream at the requested rate — works for any rate the
-            // server supports (the McxDMS captures show up to 20x).
-            try {
-                _rtsp?.SetRate(rate);
-            } catch (Exception ex) {
-                _log?.LogError($"[ffme-mc] RTSP SetRate failed: {ex.Message}");
-            }
+            // Rate-split per the trick-play plan:
+            //
+            //   * Rates in [0.5, 2.0] → CLIENT-SIDE via FFME SpeedRatio
+            //     (atempo resampler keeps audio intelligible). The
+            //     server stays at 1× so audio + video continue
+            //     normally. We MUST also reset the RTSP rate to 1.0
+            //     in case we're stepping DOWN from a higher rate
+            //     (e.g. 3× → 1.5×) — otherwise the server stays in
+            //     trick-play mode with no audio and we end up with
+            //     compound scaling that under-runs the FFME audio
+            //     buffer.
+            //
+            //   * Anything outside [0.5, 2.0] (incl. zero / negative
+            //     for reverse) → SERVER-SIDE via RTSP PLAY-with-Scale.
+            //     FFME runs at SpeedRatio=1.0 (otherwise the already-
+            //     rate-adjusted server stream gets double-scaled).
+            //     Audio is expected to be silent during this — DLNA
+            //     servers drop audio at non-1× rates. IsTimeSyncDisabled
+            //     (set in AsfFfmeInputStream.OnInitializing) keeps the
+            //     video element advancing despite the audio dropout.
+            //
+            // Negative rates always go server-side because FFME's
+            // SpeedRatio cannot be negative.
+            bool clientSideEligible = rate >= 0.5 && rate <= 2.0;
 
-            // FFME-side: SpeedRatio applies in [0.5, 2.0] without major
-            // audio artefacts thanks to FFME's atempo resampler. Outside
-            // that range, leave SpeedRatio=1 and rely on the server's
-            // re-rated stream.
-            if (rate > 0 && rate >= 0.5 && rate <= 2.0) {
-                if (_dispatcher.CheckAccess()) {
-                    try { _media.SpeedRatio = rate; }
-                    catch (Exception ex) {
-                        _log?.LogError($"[ffme-mc] SpeedRatio set failed: {ex.Message}");
-                    }
-                } else {
-                    var tcs = new TaskCompletionSource<bool>();
-                    _dispatcher.BeginInvoke(new Action(() => {
-                        try { _media.SpeedRatio = rate; tcs.SetResult(true); }
-                        catch (Exception ex) { tcs.SetException(ex); }
-                    }));
-                    try { await tcs.Task; } catch { /* logged above */ }
+            if (clientSideEligible) {
+                _log?.LogDebug($"[ffme-mc] SetRateAsync({rate}) — CLIENT-SIDE " +
+                              "(SpeedRatio + atempo, server stays at 1×)");
+
+                // Reset server to 1× regardless of prior state — RTSPClient.SetRate
+                // is wire-idempotent so this is a no-op if we were already at 1×.
+                try { _rtsp?.SetRate(1.0); }
+                catch (Exception ex) {
+                    _log?.LogError($"[ffme-mc] RTSP SetRate(1.0) for client-side rate failed: {ex.Message}");
                 }
+
+                await ApplySpeedRatioAsync(rate);
             } else {
-                // Restore to 1.0 so a previous in-range rate doesn't
-                // compound with the server-side rate change.
-                if (_dispatcher.CheckAccess()) {
-                    try { _media.SpeedRatio = 1.0; } catch { }
-                } else {
-                    try { _dispatcher.BeginInvoke(new Action(() => {
-                        try { _media.SpeedRatio = 1.0; } catch { }
-                    })); } catch { }
+                _log?.LogDebug($"[ffme-mc] SetRateAsync({rate}) — SERVER-SIDE " +
+                              "(RTSP PLAY-with-Scale, audio drop expected)");
+
+                // FFME at 1× — the server-delivered stream is already
+                // rate-adjusted, applying SpeedRatio again would
+                // double-scale.
+                await ApplySpeedRatioAsync(1.0);
+
+                try { _rtsp?.SetRate(rate); }
+                catch (Exception ex) {
+                    _log?.LogError($"[ffme-mc] RTSP SetRate({rate}) failed: {ex.Message}");
                 }
+            }
+        }
+
+        /// <summary>
+        /// Apply a SpeedRatio value to the FFME element, marshaling
+        /// onto its dispatcher if necessary. Swallows + logs errors
+        /// rather than propagating so a transient SpeedRatio failure
+        /// doesn't cascade into the RTSP rate path.
+        /// </summary>
+        private async Task ApplySpeedRatioAsync(double rate) {
+            if (_dispatcher.CheckAccess()) {
+                try { _media.SpeedRatio = rate; }
+                catch (Exception ex) {
+                    _log?.LogError($"[ffme-mc] SpeedRatio={rate} set failed: {ex.Message}");
+                }
+                return;
+            }
+            var tcs = new TaskCompletionSource<bool>();
+            _dispatcher.BeginInvoke(new Action(() => {
+                try { _media.SpeedRatio = rate; tcs.SetResult(true); }
+                catch (Exception ex) { tcs.SetException(ex); }
+            }));
+            try { await tcs.Task; }
+            catch (Exception ex) {
+                _log?.LogError($"[ffme-mc] SpeedRatio={rate} dispatcher set failed: {ex.Message}");
             }
         }
 

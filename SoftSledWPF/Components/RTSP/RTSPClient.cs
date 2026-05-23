@@ -1678,23 +1678,70 @@ namespace SoftSled.Components.RTSP {
                 if (!haveRtptime) continue;
                 if (isAudio) {
                     _pendingAudioRtptime = rtptime;
+                    // Apply to whichever combined muxer is up. Both branches
+                    // use the first-anchor-vs-reanchor split so a mid-session
+                    // PLAY-with-Range (seek) or PLAY-with-Scale (trick play)
+                    // takes the monotonicity-preserving Reanchor path,
+                    // while the very first PLAY response uses the one-shot
+                    // SetXxxBaseTs.
                     if (_psMuxer != null) {
-                        _psMuxer.SetAudioBaseTs(rtptime);
-                        Debug.WriteLine($"[rtp-info] audio base set to rtptime={rtptime}");
-                        RtcpDiagLog($"rtp-info AUDIO base=rtptime={rtptime}");
+                        if (_psMuxer.AudioAnchored) {
+                            _psMuxer.Reanchor(newAudioRtpTs: rtptime, newVideoRtpTs: null);
+                            Debug.WriteLine($"[rtp-info] audio REANCHOR rtptime={rtptime}");
+                            RtcpDiagLog($"rtp-info AUDIO reanchor=rtptime={rtptime}");
+                        } else {
+                            _psMuxer.SetAudioBaseTs(rtptime);
+                            Debug.WriteLine($"[rtp-info] audio base set to rtptime={rtptime}");
+                            RtcpDiagLog($"rtp-info AUDIO base=rtptime={rtptime}");
+                        }
+                    } else if (_tsMuxer != null) {
+                        if (_tsMuxer.AudioAnchored) {
+                            _tsMuxer.Reanchor(newAudioRtpTs: rtptime, newVideoRtpTs: null);
+                            Debug.WriteLine($"[rtp-info] (ts) audio REANCHOR rtptime={rtptime}");
+                            RtcpDiagLog($"rtp-info AUDIO ts-reanchor=rtptime={rtptime}");
+                        } else {
+                            _tsMuxer.SetAudioBaseTs(rtptime);
+                            Debug.WriteLine($"[rtp-info] (ts) audio base set to rtptime={rtptime}");
+                            RtcpDiagLog($"rtp-info AUDIO ts-base=rtptime={rtptime}");
+                        }
                     } else {
-                        // PS muxer not yet created (wire-commit defers setup
-                        // until first MPA+MPV packets observed). Stored and
-                        // replayed by TrySetupMpegPsPipeline.
+                        // No combined muxer yet — wire-commit defers
+                        // setup until first packets observed. Stored
+                        // and replayed by TrySetupMpegPsPipeline /
+                        // TrySetupMpegTsPipeline.
                         Debug.WriteLine($"[rtp-info] audio rtptime={rtptime} cached for later muxer");
                         RtcpDiagLog($"rtp-info AUDIO cached=rtptime={rtptime}");
                     }
                 } else if (isVideo) {
                     _pendingVideoRtptime = rtptime;
                     if (_psMuxer != null) {
-                        _psMuxer.SetVideoBaseTs(rtptime);
-                        Debug.WriteLine($"[rtp-info] video base set to rtptime={rtptime}");
-                        RtcpDiagLog($"rtp-info VIDEO base=rtptime={rtptime}");
+                        if (_psMuxer.VideoAnchored) {
+                            _psMuxer.Reanchor(newAudioRtpTs: null, newVideoRtpTs: rtptime);
+                            // Post-seek / post-rate-change: the depacketizer's
+                            // sequence-number tracker would otherwise see the
+                            // new server stream as a long stretch of packet loss
+                            // and gate-keep MAUs until the next IDR. Clear the
+                            // tracker so the first post-reanchor frame is
+                            // accepted unconditionally.
+                            try { videoDepacketizer?.ResetPostLossState(); } catch { }
+                            Debug.WriteLine($"[rtp-info] video REANCHOR rtptime={rtptime}");
+                            RtcpDiagLog($"rtp-info VIDEO reanchor=rtptime={rtptime}");
+                        } else {
+                            _psMuxer.SetVideoBaseTs(rtptime);
+                            Debug.WriteLine($"[rtp-info] video base set to rtptime={rtptime}");
+                            RtcpDiagLog($"rtp-info VIDEO base=rtptime={rtptime}");
+                        }
+                    } else if (_tsMuxer != null) {
+                        if (_tsMuxer.VideoAnchored) {
+                            _tsMuxer.Reanchor(newAudioRtpTs: null, newVideoRtpTs: rtptime);
+                            try { videoDepacketizer?.ResetPostLossState(); } catch { }
+                            Debug.WriteLine($"[rtp-info] (ts) video REANCHOR rtptime={rtptime}");
+                            RtcpDiagLog($"rtp-info VIDEO ts-reanchor=rtptime={rtptime}");
+                        } else {
+                            _tsMuxer.SetVideoBaseTs(rtptime);
+                            Debug.WriteLine($"[rtp-info] (ts) video base set to rtptime={rtptime}");
+                            RtcpDiagLog($"rtp-info VIDEO ts-base=rtptime={rtptime}");
+                        }
                     } else {
                         Debug.WriteLine($"[rtp-info] video rtptime={rtptime} cached for later muxer");
                         RtcpDiagLog($"rtp-info VIDEO cached=rtptime={rtptime}");
