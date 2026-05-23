@@ -42,7 +42,13 @@ namespace SoftSled.Components.AudioVisual.Playback {
         // Per-stream decoder + renderer state. Both null until the
         // corresponding codec commits.
         private VideoDecoder _videoDecoder;
-        private WpfVideoRenderer _videoRenderer;
+        // D3DImage-backed renderer replaces the WriteableBitmap path
+        // (WpfVideoRenderer) — the old path was bottle-necked by the
+        // WPF compositor having to upload the changed bitmap pixels to
+        // the GPU every composition cycle. D3DImage references a
+        // GPU-resident D3D9 surface, so the compositor's per-tick work
+        // for video drops to "reference + composite" with no upload.
+        private D3DImageVideoRenderer _videoRenderer;
         private AudioDecoder _audioDecoder;
         private NAudioRenderer _audioRenderer;
 
@@ -224,7 +230,7 @@ namespace SoftSled.Components.AudioVisual.Playback {
             _videoRtpClockHz = rtpClockHz > 0 ? rtpClockHz : 90000u;
             _isVideoSession = true;
             try {
-                _videoRenderer = new WpfVideoRenderer(_videoTarget, _clock, _log);
+                _videoRenderer = new D3DImageVideoRenderer(_videoTarget, _clock, _log);
                 _videoDecoder = new VideoDecoder(plan.CodecId, plan.Extradata,
                     OnVideoFrameDecoded, _log);
                 _videoDecoder.Start();
