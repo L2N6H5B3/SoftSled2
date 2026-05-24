@@ -112,13 +112,34 @@ namespace SoftSled.Components.AudioVisual {
                     config.PrivateOptions["probesize"]       = "32768";
                     config.PrivateOptions["analyzeduration"] = "500000";
                 } else {
-                    // 2 MB probesize covers the ASF header object plus
-                    // the first few data packets, or for MPEG-ES the
-                    // first GOP. 5 s analyzeduration gives the demuxer
-                    // time to see at least one keyframe per video stream
-                    // before reporting them ready.
-                    config.PrivateOptions["probesize"]       = "2000000";
-                    config.PrivateOptions["analyzeduration"] = "5000000";
+                    // Video probe budget. Previously 2 MB / 5 s — libav's
+                    // safe defaults for fully-unknown streams. We
+                    // already know the codecs from the SDP fmtp lines
+                    // (WMFPayloadData dict is committed in RTSPClient
+                    // before this stream opens), so find_stream_info
+                    // doesn't need to scan multiple GOPs to figure out
+                    // what's playing. Tightening these two values is
+                    // the single biggest knob for FFME open latency:
+                    //
+                    //   probesize: 2 MB → 512 KB. Covers the PS pack
+                    //   header + system header + PSM (~few KB) + a
+                    //   full IDR frame at 1080p (~100 KB) + first PES
+                    //   on each stream. find_stream_info commits codec
+                    //   parameters well below this ceiling for the
+                    //   known-codec streams we feed it.
+                    //
+                    //   analyzeduration: 5 s → 1.5 s. find_stream_info
+                    //   completes as soon as EITHER probesize is hit
+                    //   OR analyzeduration of stream-time has been
+                    //   observed. With data flowing at real-time
+                    //   1.5 s wall-time is reached in ~1.5 s.
+                    //
+                    // Tested with VND.MS.WM-MPV (MPEG-2 video) +
+                    // VND.MS.WM-MPA (MP2/MP3 audio), AC-3, and X-WMF-PF
+                    // H.264 + PCM streams — all commit codec params
+                    // well inside the new limits.
+                    config.PrivateOptions["probesize"]       = "524288";    // 512 KB
+                    config.PrivateOptions["analyzeduration"] = "1500000";   // 1.5 s
                     // Video can afford to drop probed packets — the next
                     // keyframe redelivers the necessary decoder state.
                     config.PrivateOptions["fflags"]          = "nobuffer";

@@ -97,6 +97,17 @@
             <Grid x:Name="VideoView"
                   Margin="100,200,100,80"
                   Visibility="Collapsed">
+                <!-- Content can overflow the ~440px sub-view height
+                     once enough toggles are added; wrap in a
+                     ScrollViewer so lower controls stay reachable.
+                     Focusable=False keeps the WMC-remote tab-stop
+                     traversal walking through the child checkboxes,
+                     and each focused control auto-scrolls into view
+                     via WPF's default BringIntoView behaviour. -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              PanningMode="VerticalOnly"
+                              Focusable="False">
                 <StackPanel HorizontalAlignment="Left" Width="640">
                     <CheckBox x:Name="ChkHdContent"
                               Style="{StaticResource WmcCheckBoxStyle}"
@@ -136,6 +147,7 @@
                             Content="—"
                             Click="BtnResolution_Click"/>
                 </StackPanel>
+                </ScrollViewer>
             </Grid>
 
             <!-- ===== UI sub-view ========================================== -->

@@ -173,6 +173,7 @@
     </Compile>
     <Compile Include="Components\AudioVisual\AsfFfmeInputStream.cs" />
     <Compile Include="Components\AudioVisual\AsfStreamProducer.cs" />
+    <Compile Include="Components\AudioVisual\AudioSilenceInjector.cs" />
     <Compile Include="Components\AudioVisual\FormatStructures\AM_Media_Format.cs" />
     <Compile Include="Components\AudioVisual\FormatStructures\VIDEOINFOHEADER.cs" />
     <Compile Include="Components\AudioVisual\FormatStructures\VIDEOINFOHEADER2.cs" />

@@ -463,108 +463,140 @@ namespace SoftSled.Components.RTSP {
                 MonitorPts(isAudio: true, rtpTs: eventData.timestamp);
                 ArmDecoderOpenStopwatch();
 
-                // MPEG-TS unified path (preferred for modern codecs).
-                // PCM samples go in as raw LE bytes; muxer applies any
-                // codec-specific framing (Blu-ray LPCM header etc.) and
-                // wraps into PES then TS packets on the audio PID.
-                if (_tsMuxer != null && _tsProducer != null) {
-                    byte[] muxed = _tsMuxer.MuxAudioFrame(eventData.data, eventData.timestamp);
-                    _tsProducer.SubmitChunk(muxed);
-                    _tsAudioMaus++;
-                    _tsBytesPushed += muxed.Length;
-                    if ((_tsAudioMaus % 100) == 1) {
-                        Trace.WriteLine($"[ts] aud#{_tsAudioMaus} len={eventData.data.Length} " +
-                                        $"muxed={muxed.Length} pts(rtp)={eventData.timestamp} " +
-                                        $"producerQ={_tsProducer.QueueDepth}");
-                        WriteTsDiagRow();
-                    }
-                    return;
-                }
-
-                // MPEG-PS combined path (takes priority): mux audio frames
-                // into a PES packet with PTS = RTP timestamp, push into the
-                // shared producer. FFME's libav handles Layer I/II/III alike,
-                // and the shared PS clock gives us A/V sync.
-                if (_psMuxer != null && _psProducer != null) {
-                    byte[] muxed = _psMuxer.MuxAudioFrame(eventData.data, eventData.timestamp);
-                    _psProducer.SubmitChunk(muxed);
-                    _psAudioMaus++;
-                    _psBytesPushed += muxed.Length;
-                    if ((_psAudioMaus % 100) == 1) {
-                        Trace.WriteLine($"[ps] aud#{_psAudioMaus} len={eventData.data.Length} " +
-                                        $"muxed={muxed.Length} pts(rtp)={eventData.timestamp} " +
-                                        $"producerQ={_psProducer.QueueDepth}");
-                        WritePsDiagRow();
-                    }
-                    return;
-                }
-
-                // WMRTP-wrapped MPEG audio (vnd.ms.wm-MPA), audio-only mode.
-                // MAU = clean run of MPEG audio frame bytes (no RFC 2250
-                // sub-header). Prefer the FFME / libav pipeline (handles
-                // Layer I/II/III + emits accurate position/duration); fall
-                // back to NAudio MP3 sink when SOFTSLED_AUDIO_VIA_NAUDIO=1
-                // is set (legacy path).
-                if (_mp3FfmeProducer != null) {
-                    byte[] chunk = eventData.data;
-                    _mp3FfmeProducer.SubmitChunk(chunk);
-                    _mp3FfmeChunks++;
-                    _mp3FfmeBytesPushed += chunk.Length;
-                    if ((_mp3FfmeChunks % 100) == 1) {
-                        Trace.WriteLine($"[mp3-ffme] mau#{_mp3FfmeChunks} len={chunk.Length} " +
-                                        $"producerQ={_mp3FfmeProducer.QueueDepth}");
-                        WriteMp3FfmeDiagRow();
-                    }
-                    return;
-                }
-                if (_mpaAudioSink != null && _mpaSinkMode == MpaSinkMode.WmrtpWrapped) {
-                    _mpaAudioSink.SubmitRawMpegAudioFrames(eventData.data, 0, eventData.data.Length);
-                    return;
-                }
-                // Raw-PCM x-wmf-pf audio (audio/vnd.wave fmtp) — preferred
-                // path: push samples into the FFME audio pipeline.
-                // libavformat's s16le demuxer with SDP-derived sample_rate
-                // and channels options decodes via libav, so the user gets
-                // FFME-clock consistency across audio + video and we keep
-                // NAudio reserved for the WMC fast-path UI audio.
-                if (_pcmFfmeProducer != null) {
-                    byte[] chunk = eventData.data;
-                    _pcmFfmeProducer.SubmitChunk(chunk);
-                    _pcmFfmeChunks++;
-                    _pcmFfmeBytesPushed += chunk.Length;
-                    if ((_pcmFfmeChunks % 100) == 1) {
-                        Trace.WriteLine($"[pcm-ffme] mau#{_pcmFfmeChunks} len={chunk.Length} " +
-                                        $"producerQ={_pcmFfmeProducer.QueueDepth}");
-                        if (_pcmFfmeDiagLog != null) {
-                            try {
-                                _pcmFfmeDiagLog.WriteLine(
-                                    $"{_pcmFfmeDiagSw.Elapsed.TotalSeconds,7:F2} " +
-                                    $"{_pcmFfmeChunks,7} {_pcmFfmeBytesPushed,10} " +
-                                    $"{_pcmFfmeProducer.QueueDepth,5} " +
-                                    $"{_pcmFfmeProducer.BytesProduced,12} " +
-                                    $"{_pcmFfmeProducer.BytesConsumed,12} " +
-                                    $"{_pcmFfmeProducer.DroppedChunks,5}");
-                            } catch { /* ignore */ }
-                        }
-                    }
-                    return;
-                }
-                // Legacy fallback: raw-PCM x-wmf-pf audio straight to NAudio
-                // with the SDP-derived WAVEFORMATEX. Kept for ops debugging
-                // (flip SOFTSLED_AUDIO_VIA_NAUDIO=1 to route here).
-                if (_pcmAudioSink != null) {
-                    _pcmAudioSink.Submit(eventData.data);
-                    return;
-                }
-
-                // No sink for this audio stream.
-                if ((_audioDroppedNoSink & 0xFF) == 0) {
-                    Trace.WriteLine($"[audio] MAU dropped (no sink configured): " +
-                                    $"len={eventData.data.Length}");
-                }
-                _audioDroppedNoSink++;
+                // The silence injector taps each real MAU so it learns
+                // the wire cadence; the MAU itself still flows into
+                // the muxer cascade below. When the wire goes quiet
+                // (server-side trick play mutes audio), the injector's
+                // timer fires synthetic MAUs into the SAME cascade via
+                // RouteAudioMauToFfmePipeline, keeping FFME's audio
+                // buffer fed and preventing the SYNC-BUFFER freeze.
+                _silenceInjector?.NoticeReal(eventData.data, eventData.timestamp);
+                RouteAudioMauToFfmePipeline(eventData.data, eventData.timestamp);
             };
         }
+
+        /// <summary>
+        /// FFME / muxer-cascade audio routing. Shared between the wire
+        /// (real audio MAUs from the depacketizer) and the silence
+        /// injector (synthetic MAUs when the wire goes quiet). Returns
+        /// silently if no muxer/producer is configured for this stream.
+        /// </summary>
+        private void RouteAudioMauToFfmePipeline(byte[] data, uint rtpTs) {
+            if (data == null || data.Length == 0) return;
+
+            // MPEG-TS unified path (preferred for modern codecs).
+            if (_tsMuxer != null && _tsProducer != null) {
+                byte[] muxed = _tsMuxer.MuxAudioFrame(data, rtpTs);
+                _tsProducer.SubmitChunk(muxed);
+                _tsAudioMaus++;
+                _tsBytesPushed += muxed.Length;
+                if ((_tsAudioMaus % 100) == 1) {
+                    Trace.WriteLine($"[ts] aud#{_tsAudioMaus} len={data.Length} " +
+                                    $"muxed={muxed.Length} pts(rtp)={rtpTs} " +
+                                    $"producerQ={_tsProducer.QueueDepth}");
+                    WriteTsDiagRow();
+                }
+                return;
+            }
+
+            // MPEG-PS combined path.
+            if (_psMuxer != null && _psProducer != null) {
+                byte[] muxed = _psMuxer.MuxAudioFrame(data, rtpTs);
+                _psProducer.SubmitChunk(muxed);
+                _psAudioMaus++;
+                _psBytesPushed += muxed.Length;
+                if ((_psAudioMaus % 100) == 1) {
+                    Trace.WriteLine($"[ps] aud#{_psAudioMaus} len={data.Length} " +
+                                    $"muxed={muxed.Length} pts(rtp)={rtpTs} " +
+                                    $"producerQ={_psProducer.QueueDepth}");
+                    WritePsDiagRow();
+                }
+                return;
+            }
+
+            // WMRTP-wrapped MPEG audio (vnd.ms.wm-MPA), audio-only mode.
+            if (_mp3FfmeProducer != null) {
+                _mp3FfmeProducer.SubmitChunk(data);
+                _mp3FfmeChunks++;
+                _mp3FfmeBytesPushed += data.Length;
+                if ((_mp3FfmeChunks % 100) == 1) {
+                    Trace.WriteLine($"[mp3-ffme] mau#{_mp3FfmeChunks} len={data.Length} " +
+                                    $"producerQ={_mp3FfmeProducer.QueueDepth}");
+                    WriteMp3FfmeDiagRow();
+                }
+                return;
+            }
+            if (_mpaAudioSink != null && _mpaSinkMode == MpaSinkMode.WmrtpWrapped) {
+                _mpaAudioSink.SubmitRawMpegAudioFrames(data, 0, data.Length);
+                return;
+            }
+            // Raw-PCM x-wmf-pf audio.
+            if (_pcmFfmeProducer != null) {
+                _pcmFfmeProducer.SubmitChunk(data);
+                _pcmFfmeChunks++;
+                _pcmFfmeBytesPushed += data.Length;
+                if ((_pcmFfmeChunks % 100) == 1) {
+                    Trace.WriteLine($"[pcm-ffme] mau#{_pcmFfmeChunks} len={data.Length} " +
+                                    $"producerQ={_pcmFfmeProducer.QueueDepth}");
+                    if (_pcmFfmeDiagLog != null) {
+                        try {
+                            _pcmFfmeDiagLog.WriteLine(
+                                $"{_pcmFfmeDiagSw.Elapsed.TotalSeconds,7:F2} " +
+                                $"{_pcmFfmeChunks,7} {_pcmFfmeBytesPushed,10} " +
+                                $"{_pcmFfmeProducer.QueueDepth,5} " +
+                                $"{_pcmFfmeProducer.BytesProduced,12} " +
+                                $"{_pcmFfmeProducer.BytesConsumed,12} " +
+                                $"{_pcmFfmeProducer.DroppedChunks,5}");
+                        } catch { /* ignore */ }
+                    }
+                }
+                return;
+            }
+            // Legacy fallback: raw-PCM x-wmf-pf audio straight to NAudio.
+            if (_pcmAudioSink != null) {
+                _pcmAudioSink.Submit(data);
+                return;
+            }
+
+            // No sink for this audio stream.
+            if ((_audioDroppedNoSink & 0xFF) == 0) {
+                Trace.WriteLine($"[audio] MAU dropped (no sink configured): " +
+                                $"len={data.Length}");
+            }
+            _audioDroppedNoSink++;
+        }
+
+        /// <summary>
+        /// Enable the trick-play audio-silence injector. Required for
+        /// the FFME engine — without it FFME's video element freezes
+        /// during server-side trick play (audio buffer drains →
+        /// SYNC-BUFFER state). Idempotent — calling twice is a no-op.
+        /// The injector stays passive until armed via
+        /// <see cref="SetTrickPlaySilenceInjection"/>.
+        /// </summary>
+        public void EnableAudioSilenceInjection(SoftSled.Components.Diagnostics.Logger log) {
+            if (_silenceInjector != null) return;
+            _silenceInjector = new SoftSled.Components.AudioVisual.AudioSilenceInjector(
+                emit: RouteAudioMauToFfmePipeline,
+                log: log);
+        }
+
+        /// <summary>
+        /// Tell the silence injector that the host has entered (or
+        /// left) server-side trick play. Only when this is
+        /// <c>true</c> does the injector start emitting synthetic
+        /// audio when the wire goes quiet. Without this gate, normal
+        /// network buffering would trigger injection and produce a
+        /// rapid-repeat artefact when the real audio resumes.
+        /// </summary>
+        public void SetTrickPlaySilenceInjection(bool active) {
+            _silenceInjector?.SetTrickPlayActive(active);
+        }
+
+        // Audio silence injector. Non-null only when an engine has
+        // armed it via EnableAudioSilenceInjection. Disposed in Stop()
+        // alongside the muxers.
+        private SoftSled.Components.AudioVisual.AudioSilenceInjector _silenceInjector;
 
         // Drop counters for MAUs that arrive when no sink has been set up
         // for the corresponding codec — log throttled at every 256 to avoid
@@ -1094,6 +1126,12 @@ namespace SoftSled.Components.RTSP {
             if (rtsp_client != null) {
                 rtsp_client.Stop();
             }
+
+            // Stop the silence injector first so its timer can't fire
+            // synthetic MAUs into muxers we're about to dispose. Safe
+            // to call when never enabled (no-op).
+            try { _silenceInjector?.Dispose(); } catch { }
+            _silenceInjector = null;
 
             // Tear down the PCM audio sink (frees the NAudio output device).
             try { _pcmAudioSink?.Dispose(); } catch { }
@@ -2536,6 +2574,32 @@ namespace SoftSled.Components.RTSP {
                 FinalizePipelineSetup();
                 return;
             }
+            // Fast path for sessions where the SDP has only one media
+            // stream (the other side will never commit). Most common:
+            // an audio-only MP3 session — the SDP carries m=audio with
+            // no m=video, so waiting 300 ms for a video commit just
+            // delays the pipeline setup and drops the first ~7 audio
+            // MAUs (the RFC 2250 MPA path doesn't buffer via the
+            // depacketizer, so dropped early MAUs are gone).
+            //
+            // Detect "no other side coming" by scanning the SDP-derived
+            // payload dict for any entry of the missing media type. If
+            // none, finalize immediately.
+            bool needAudio = _wireAudioCodec == null;
+            bool needVideo = _wireVideoCodec == null;
+            bool sdpHasMissingSide = false;
+            foreach (var kv in wmfPayloadDataDict) {
+                var entry = kv.Value;
+                if (entry == null) continue;
+                if (needAudio && entry.Type == MediaType.Audio) { sdpHasMissingSide = true; break; }
+                if (needVideo && entry.Type == MediaType.Video) { sdpHasMissingSide = true; break; }
+            }
+            if (!sdpHasMissingSide) {
+                CommitDiagLog($"TryFinalize: only have audio={_wireAudioCodec ?? "(none)"} video={_wireVideoCodec ?? "(none)"} " +
+                              "and SDP has no entry for the missing side — finalizing now");
+                FinalizePipelineSetup();
+                return;
+            }
             if (_commitTimer == null) {
                 CommitDiagLog($"TryFinalize: only have audio={_wireAudioCodec ?? "(none)"} video={_wireVideoCodec ?? "(none)"} — arming 300ms timer");
                 _commitTimer = new System.Threading.Timer(_ => {
@@ -2878,12 +2942,29 @@ namespace SoftSled.Components.RTSP {
                     && wmfPayloadDataDict.ContainsKey(rtp_payload_type)
                     && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec,
                                      "MPA", StringComparison.OrdinalIgnoreCase)) {
+                    // Commit the wire codec on FIRST packet — without
+                    // this, TrySetupMp3FfmePipeline never runs, the
+                    // producer stays null, and every MAU below
+                    // silently drops. The matching X-WMF-PF /
+                    // VND.MS.WM-MPA branches all call this; the
+                    // original RFC 2250 branch was missing it (audio-
+                    // only MP3 sessions produced no audio as a result).
+                    CommitAudioPipelineForWireCodec("MPA");
                     UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                    if (_mp3FfmeProducer != null && rtp_payload_len > 4) {
-                        // RFC 2250 §3.5: skip [16 bits MBZ][16 bits Frag_offset].
-                        int frameLen = rtp_payload_len - 4;
-                        byte[] frame = new byte[frameLen];
-                        Array.Copy(e.Message.Data, rtp_payload_start + 4, frame, 0, frameLen);
+                    if (rtp_payload_len <= 4) return;
+                    // RFC 2250 §3.5: skip [16 bits MBZ][16 bits Frag_offset].
+                    int frameLen = rtp_payload_len - 4;
+                    byte[] frame = new byte[frameLen];
+                    Array.Copy(e.Message.Data, rtp_payload_start + 4, frame, 0, frameLen);
+
+                    // Notify the silence injector so it can learn
+                    // cadence and (in video sessions) keep FFME's
+                    // audio buffer fed during server-side trick play.
+                    // For audio-only MP3 sessions this is a near-noop
+                    // (no video to freeze) but kept for symmetry.
+                    _silenceInjector?.NoticeReal(frame, rtp_timestamp);
+
+                    if (_mp3FfmeProducer != null) {
                         _mp3FfmeProducer.SubmitChunk(frame);
                         _mp3FfmeChunks++;
                         _mp3FfmeBytesPushed += frameLen;
@@ -3329,12 +3410,29 @@ namespace SoftSled.Components.RTSP {
                     && wmfPayloadDataDict.ContainsKey(rtp_payload_type)
                     && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec,
                                      "MPA", StringComparison.OrdinalIgnoreCase)) {
+                    // Commit the wire codec on FIRST packet — without
+                    // this, TrySetupMp3FfmePipeline never runs, the
+                    // producer stays null, and every MAU below
+                    // silently drops. The matching X-WMF-PF /
+                    // VND.MS.WM-MPA branches all call this; the
+                    // original RFC 2250 branch was missing it (audio-
+                    // only MP3 sessions produced no audio as a result).
+                    CommitAudioPipelineForWireCodec("MPA");
                     UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                    if (_mp3FfmeProducer != null && rtp_payload_len > 4) {
-                        // RFC 2250 §3.5: skip [16 bits MBZ][16 bits Frag_offset].
-                        int frameLen = rtp_payload_len - 4;
-                        byte[] frame = new byte[frameLen];
-                        Array.Copy(e.Message.Data, rtp_payload_start + 4, frame, 0, frameLen);
+                    if (rtp_payload_len <= 4) return;
+                    // RFC 2250 §3.5: skip [16 bits MBZ][16 bits Frag_offset].
+                    int frameLen = rtp_payload_len - 4;
+                    byte[] frame = new byte[frameLen];
+                    Array.Copy(e.Message.Data, rtp_payload_start + 4, frame, 0, frameLen);
+
+                    // Notify the silence injector so it can learn
+                    // cadence and (in video sessions) keep FFME's
+                    // audio buffer fed during server-side trick play.
+                    // For audio-only MP3 sessions this is a near-noop
+                    // (no video to freeze) but kept for symmetry.
+                    _silenceInjector?.NoticeReal(frame, rtp_timestamp);
+
+                    if (_mp3FfmeProducer != null) {
                         _mp3FfmeProducer.SubmitChunk(frame);
                         _mp3FfmeChunks++;
                         _mp3FfmeBytesPushed += frameLen;

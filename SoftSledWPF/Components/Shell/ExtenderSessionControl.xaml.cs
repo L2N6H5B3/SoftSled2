@@ -448,8 +448,10 @@ namespace SoftSledWPF.Components.Shell {
                         } else {
                             Media.Visibility = Visibility.Collapsed;
                         }
+                        var openSw = System.Diagnostics.Stopwatch.StartNew();
                         await Media.Open(stream);
-                        m_logger.LogInfo($"[ffme] Media.Open succeeded " +
+                        openSw.Stop();
+                        m_logger.LogInfo($"[ffme] Media.Open succeeded in {openSw.ElapsedMilliseconds}ms " +
                                          $"({(hasVideo ? "video+audio" : "audio-only")})");
                     } catch (Exception ex) {
                         m_logger.LogError($"[ffme] Media.Open failed: {ex.Message}");
@@ -634,6 +636,31 @@ namespace SoftSledWPF.Components.Shell {
             // value, FFME ignores the second set.
             Unosquare.FFME.Library.FFmpegDirectory = ffmpegDir;
 
+            // Force-load the FFmpeg native DLLs eagerly on a background
+            // thread. Without this, FFME does the load lazily inside
+            // the first Media.Open() — that's ~30 MB of DLLs
+            // (avcodec-58, avformat-58, avutil-56, swscale-5,
+            // swresample-3, postproc-55) plus their internal table
+            // initialisation, observed at 200-500 ms on first call.
+            // Doing it here on the thread pool overlaps with the
+            // FreeRDP handshake (which takes seconds), so by the time
+            // WMC sends OpenMedia → first Start, FFME's Open call
+            // skips the lib-load entirely. LoadFFmpegAsync returns
+            // false if already loaded, so a session reset is a free
+            // no-op.
+            System.Threading.Tasks.Task.Run(() => {
+                try {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    bool loaded = Unosquare.FFME.Library.LoadFFmpegAsync()
+                                   .GetAwaiter().GetResult();
+                    sw.Stop();
+                    m_logger?.LogInfo($"[ffme] preload completed in {sw.ElapsedMilliseconds}ms " +
+                                      $"(loaded={loaded}, version={Unosquare.FFME.Library.FFmpegVersionInfo})");
+                } catch (Exception ex) {
+                    m_logger?.LogError($"[ffme] preload failed: {ex.Message}");
+                }
+            });
+
             try {
                 string ffmeLogPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
                                                             "softsled-ffme.log");
@@ -702,26 +729,39 @@ namespace SoftSledWPF.Components.Shell {
                                                      $"duration={e.Info.Duration} streams=[{streams}]");
                         }
                     } catch { }
-                    // Disconnect FFME's per-stream clocks so the video element
-                    // keeps advancing on its own PTS clock even when the audio
-                    // buffer drains. WMPNss-class servers stop sending audio
-                    // during server-side trick play (DLNA convention — audio
-                    // at 3×/10× would be unintelligible); without this, the
-                    // pipeline freezes on the missing audio while 50 video
-                    // frames sit unused in the buffer. A/V sync at 1× then
-                    // relies on the muxer's authoritative PES PTS values
-                    // (sourced from the wire's per-stream RTP timestamps,
-                    // anchored against PLAY-response RTP-Info), which is the
-                    // correct source of truth for RTSP playback anyway.
-                    try { e.Options.IsTimeSyncDisabled = true; } catch { }
+                    // FFME's per-stream clock policy. Two regimes:
+                    //
+                    //   * IsTimeSyncDisabled=false (preferred — set
+                    //     here): FFME's master clock locks to audio
+                    //     and aligns video to it for tight lip-sync
+                    //     at 1×. The downside is that when the wire
+                    //     stops delivering audio (server-side trick
+                    //     play), the audio buffer drains and the
+                    //     renderer enters SYNC-BUFFER — video freezes.
+                    //     AudioSilenceInjector (armed in
+                    //     FfmeMediaController.AttachRtspClient) solves
+                    //     that by emitting synthetic audio MAUs so the
+                    //     buffer never drains.
+                    //
+                    //   * IsTimeSyncDisabled=true (fallback): FFME
+                    //     runs each stream on its own clock. Trick-
+                    //     play freezes go away even without the
+                    //     injector, but lip-sync at 1× breaks because
+                    //     the per-stream first-MAU offset (~1.5 s
+                    //     from the server's prior-IDR padding)
+                    //     becomes visible as permanent skew.
+                    //
+                    // Default to sync-on; the silence injector keeps
+                    // the buffer fed.
+                    try { e.Options.IsTimeSyncDisabled = false; } catch { }
                 };
-                // Apply the same clock-disconnect to the secondary audio-only
-                // FFME element (PCM path). The audio element doesn't directly
-                // suffer from the trick-play freeze (no video to wait on), but
-                // we keep the option symmetric so any future change to the
-                // PCM pipeline doesn't surprise us with sync behaviour.
                 MediaAudio.MediaOpening += (s, e) => {
-                    try { e.Options.IsTimeSyncDisabled = true; } catch { }
+                    // Audio-only sessions can't suffer the trick-play
+                    // freeze (no video to wait on); leaving sync on
+                    // here keeps behaviour symmetric with the main
+                    // element so position reporting / seek behave the
+                    // same in both modes.
+                    try { e.Options.IsTimeSyncDisabled = false; } catch { }
                 };
                 Media.MediaOpened += (s, e) => {
                     try {

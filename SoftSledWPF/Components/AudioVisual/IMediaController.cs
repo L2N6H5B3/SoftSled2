@@ -36,6 +36,24 @@ namespace SoftSled.Components.AudioVisual {
         /// before <c>Media.Open</c> succeeds or after <c>Media.Close</c>.</summary>
         bool IsOpen { get; }
 
+        /// <summary>
+        /// Returns a task that completes when the controller transitions
+        /// to <see cref="IsOpen"/> = true (or returns the already-
+        /// completed task if it's already open). Implementations may
+        /// time out and complete with the controller still not open —
+        /// callers MUST re-check <see cref="IsOpen"/> after awaiting if
+        /// they care about the distinction. <paramref name="timeoutMs"/>
+        /// = -1 waits indefinitely; 0 returns the current state
+        /// without waiting.
+        ///
+        /// <para>Used by <c>VirtualChannelAvCtrlHandler</c> to defer the
+        /// StartResponse acknowledgement for the first Play request
+        /// WMC sends — WMC sends two Start requests very early in the
+        /// session and we must not ack the first one before the
+        /// underlying engine is actually ready to present frames.</para>
+        /// </summary>
+        Task WaitUntilOpenAsync(int timeoutMs);
+
         /// <summary>Resume playback. Must be safe to call from any thread —
         /// implementations marshal to their dispatcher as needed.</summary>
         Task PlayAsync();
