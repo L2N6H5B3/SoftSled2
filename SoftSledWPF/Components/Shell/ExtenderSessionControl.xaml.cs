@@ -53,6 +53,8 @@ namespace SoftSledWPF.Components.Shell {
         private SoftSled.Components.AudioVisual.WmcFastpathOverlayRegionDecoder.OverlayRegion _lastOverlay;
         private SoftSled.Components.AudioVisual.FfmeMediaController _ffmeController;
         private SoftSled.Components.AudioVisual.Playback.SoftSledPlaybackEngine _playbackEngine;
+        private SoftSled.Components.AudioVisual.Playback.MediaFoundation.MediaFoundationController _mfController;
+        private SoftSled.Components.Configuration.PlaybackEngineKind _activeEngineKind;
 
         private System.Threading.Tasks.TaskCompletionSource<bool> _videoOpenComplete;
 
@@ -414,17 +416,59 @@ namespace SoftSledWPF.Components.Shell {
             SplashHandler = new VirtualChannelSplashHandler(m_logger);
             SplashHandler.VirtualChannelSend += On_VirtualChannelSend;
 
-            // Direct-libav playback engine — replaces the previous
-            // FfmeMediaController. The engine drives VideoSurface
-            // (WriteableBitmap blit) for video and NAudio for audio;
-            // exposes the same IMediaController surface AvCtrlHandler
-            // expects, so no change above this layer. The engine is
-            // also handed to the RTSPClient inside OpenMedia (below)
-            // via AttachRtspClient → SetPlaybackEngine, so depacketizer
-            // MAUs route directly to the libav decoders.
-            _playbackEngine = new SoftSled.Components.AudioVisual.Playback.SoftSledPlaybackEngine(
-                VideoSurface, m_logger);
-            AvCtrlHandler.MediaController = _playbackEngine;
+            // Playback engine selection: SoftSledConfig.UseFfmeEngine
+            // picks between the legacy FFME MediaElement-based path
+            // (FfmeMediaController + MpegPsMuxer / MpegTsMuxer +
+            // AsfFfmeInputStream) and the direct-libav path
+            // (SoftSledPlaybackEngine + per-stream libav decoders +
+            // WPF or D3DImage renderer).
+            //
+            // FFME path: depacketizer MAUs flow through the muxer
+            // cascade in RTSPClient (existing _psMuxer / _tsMuxer
+            // pipeline) and ultimately into FFME. To keep FFME's
+            // audio buffer alive during server-side trick play (which
+            // mutes audio), AudioSilenceInjector taps the audio MAU
+            // stream and emits synthetic frames when the wire goes
+            // quiet; the synthetic MAUs feed the same muxer cascade,
+            // so FFME sees uninterrupted audio at all rates.
+            //
+            // libav-direct path: depacketizer MAUs route straight to
+            // the engine via RTSPClient.SetPlaybackEngine (set inside
+            // AttachRtspClient on the engine), bypassing the muxer
+            // cascade entirely. The engine has its own trick-play
+            // logic so silence injection isn't needed there.
+            _activeEngineKind = cfg.PlaybackEngine;
+            switch (cfg.PlaybackEngine) {
+                case SoftSled.Components.Configuration.PlaybackEngineKind.MediaFoundation:
+                    // Frame-server mode: MediaEngine writes into a
+                    // shared D3D11 texture, which is opened as a
+                    // D3D9 surface and shown by D3DImage on
+                    // VideoSurface. Same Image element as the
+                    // direct-libav path; the WPF visual tree can
+                    // composite splash / overlays / log on top
+                    // without airspace issues.
+                    _mfController = new SoftSled.Components.AudioVisual.Playback.MediaFoundation
+                        .MediaFoundationController(VideoSurface, m_logger);
+                    AvCtrlHandler.MediaController = _mfController;
+                    MfHost.Visibility = Visibility.Collapsed;
+                    m_logger.LogInfo("[engine] using SharpDX.MediaFoundation playback engine, frame-server + D3DImage (config: PlaybackEngine=MediaFoundation)");
+                    break;
+                case SoftSled.Components.Configuration.PlaybackEngineKind.DirectLibAv:
+                    _playbackEngine = new SoftSled.Components.AudioVisual.Playback
+                        .SoftSledPlaybackEngine(VideoSurface, m_logger);
+                    AvCtrlHandler.MediaController = _playbackEngine;
+                    MfHost.Visibility = Visibility.Collapsed;
+                    m_logger.LogInfo("[engine] using direct-libav playback engine (config: PlaybackEngine=DirectLibAv)");
+                    break;
+                case SoftSled.Components.Configuration.PlaybackEngineKind.Ffme:
+                default:
+                    _ffmeController = new SoftSled.Components.AudioVisual.FfmeMediaController(
+                        Media, m_logger);
+                    AvCtrlHandler.MediaController = _ffmeController;
+                    MfHost.Visibility = Visibility.Collapsed;
+                    m_logger.LogInfo("[engine] using FFME playback engine (config: PlaybackEngine=Ffme)");
+                    break;
+            }
 
             _splashController = new SoftSled.Components.Splash.SplashController(
                 m_logger, Dispatcher, SplashPayloadBigEndian, SplashHandler.SendBytes);
@@ -453,20 +497,69 @@ namespace SoftSledWPF.Components.Shell {
             AvCtrlHandler.VideoPipelineReady += stream =>
                 Dispatcher.BeginInvoke(new Action(async () => {
                     try {
-                        bool hasVideo =
-                            (stream as SoftSled.Components.AudioVisual.AsfFfmeInputStream)?.HasVideo
-                            ?? true;
-                        if (hasVideo) {
-                            SizeMediaToCanvasFill();
-                            Media.Visibility = Visibility.Visible;
+                        var asfInput = stream as SoftSled.Components.AudioVisual.AsfFfmeInputStream;
+                        bool hasVideo = asfInput?.HasVideo ?? true;
+
+                        // Fork based on the engine selected at session
+                        // start. FFME consumes the IMediaInputStream
+                        // directly; MediaFoundation needs the
+                        // underlying AsfStreamProducer wrapped in a
+                        // Stream/ByteStream pair; direct-libav doesn't
+                        // use the FFME-style event at all (its decoder
+                        // path is fed from RTSPClient.SetPlaybackEngine).
+                        if (_mfController != null) {
+                            if (asfInput == null) {
+                                m_logger.LogError("[mf] VideoPipelineReady: stream is not an AsfFfmeInputStream — can't extract producer");
+                                return;
+                            }
+                            if (hasVideo) {
+                                SizeMediaToCanvasFill();
+                                MfHost.Visibility = Visibility.Visible;
+                            } else {
+                                MfHost.Visibility = Visibility.Collapsed;
+                            }
+                            // MIME / extension hint helps Media
+                            // Foundation's source resolver pick the
+                            // right bytestream handler. Map the
+                            // FFME forcedInputFormat label to a
+                            // close-enough URL extension.
+                            string mime = "softsled://stream";
+                            switch (asfInput.ForcedInputFormat?.ToLowerInvariant()) {
+                                case "mp3":        mime = "softsled://stream.mp3"; break;
+                                case "ac3":        mime = "softsled://stream.ac3"; break;
+                                case "wav":        mime = "softsled://stream.wav"; break;
+                                case "mpeg":       mime = "softsled://stream.mpg"; break;
+                                case "mpegvideo":  mime = "softsled://stream.m2v"; break;
+                                case "h264":       mime = "softsled://stream.h264"; break;
+                                case "mpegts":
+                                case "ts":         mime = "softsled://stream.ts";  break;
+                                case "asf":        mime = "softsled://stream.asf"; break;
+                            }
+                            var openSw = System.Diagnostics.Stopwatch.StartNew();
+                            _mfController.OpenProducer(asfInput.Producer, mime);
+                            openSw.Stop();
+                            m_logger.LogInfo($"[mf] OpenProducer issued in {openSw.ElapsedMilliseconds}ms " +
+                                             $"({(hasVideo ? "video+audio" : "audio-only")}, mime={mime})");
+                        } else if (_ffmeController != null) {
+                            if (hasVideo) {
+                                SizeMediaToCanvasFill();
+                                Media.Visibility = Visibility.Visible;
+                            } else {
+                                Media.Visibility = Visibility.Collapsed;
+                            }
+                            var openSw = System.Diagnostics.Stopwatch.StartNew();
+                            await Media.Open(stream);
+                            openSw.Stop();
+                            m_logger.LogInfo($"[ffme] Media.Open succeeded in {openSw.ElapsedMilliseconds}ms " +
+                                             $"({(hasVideo ? "video+audio" : "audio-only")})");
                         } else {
-                            Media.Visibility = Visibility.Collapsed;
+                            // DirectLibAv path: the engine consumes
+                            // depacketized MAUs directly from RTSPClient
+                            // — no FFME-style stream open required.
+                            m_logger.LogInfo("[engine] VideoPipelineReady ignored — direct-libav engine consumes from RTSPClient");
                         }
-                        await Media.Open(stream);
-                        m_logger.LogInfo($"[ffme] Media.Open succeeded " +
-                                         $"({(hasVideo ? "video+audio" : "audio-only")})");
                     } catch (Exception ex) {
-                        m_logger.LogError($"[ffme] Media.Open failed: {ex.Message}");
+                        m_logger.LogError($"[engine] VideoPipelineReady handler failed: {ex.Message}");
                     } finally {
                         _videoOpenComplete?.TrySetResult(true);
                     }
@@ -552,6 +645,10 @@ namespace SoftSledWPF.Components.Shell {
             // the WriteableBitmap.
             try { _playbackEngine?.Dispose(); } catch { }
             _playbackEngine = null;
+            // Dispose the MediaFoundation engine — shuts down
+            // MediaEngine + ByteStream + the producer-stream adapter.
+            try { _mfController?.Dispose(); } catch { }
+            _mfController = null;
             if (_overlayDecoder != null) {
                 _overlayDecoder.OverlayRegionChanged -= OnOverlayRegionChanged;
                 _overlayDecoder.ZoomModeChanged -= OnZoomModeChanged;
@@ -653,6 +750,31 @@ namespace SoftSledWPF.Components.Shell {
             // value, FFME ignores the second set.
             Unosquare.FFME.Library.FFmpegDirectory = ffmpegDir;
 
+            // Force-load the FFmpeg native DLLs eagerly on a background
+            // thread. Without this, FFME does the load lazily inside
+            // the first Media.Open() — that's ~30 MB of DLLs
+            // (avcodec-58, avformat-58, avutil-56, swscale-5,
+            // swresample-3, postproc-55) plus their internal table
+            // initialisation, observed at 200-500 ms on first call.
+            // Doing it here on the thread pool overlaps with the
+            // FreeRDP handshake (which takes seconds), so by the time
+            // WMC sends OpenMedia → first Start, FFME's Open call
+            // skips the lib-load entirely. LoadFFmpegAsync returns
+            // false if already loaded, so a session reset is a free
+            // no-op.
+            System.Threading.Tasks.Task.Run(() => {
+                try {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    bool loaded = Unosquare.FFME.Library.LoadFFmpegAsync()
+                                   .GetAwaiter().GetResult();
+                    sw.Stop();
+                    m_logger?.LogInfo($"[ffme] preload completed in {sw.ElapsedMilliseconds}ms " +
+                                      $"(loaded={loaded}, version={Unosquare.FFME.Library.FFmpegVersionInfo})");
+                } catch (Exception ex) {
+                    m_logger?.LogError($"[ffme] preload failed: {ex.Message}");
+                }
+            });
+
             try {
                 string ffmeLogPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
                                                             "softsled-ffme.log");
@@ -721,26 +843,37 @@ namespace SoftSledWPF.Components.Shell {
                                                      $"duration={e.Info.Duration} streams=[{streams}]");
                         }
                     } catch { }
-                    // Disconnect FFME's per-stream clocks so the video element
-                    // keeps advancing on its own PTS clock even when the audio
-                    // buffer drains. WMPNss-class servers stop sending audio
-                    // during server-side trick play (DLNA convention — audio
-                    // at 3×/10× would be unintelligible); without this, the
-                    // pipeline freezes on the missing audio while 50 video
-                    // frames sit unused in the buffer. A/V sync at 1× then
-                    // relies on the muxer's authoritative PES PTS values
-                    // (sourced from the wire's per-stream RTP timestamps,
-                    // anchored against PLAY-response RTP-Info), which is the
-                    // correct source of truth for RTSP playback anyway.
-                    try { e.Options.IsTimeSyncDisabled = true; } catch { }
+                    // FFME's per-stream clock policy. Two regimes:
+                    //
+                    //   * IsTimeSyncDisabled=false (preferred): FFME's
+                    //     master clock locks to audio and aligns video
+                    //     to it for tight lip-sync at 1×. The downside
+                    //     is that when the wire stops delivering audio
+                    //     (server-side trick play), the audio buffer
+                    //     drains and the renderer enters SYNC-BUFFER —
+                    //     video freezes. AudioSilenceInjector solves
+                    //     that by emitting synthetic audio MAUs so the
+                    //     buffer never drains.
+                    //
+                    //   * IsTimeSyncDisabled=true (fallback): FFME runs
+                    //     each stream on its own clock. Trick-play
+                    //     freezes go away even without the injector,
+                    //     but lip-sync at 1× breaks because the
+                    //     per-stream first-MAU offset (typically ~1.5 s
+                    //     from the server's prior-IDR padding) becomes
+                    //     visible as permanent skew.
+                    //
+                    // Default to the sync-on path; the silence injector
+                    // wired into RTSPClient keeps the buffer fed.
+                    try { e.Options.IsTimeSyncDisabled = false; } catch { }
                 };
-                // Apply the same clock-disconnect to the secondary audio-only
-                // FFME element (PCM path). The audio element doesn't directly
-                // suffer from the trick-play freeze (no video to wait on), but
-                // we keep the option symmetric so any future change to the
-                // PCM pipeline doesn't surprise us with sync behaviour.
                 MediaAudio.MediaOpening += (s, e) => {
-                    try { e.Options.IsTimeSyncDisabled = true; } catch { }
+                    // Audio-only sessions can't suffer the trick-play
+                    // freeze (no video to wait on); leaving sync on
+                    // here keeps behaviour symmetric with the main
+                    // element so position reporting / seek behave the
+                    // same in both modes.
+                    try { e.Options.IsTimeSyncDisabled = false; } catch { }
                 };
                 Media.MediaOpened += (s, e) => {
                     try {
@@ -822,10 +955,17 @@ namespace SoftSledWPF.Components.Shell {
 
         private void SizeMediaToCanvasFill() {
             if (MediaCanvas == null) return;
+            double w = double.IsNaN(MediaCanvas.ActualWidth)  ? 0 : MediaCanvas.ActualWidth;
+            double h = double.IsNaN(MediaCanvas.ActualHeight) ? 0 : MediaCanvas.ActualHeight;
             Canvas.SetLeft(Media, 0);
             Canvas.SetTop(Media, 0);
-            Media.Width = double.IsNaN(MediaCanvas.ActualWidth) ? 0 : MediaCanvas.ActualWidth;
-            Media.Height = double.IsNaN(MediaCanvas.ActualHeight) ? 0 : MediaCanvas.ActualHeight;
+            Media.Width = w; Media.Height = h;
+            // VideoSurface is shared by the direct-libav engine and
+            // the (frame-server-mode) MediaFoundation engine; both
+            // hand the D3DImage to it. The Image element auto-sizes
+            // via Stretch="Uniform" so we don't need to set Width/
+            // Height explicitly — just leave it visible and let WPF
+            // letterbox.
         }
 
         private void FreeRdpClient_FrameReady(object sender, EventArgs e) {

@@ -86,6 +86,12 @@ namespace SoftSled.Components.AudioVisual.Playback {
         private IntPtr _d3d9Ex;
         private IntPtr _device;
         private IntPtr _surface;
+        // Share handle returned by D3D9 when the surface is created
+        // shared. Required for hardware D3DImage rendering: without
+        // it the WPF compositor reads back the surface contents per
+        // frame, which is 8 MB of round-trip bandwidth at 1080p and
+        // dramatically slower than the GPU-only path.
+        private IntPtr _surfaceShareHandle;
         private int _surfaceW;
         private int _surfaceH;
         private D3DImage _d3dImage;
@@ -277,7 +283,7 @@ namespace SoftSled.Components.AudioVisual.Playback {
                     (uint)frame.Width, (uint)frame.Height,
                     D3D9Interop.D3DFMT_X8R8G8B8,
                     D3D9Interop.D3DMULTISAMPLE_NONE, 0,
-                    lockable: true, out _surface);
+                    lockable: true, out _surface, out _surfaceShareHandle);
                 if (D3D9Interop.Failed(hr) || _surface == IntPtr.Zero) {
                     _log?.LogError($"[d3d-video] CreateRenderTarget {frame.Width}x{frame.Height} failed: 0x{hr:X8}");
                     return;
@@ -285,7 +291,9 @@ namespace SoftSled.Components.AudioVisual.Playback {
                 _surfaceW = frame.Width;
                 _surfaceH = frame.Height;
                 _backBufferAssigned = false;
-                _log?.LogInfo($"[d3d-video] D3D9 surface allocated: {frame.Width}x{frame.Height}");
+                _log?.LogInfo($"[d3d-video] D3D9 surface allocated: {frame.Width}x{frame.Height} " +
+                              $"(shareHandle=0x{_surfaceShareHandle.ToInt64():X} — " +
+                              $"{(_surfaceShareHandle == IntPtr.Zero ? "UNSHARED, software D3DImage fallback" : "SHARED, hardware D3DImage")})");
             }
 
             // Copy decoded BGRA bytes into the D3D9 surface. Single
@@ -323,6 +331,18 @@ namespace SoftSled.Components.AudioVisual.Playback {
                 if (!_backBufferAssigned) {
                     _d3dImage.SetBackBuffer(D3DResourceType.IDirect3DSurface9, _surface);
                     _backBufferAssigned = true;
+                    // IsFrontBufferAvailable becomes meaningful after
+                    // SetBackBuffer. True = the WPF MIL compositor
+                    // successfully opened our shared surface and will
+                    // composite directly from GPU memory (the fast
+                    // path). False = MIL couldn't open the surface
+                    // (e.g. unshared / wrong device) and is using a
+                    // software fallback (read-back + re-upload per
+                    // frame — what was capping fps).
+                    bool hwPath = _d3dImage.IsFrontBufferAvailable;
+                    _log?.LogInfo($"[d3d-video] D3DImage back-buffer set: " +
+                                  $"IsFrontBufferAvailable={hwPath} " +
+                                  $"({(hwPath ? "hardware GPU path engaged" : "SOFTWARE FALLBACK — D3DImage cannot open the surface")})");
                 }
                 _d3dImage.AddDirtyRect(new Int32Rect(0, 0, frame.Width, frame.Height));
             } finally {
@@ -390,6 +410,7 @@ namespace SoftSled.Components.AudioVisual.Playback {
             if (_surface != IntPtr.Zero) {
                 D3D9Interop.Release(_surface);
                 _surface = IntPtr.Zero;
+                _surfaceShareHandle = IntPtr.Zero;
                 _backBufferAssigned = false;
             }
         }

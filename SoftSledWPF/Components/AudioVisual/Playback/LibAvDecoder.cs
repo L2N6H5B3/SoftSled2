@@ -43,6 +43,18 @@ namespace SoftSled.Components.AudioVisual.Playback {
         private long _framesDecoded;
         private long _framesDropped;        // overrun
 
+        // Sliding-window throughput counters. Exchange'd to 0 at each
+        // log emit so the reported numbers are per-second, not
+        // cumulative. Tells us decisively whether a ~10fps cap is
+        // upstream (packets-in low) or the decoder itself (packets-in
+        // high but frames-out low).
+        private long _windowPacketsIn;
+        private long _windowFramesOut;
+        private long _windowDecodeNanos;     // total time spent inside avcodec_send_packet + receive_frame
+        private long _windowFrameCallbackNanos; // total time spent inside OnFrameDecoded
+        private long _windowStartMs;
+        private readonly System.Diagnostics.Stopwatch _statsClock = System.Diagnostics.Stopwatch.StartNew();
+
         /// <param name="codecId">libav decoder identifier (see CodecRegistry).</param>
         /// <param name="extradata">Codec extradata (SPS/PPS for H264, WAVEFORMATEX for
         /// some audio paths). Pass null for codecs whose configuration is
@@ -143,6 +155,7 @@ namespace SoftSled.Components.AudioVisual.Playback {
         /// full the oldest packet is dropped (overrun tracked).</summary>
         public void SubmitPacket(byte[] data, long ptsMs) {
             if (_disposed || data == null || data.Length == 0) return;
+            Interlocked.Increment(ref _windowPacketsIn);
             var qp = new QueuedPacket { Data = data, PtsMs = ptsMs };
             if (!_queue.TryAdd(qp)) {
                 // Bounded queue full — drop oldest. Most realistic cause
@@ -211,8 +224,13 @@ namespace SoftSled.Components.AudioVisual.Playback {
             }
             try {
                 foreach (var qp in _queue.GetConsumingEnumerable()) {
+                    long t0 = _statsClock.ElapsedTicks;
                     SendPacket(pkt, qp);
                     DrainFrames(frame, qp.PtsMs);
+                    long dtNanos = (_statsClock.ElapsedTicks - t0)
+                        * 1_000_000_000L / System.Diagnostics.Stopwatch.Frequency;
+                    Interlocked.Add(ref _windowDecodeNanos, dtNanos);
+                    MaybeEmitStats();
                 }
                 // Flush: send a null packet to flush the decoder, then drain.
                 ffmpeg.avcodec_send_packet(CodecCtx, null);
@@ -265,14 +283,53 @@ namespace SoftSled.Components.AudioVisual.Playback {
                 long emitPts = ptsMs;
                 if (frame->pts != ffmpeg.AV_NOPTS_VALUE) emitPts = frame->pts;
                 try {
+                    long cb0 = _statsClock.ElapsedTicks;
                     OnFrameDecoded(frame, emitPts);
+                    long cbNanos = (_statsClock.ElapsedTicks - cb0)
+                        * 1_000_000_000L / System.Diagnostics.Stopwatch.Frequency;
+                    Interlocked.Add(ref _windowFrameCallbackNanos, cbNanos);
                     Interlocked.Increment(ref _framesDecoded);
+                    Interlocked.Increment(ref _windowFramesOut);
                 } catch (Exception ex) {
                     Log?.LogError($"[libav-{_streamLabel}] OnFrameDecoded threw: {ex.Message}");
                 } finally {
                     ffmpeg.av_frame_unref(frame);
                 }
             }
+        }
+
+        /// <summary>
+        /// Emit a one-line throughput summary once per ~1 s of wall
+        /// time. Tells us, in order: how many packets are arriving
+        /// (upstream pacing), how many frames come out (decoder
+        /// pacing), how long each phase is taking on average. If
+        /// pktsIn is low (e.g. ~10/s) the bottleneck is upstream
+        /// (depacketizer / RTP); if pktsIn is high but framesOut is
+        /// low and decodeAvgMs is high, the decoder itself is slow;
+        /// if both are high but the renderer's fps is still low,
+        /// look at the callback (sws_scale / blit) cost.
+        /// </summary>
+        private void MaybeEmitStats() {
+            long nowMs = _statsClock.ElapsedMilliseconds;
+            long start = Interlocked.Read(ref _windowStartMs);
+            long elapsed = nowMs - start;
+            if (elapsed < 1000) return;
+            // Compare-exchange so concurrent callers don't double-emit.
+            if (Interlocked.CompareExchange(ref _windowStartMs, nowMs, start) != start) return;
+
+            long pkts = Interlocked.Exchange(ref _windowPacketsIn, 0);
+            long frames = Interlocked.Exchange(ref _windowFramesOut, 0);
+            long decNs = Interlocked.Exchange(ref _windowDecodeNanos, 0);
+            long cbNs  = Interlocked.Exchange(ref _windowFrameCallbackNanos, 0);
+            double decAvgMs = pkts   > 0 ? (decNs / 1_000_000.0) / pkts   : 0;
+            double cbAvgMs  = frames > 0 ? (cbNs  / 1_000_000.0) / frames : 0;
+            double pktsPerSec   = pkts   * 1000.0 / elapsed;
+            double framesPerSec = frames * 1000.0 / elapsed;
+            Log?.LogInfo($"[libav-{_streamLabel}] pktsIn={pktsPerSec:F1}/s " +
+                         $"framesOut={framesPerSec:F1}/s " +
+                         $"decodeAvg={decAvgMs:F2}ms/pkt " +
+                         $"callbackAvg={cbAvgMs:F2}ms/frame " +
+                         $"queueDepth={_queue.Count} window={elapsed}ms");
         }
 
         // ---------- Utilities ----------

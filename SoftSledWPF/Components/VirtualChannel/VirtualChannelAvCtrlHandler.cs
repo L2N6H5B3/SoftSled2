@@ -178,6 +178,29 @@ namespace SoftSled.Components.VirtualChannel {
         private long _playbackStartPositionMs;   // StartPayloadStartTime from WMC (0 for fresh play)
         private const long DefaultDurationMs = 2L * 60L * 60L * 1000L; // 2 h fallback = 7,200,000 ms
 
+        // First-Start latch. WMC sends two Start requests in quick
+        // succession at the very beginning of a session — but FFME's
+        // MediaElement.Open is asynchronous and takes ~hundreds of ms
+        // to ~1 s for recorded TV. If we ack the first Start before
+        // the engine has actually opened, WMC thinks playback is
+        // already underway and starts polling GetPosition (and may
+        // skip the BUFFERING_STOP wait), which throws off pacing for
+        // the rest of the session.
+        //
+        // Fix: defer the FIRST Start request's StartResponse until
+        // the media controller reports IsOpen=true. Subsequent Start
+        // requests (the heartbeat / rate-change / seek varieties) ack
+        // immediately as before. Reset in OpenMedia / CloseMedia so a
+        // fresh session goes through the deferral path again.
+        private bool _firstStartSeen;
+        // Wait budget for the first-Start ack. Long enough for FFME
+        // to open a typical recorded-TV stream (~1 s observed) plus
+        // headroom for slow disk / network probes; short enough that
+        // a truly stuck pipeline doesn't leave WMC hanging on the ack
+        // forever — after this timeout we ack anyway and hope for the
+        // best.
+        private const int FirstStartAckTimeoutMs = 5000;
+
         // MS-DMCT sentinel: when the WMC Start request sets Start Time to
         // this value, it means "I don't know — resume from the current
         // playback position rather than seeking". We treat it as zero so
@@ -342,6 +365,10 @@ namespace SoftSled.Components.VirtualChannel {
 
                         m_logger?.LogDebug($"AVCTRL: OpenMedia ({OpenMediaPayloadURL})");
 
+                        // Re-arm the first-Start ack deferral for the
+                        // new session.
+                        _firstStartSeen = false;
+
                         DMCTOpenMediaURL = OpenMediaPayloadURL;
                         Debug.WriteLine(DMCTOpenMediaURL);
 
@@ -401,6 +428,12 @@ namespace SoftSled.Components.VirtualChannel {
 
                         // Reset playback position tracking on CloseMedia.
                         _playbackStartPositionMs = 0;
+                        // Re-arm the first-Start deferral for the next
+                        // session — symmetric with OpenMedia. Without
+                        // this, an OpenMedia → CloseMedia → OpenMedia
+                        // round-trip would skip the deferral on the
+                        // second cycle.
+                        _firstStartSeen = false;
 
                         // Detach the live RTSP session from the controller
                         // BEFORE stopping it, so any final RTSP exceptions
@@ -596,8 +629,71 @@ namespace SoftSled.Components.VirtualChannel {
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = DSLRCommunication.Encapsulate(response);
 
-                        // Send the Start Response
-                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
+                        // First-Start deferral. WMC sends two Start
+                        // requests right after OpenMedia; FFME's
+                        // Media.Open is asynchronous and the first
+                        // Start typically arrives before MediaOpened
+                        // has fired. If we ack early, WMC starts
+                        // polling GetPosition (and may skip its
+                        // BUFFERING_STOP wait) against an engine that
+                        // isn't presenting yet, throwing off pacing
+                        // for the rest of the session.
+                        //
+                        // Solution: defer ONLY the first Start ack
+                        // until the controller reports IsOpen=true
+                        // (with a 5 s timeout safety net). The
+                        // direct-libav engine's WaitUntilOpenAsync
+                        // completes immediately, so this is a no-op
+                        // on that path; only the FFME engine actually
+                        // gates here.
+                        bool deferAck = !_firstStartSeen
+                                        && _mediaController != null
+                                        && !_mediaController.IsOpen;
+                        _firstStartSeen = true;
+                        if (deferAck) {
+                            // Capture into locals so the continuation
+                            // doesn't see fields mutated by later
+                            // requests.
+                            var capturedController = _mediaController;
+                            var capturedResponse   = encapsulatedResponse;
+                            m_logger?.LogInfo("AVCTRL: Start — deferring first-Start ack " +
+                                              "until media controller reports IsOpen=true " +
+                                              $"(timeout {FirstStartAckTimeoutMs}ms)");
+                            // Fire-and-forget. The continuation runs
+                            // on a thread-pool thread; VirtualChannelSend
+                            // is thread-safe (FreeRdpClient marshals
+                            // to its own send thread internally).
+                            _ = System.Threading.Tasks.Task.Run(async () => {
+                                var sw = System.Diagnostics.Stopwatch.StartNew();
+                                try {
+                                    await capturedController.WaitUntilOpenAsync(FirstStartAckTimeoutMs);
+                                } catch (Exception ex) {
+                                    m_logger?.LogError("AVCTRL: WaitUntilOpenAsync threw: " + ex.Message);
+                                }
+                                sw.Stop();
+                                bool open = false;
+                                try { open = capturedController.IsOpen; } catch { }
+                                m_logger?.LogInfo(
+                                    $"AVCTRL: first-Start ack releasing after {sw.ElapsedMilliseconds}ms " +
+                                    $"(IsOpen={open})");
+                                try {
+                                    VirtualChannelSend(this,
+                                        new VirtualChannelSendArgs("avctrl", capturedResponse));
+                                } catch (Exception ex) {
+                                    m_logger?.LogError("AVCTRL: deferred StartResponse send threw: " + ex.Message);
+                                }
+                            });
+                        } else {
+                            // Send the Start Response immediately —
+                            // either we already saw the first Start
+                            // (so this is the 2nd/heartbeat/rate-
+                            // change), or the controller is already
+                            // open, or there's no controller bound at
+                            // all (audio-only session before the
+                            // controller is wired).
+                            VirtualChannelSend(this,
+                                new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
+                        }
 
                     }
                     // Pause Request

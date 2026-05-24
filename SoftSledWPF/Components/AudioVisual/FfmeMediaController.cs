@@ -105,6 +105,16 @@ namespace SoftSled.Components.AudioVisual {
                 _rtsp.Disconnected      += RtspDisconnectedHandler;
                 _rtsp.PtsError          += RtspPtsErrorHandler;
                 _rtsp.UnrecoverableSkew += RtspUnrecoverableSkewHandler;
+                // FFME-specific: arm the audio silence injector so
+                // server-side trick play (which mutes audio) doesn't
+                // drain FFME's audio buffer and freeze the video
+                // element. SoftSledPlaybackEngine doesn't call this
+                // because its renderers are clock-driven, not audio-
+                // locked.
+                try { _rtsp.EnableAudioSilenceInjection(_log); }
+                catch (Exception ex) {
+                    _log?.LogError($"[ffme-mc] EnableAudioSilenceInjection threw: {ex.Message}");
+                }
             }
         }
 
@@ -121,6 +131,29 @@ namespace SoftSled.Components.AudioVisual {
         }
 
         public bool IsOpen => !_disposed && _isOpen;
+
+        // TaskCompletionSource that fires when FFME's MediaOpened
+        // handler runs. Re-created in MediaClosedHandler so a session
+        // reset (CloseMedia → next OpenMedia) gives a fresh "wait
+        // until ready" target. RunContinuationsAsynchronously keeps
+        // continuations off FFME's dispatcher thread so a slow ack
+        // path can't block subsequent media events.
+        private TaskCompletionSource<bool> _openTcs =
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task WaitUntilOpenAsync(int timeoutMs) {
+            if (_disposed) return Task.CompletedTask;
+            if (_isOpen) return Task.CompletedTask;
+            // Snapshot the TCS so a parallel session reset can't swap
+            // it out from under us mid-await.
+            var tcs = _openTcs;
+            if (timeoutMs < 0) return tcs.Task;
+            if (timeoutMs == 0) return Task.CompletedTask;
+            // Race the readiness signal against a timer; whichever
+            // completes first wins. Don't propagate cancellations to
+            // the TCS — other waiters might still be interested.
+            return Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
+        }
 
         // ----- IMediaController actions -----------------------------------
 
@@ -362,6 +395,11 @@ namespace SoftSled.Components.AudioVisual {
             System.Threading.Interlocked.Exchange(ref _cachedDurationTicks, durTicks);
             System.Threading.Interlocked.Exchange(ref _cachedPositionTicks, 0L);
             _isOpen = true;
+            // Release any AvCtrlHandler.first-Start waiter blocked on
+            // WaitUntilOpenAsync. TrySetResult is safe to call when
+            // the TCS has already completed (idempotent) — happens if
+            // MediaOpened ever fires twice in a session.
+            try { _openTcs.TrySetResult(true); } catch { }
             _log?.LogInfo($"[ffme-mc] MediaOpened — duration: " +
                           (durTicks > 0 ? new TimeSpan(durTicks).ToString() : "live / unbounded"));
 
@@ -390,6 +428,11 @@ namespace SoftSled.Components.AudioVisual {
             System.Threading.Interlocked.Exchange(ref _cachedDurationTicks, 0L);
             System.Threading.Interlocked.Exchange(ref _pendingSeekTicks, -1L);
             _pendingRate = double.NaN;
+            // Reset the readiness latch so a subsequent OpenMedia +
+            // first Start round-trip can defer its ack against the
+            // NEXT MediaOpened, not the previous session's already-
+            // completed signal.
+            _openTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _log?.LogInfo("[ffme-mc] MediaClosed");
         }
 

@@ -1,6 +1,29 @@
 using System.Collections.Generic;
 
 namespace SoftSled.Components.Configuration {
+
+    /// <summary>
+    /// Which playback engine to use for AV pipeline. Three options:
+    /// <list type="bullet">
+    ///   <item><c>Ffme</c> — Unosquare.FFME-based MediaElement +
+    ///   MPEG-PS/TS muxer + AsfFfmeInputStream + AudioSilenceInjector.
+    ///   The proven legacy path.</item>
+    ///   <item><c>DirectLibAv</c> — SoftSledPlaybackEngine: per-stream
+    ///   libav decoders + WPF or D3DImage renderer + NAudio output.
+    ///   No muxer roundtrip; finer trick-play control.</item>
+    ///   <item><c>MediaFoundation</c> — SharpDX.MediaFoundation
+    ///   MediaEngine consuming a ByteStream from the existing AsfStreamProducer.
+    ///   Uses Windows' built-in hardware-accelerated decoders +
+    ///   MediaEngine's audio renderer; frames rendered via
+    ///   TransferVideoFrame into a D3DImage. Experimental.</item>
+    /// </list>
+    /// </summary>
+    public enum PlaybackEngineKind {
+        Ffme = 0,
+        DirectLibAv = 1,
+        MediaFoundation = 2,
+    }
+
     public class SoftSledConfig {
         public bool IsPaired = false;
         public string DeviceUDN = "";
@@ -72,6 +95,19 @@ namespace SoftSled.Components.Configuration {
         // page.
         public int SessionWidth  = 1280;
         public int SessionHeight = 720;
+
+        // Playback engine selection. See PlaybackEngineKind above for
+        // a description of each option. Default is FFME — proven and
+        // gives smooth playback with AudioSilenceInjector handling
+        // trick play.
+        public PlaybackEngineKind PlaybackEngine = PlaybackEngineKind.Ffme;
+
+        // Legacy bool — preserved so old config files keep their
+        // FFME-vs-libav choice through the upgrade. On read, if this
+        // field is present, it overrides PlaybackEngine (Ffme if true,
+        // DirectLibAv if false). New code should read PlaybackEngine.
+        // Removed from the ConfigPage UI.
+        public bool UseFfmeEngine = true;
 
         // Video renderer selection. When false (default) the playback
         // engine uses the software WriteableBitmap path

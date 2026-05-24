@@ -97,6 +97,19 @@
             <Grid x:Name="VideoView"
                   Margin="100,200,100,80"
                   Visibility="Collapsed">
+                <!-- Content overflows the 440px sub-view height (six
+                     codec/render toggles + three engine choices +
+                     resolution picker); wrap in a ScrollViewer so the
+                     engine selector and resolution row stay reachable.
+                     PanningMode=VerticalOnly lets a future touch / remote
+                     wheel work too. Arrow-key focus traversal still drives
+                     the visible row via the child controls' default focus
+                     behaviour, and ScrollIntoView is implicit when a
+                     newly-focused control lies outside the viewport. -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              PanningMode="VerticalOnly"
+                              Focusable="False">
                 <StackPanel HorizontalAlignment="Left" Width="640">
                     <CheckBox x:Name="ChkHdContent"
                               Style="{StaticResource WmcCheckBoxStyle}"
@@ -120,8 +133,30 @@
                               Click="OnConfigChanged"/>
                     <CheckBox x:Name="ChkD3DImage"
                               Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Enable D3DImage (experimental — GPU-backed video surface)"
+                              Content="Enable D3DImage (libav engine only — GPU-backed video surface)"
                               Click="OnConfigChanged"/>
+
+                    <!-- Playback engine selector. Mutually-exclusive
+                         choice enforced in code-behind (OnEnginePicked).
+                         FFME = legacy proven path; DirectLibAv = our
+                         direct-libav engine; MF = SharpDX.MediaFoundation
+                         (experimental). -->
+                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
+                               Text="Playback engine"
+                               Foreground="{StaticResource WmcTextBrush}"
+                               Margin="10,20,0,8"/>
+                    <CheckBox x:Name="ChkEngineFfme"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="FFME (recommended — proven path)"
+                              Click="OnEnginePicked"/>
+                    <CheckBox x:Name="ChkEngineDirectLibAv"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Direct-libav (custom decoder + renderer)"
+                              Click="OnEnginePicked"/>
+                    <CheckBox x:Name="ChkEngineMediaFoundation"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Media Foundation via SharpDX (experimental)"
+                              Click="OnEnginePicked"/>
 
                     <!-- Resolution picker. The button shows the current
                          selection; clicking opens the ResolutionOverlay
@@ -140,6 +175,7 @@
                             Content="—"
                             Click="BtnResolution_Click"/>
                 </StackPanel>
+                </ScrollViewer>
             </Grid>
 
             <!-- ===== UI sub-view ========================================== -->

@@ -24,6 +24,18 @@ namespace SoftSled.Components.Configuration {
                 config = (SoftSledConfig)xmlSerializer.Deserialize(textReader);
             }
 
+            // PlaybackEngine migration. Old configs only have the
+            // UseFfmeEngine bool; new code reads the PlaybackEngine
+            // enum. If the XML didn't contain PlaybackEngine, the
+            // deserializer left it at the default (Ffme = 0). Cross-
+            // check against UseFfmeEngine — if the legacy bool says
+            // "false" (= libav) but the enum is at default Ffme, it's
+            // an old config and we honour the bool. Once new code
+            // writes the config back, both fields stay in sync.
+            if (config.PlaybackEngine == PlaybackEngineKind.Ffme && !config.UseFfmeEngine) {
+                config.PlaybackEngine = PlaybackEngineKind.DirectLibAv;
+            }
+
             return config;
         }
 

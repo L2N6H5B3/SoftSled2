@@ -122,10 +122,25 @@ namespace SoftSled.Components.AudioVisual.Playback {
             IntPtr focusWindow, uint behaviorFlags, ref D3DPRESENT_PARAMETERS presentParameters,
             IntPtr fullscreenDisplayMode, out IntPtr device);
 
+        // pSharedHandle is HANDLE* in the COM signature — a pointer
+        // to HANDLE. C# 'ref IntPtr' marshals as exactly that. The
+        // original signature passed IntPtr by value, which means we
+        // were always sending NULL — telling D3D9 "I don't want a
+        // shared surface". An unshared surface forces D3DImage to
+        // fall back to software rendering: the WPF compositor reads
+        // the surface contents back to system memory via Lock() and
+        // re-uploads them through its own GPU device. That's 2 uploads
+        // per frame + a CPU round-trip = exactly the kind of cost that
+        // caps fps in the 10-fps range on a 1080p stream.
+        //
+        // With a real ref-IntPtr (and *handle = 0 going in), D3D9
+        // creates a shared surface and writes its share handle back.
+        // The WPF MIL compositor can then open the same surface in
+        // its own context without any read-back.
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate int CreateRenderTargetFn(IntPtr self, uint width, uint height,
             int format, int multiSample, uint multiSampleQuality, int lockable,
-            out IntPtr surface, IntPtr sharedHandle);
+            out IntPtr surface, ref IntPtr sharedHandle);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate int LockRectFn(IntPtr self, out D3DLOCKED_RECT lockedRect,
@@ -153,13 +168,27 @@ namespace SoftSled.Components.AudioVisual.Playback {
                       ref presentParameters, IntPtr.Zero, out device);
         }
 
-        /// <summary>Wrapper for IDirect3DDevice9::CreateRenderTarget.</summary>
+        /// <summary>
+        /// Wrapper for IDirect3DDevice9::CreateRenderTarget that
+        /// creates a SHARED surface — i.e. one whose contents the WPF
+        /// MIL compositor can reference directly via the returned
+        /// share handle, without read-back. This is required for
+        /// D3DImage to use hardware rendering; an unshared surface
+        /// makes D3DImage silently fall back to software composition.
+        /// </summary>
+        /// <param name="sharedHandle">On success, receives the OS
+        /// share handle for the new surface. Pass to D3DImage and
+        /// log so we can verify hardware mode is engaged
+        /// (<c>IDirect3DSurface9</c> with a non-zero share handle =
+        /// fast path).</param>
         public static int CreateRenderTarget(IntPtr device, uint width, uint height,
             int format, int multiSample, uint multiSampleQuality, bool lockable,
-            out IntPtr surface) {
+            out IntPtr surface, out IntPtr sharedHandle) {
             var fn = GetVMethod<CreateRenderTargetFn>(device, IDirect3DDevice9_CreateRenderTarget);
+            // Going in, *pSharedHandle must be NULL — D3D9 fills it.
+            sharedHandle = IntPtr.Zero;
             return fn(device, width, height, format, multiSample, multiSampleQuality,
-                      lockable ? 1 : 0, out surface, IntPtr.Zero);
+                      lockable ? 1 : 0, out surface, ref sharedHandle);
         }
 
         /// <summary>Wrapper for IDirect3DSurface9::LockRect (full surface).</summary>

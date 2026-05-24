@@ -112,13 +112,43 @@ namespace SoftSled.Components.AudioVisual {
                     config.PrivateOptions["probesize"]       = "32768";
                     config.PrivateOptions["analyzeduration"] = "500000";
                 } else {
-                    // 2 MB probesize covers the ASF header object plus
-                    // the first few data packets, or for MPEG-ES the
-                    // first GOP. 5 s analyzeduration gives the demuxer
-                    // time to see at least one keyframe per video stream
-                    // before reporting them ready.
-                    config.PrivateOptions["probesize"]       = "2000000";
-                    config.PrivateOptions["analyzeduration"] = "5000000";
+                    // Video probe budget. Previously 2 MB / 5 s — those
+                    // values are libav's safe defaults for unknown
+                    // streams pulled from generic sources, but we
+                    // already know the codecs from the SDP fmtp lines
+                    // by the time this stream opens (the WMFPayloadData
+                    // dict in RTSPClient committed them), so libav
+                    // doesn't need to exhaustively scan multiple GOPs
+                    // to detect what's playing. Tightening these two
+                    // values is the single biggest knob for FFME open
+                    // latency:
+                    //
+                    //   probesize: 2 MB → 512 KB. Covers the PS pack
+                    //   header + system header + program stream map
+                    //   (~few KB) + a full IDR frame at 1080p (~100 KB)
+                    //   + the first PES on each stream — comfortably
+                    //   enough for find_stream_info to commit codec
+                    //   parameters. Going lower (e.g. 256 KB) starts
+                    //   to miss the IDR at higher resolutions.
+                    //
+                    //   analyzeduration: 5 s → 1.5 s. find_stream_info
+                    //   completes as soon as EITHER probesize is hit
+                    //   OR analyzeduration of stream-time has been
+                    //   observed — whichever first. With data already
+                    //   flowing (depacketizer producing MAUs through
+                    //   the muxer at real-time), 1.5 s of stream-time
+                    //   is reached in ~1.5 s of wall-time, vs. the
+                    //   previous 5 s ceiling. For a known-codec stream
+                    //   the actual commit happens well before either
+                    //   limit, so this just caps the worst case.
+                    //
+                    // Tested with VND.MS.WM-MPV (MPEG-2 video) +
+                    // VND.MS.WM-MPA (MP2/MP3 audio), AC-3, and X-WMF-PF
+                    // H.264 + PCM streams — all commit codec params
+                    // well inside the new limits.
+                    config.PrivateOptions["probesize"]       = "524288";    // 512 KB
+                    config.PrivateOptions["analyzeduration"] = "1500000";   // 1.5 s
+
                     // Video can afford to drop probed packets — the next
                     // keyframe redelivers the necessary decoder state.
                     config.PrivateOptions["fflags"]          = "nobuffer";
@@ -149,6 +179,19 @@ namespace SoftSled.Components.AudioVisual {
         /// the actual stream — saves us racing FFME's MediaOpening event,
         /// and the caller knows up front which format hint it passed.
         /// </summary>
+        /// <summary>
+        /// The underlying byte producer. Exposed so engines that
+        /// don't go through FFME (e.g. MediaFoundationController via
+        /// MediaFoundationProducerStream) can pull from the same
+        /// source we'd otherwise hand to FFME.
+        /// </summary>
+        public AsfStreamProducer Producer => _producer;
+
+        /// <summary>The forced input-format hint set at construction
+        /// (e.g. "mpeg", "mp3", "h264"). Used by alternative engines
+        /// to derive a sensible MIME type / URL extension.</summary>
+        public string ForcedInputFormat => _forcedInputFormat;
+
         public bool HasVideo {
             get {
                 switch (_forcedInputFormat) {

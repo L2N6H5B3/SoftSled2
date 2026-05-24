@@ -113,6 +113,11 @@ namespace SoftSledWPF.Components.Shell {
                 ChkIntenseAnimations.IsChecked = _config.EnableIntenseAnimations;
                 ChkOverscan.IsChecked          = _config.EnableOverscanMargin;
                 ChkD3DImage.IsChecked          = _config.EnableD3DImage;
+                // Engine selector — checkboxes act as a radio group;
+                // mutual exclusivity is enforced in OnEnginePicked.
+                ChkEngineFfme.IsChecked            = _config.PlaybackEngine == PlaybackEngineKind.Ffme;
+                ChkEngineDirectLibAv.IsChecked     = _config.PlaybackEngine == PlaybackEngineKind.DirectLibAv;
+                ChkEngineMediaFoundation.IsChecked = _config.PlaybackEngine == PlaybackEngineKind.MediaFoundation;
                 ChkHdContent.IsChecked         = _config.EnableHdContent;
                 ChkUiSounds.IsChecked          = _config.EnableUiSounds;
                 ChkPopups.IsChecked            = _config.EnablePopups;
@@ -261,6 +266,43 @@ namespace SoftSledWPF.Components.Shell {
             bool remote = ChkRemoteRendering.IsChecked == true;
             Chk2DAnimations.IsEnabled      = !remote;
             ChkIntenseAnimations.IsEnabled = !remote;
+        }
+
+        /// <summary>
+        /// Engine selector handler. The three engine checkboxes act as
+        /// a radio group — clicking one un-checks the others and
+        /// persists the chosen kind. Re-clicking the already-checked
+        /// engine keeps it checked (you can't have zero engines).
+        /// </summary>
+        private void OnEnginePicked(object sender, RoutedEventArgs e) {
+            if (_suppressWrite || _config == null) return;
+
+            PlaybackEngineKind picked;
+            if (ReferenceEquals(sender, ChkEngineDirectLibAv))     picked = PlaybackEngineKind.DirectLibAv;
+            else if (ReferenceEquals(sender, ChkEngineMediaFoundation)) picked = PlaybackEngineKind.MediaFoundation;
+            else                                                   picked = PlaybackEngineKind.Ffme;
+
+            _suppressWrite = true;
+            try {
+                ChkEngineFfme.IsChecked            = picked == PlaybackEngineKind.Ffme;
+                ChkEngineDirectLibAv.IsChecked     = picked == PlaybackEngineKind.DirectLibAv;
+                ChkEngineMediaFoundation.IsChecked = picked == PlaybackEngineKind.MediaFoundation;
+            } finally {
+                _suppressWrite = false;
+            }
+
+            _config.PlaybackEngine = picked;
+            // Keep the legacy UseFfmeEngine bool in sync so a downgrade
+            // to a build that only reads it still picks a sensible
+            // engine (FFME stays as the only "true" branch).
+            _config.UseFfmeEngine = picked == PlaybackEngineKind.Ffme;
+            try {
+                SoftSledConfigManager.WriteConfig(_config);
+            } catch (Exception ex) {
+                MessageBox.Show("Failed to save engine selection: " + ex.Message);
+                return;
+            }
+            ConfigChanged?.Invoke(this, EventArgs.Empty);
         }
 
         // ---- Unpair flow ----------------------------------------------

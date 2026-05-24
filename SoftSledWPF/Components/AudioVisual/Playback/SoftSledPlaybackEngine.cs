@@ -95,6 +95,20 @@ namespace SoftSled.Components.AudioVisual.Playback {
         public Task PlayAsync() { _clock.Resume(); return Task.CompletedTask; }
         public Task PauseAsync() { _clock.Pause(); return Task.CompletedTask; }
 
+        /// <summary>
+        /// The direct-libav engine is "open" the moment its
+        /// constructor returns — the per-stream decoders / renderers
+        /// are spun up lazily as codecs commit, but the engine
+        /// surface itself is immediately usable. So this is
+        /// effectively a no-op completion. (The FFME path is what
+        /// actually needs the deferred-ack behaviour: FFME's
+        /// MediaElement.Open is asynchronous and can take ~1 s for a
+        /// recorded-TV stream.)
+        /// </summary>
+        public Task WaitUntilOpenAsync(int timeoutMs) {
+            return IsOpen ? Task.CompletedTask : Task.CompletedTask;
+        }
+
         public Task SeekAsync(TimeSpan position) {
             // The wire-side seek goes through the RTSP layer; the engine
             // clock just jumps. Decoders / renderers will flush their

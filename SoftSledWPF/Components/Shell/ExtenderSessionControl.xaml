@@ -5,6 +5,8 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:splash="clr-namespace:SoftSled.Components.Splash"
              xmlns:ffme="clr-namespace:Unosquare.FFME;assembly=ffme.win"
+             xmlns:wfi="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration"
+             xmlns:wf="clr-namespace:System.Windows.Forms;assembly=System.Windows.Forms"
              mc:Ignorable="d"
              Focusable="True"
              Background="Black"
@@ -44,6 +46,23 @@
                        Stretch="Uniform"
                        RenderOptions.BitmapScalingMode="HighQuality"
                        Visibility="Collapsed"/>
+
+            <!-- MediaFoundation render target. MediaEngine in HWND-
+                 rendering mode draws directly into this WinForms
+                 Panel's window handle using Windows' built-in EVR-
+                 style renderer (hardware-accelerated, gives us
+                 MediaFoundation's full perf without our own
+                 frame-server tick / D3DImage marshalling). Airspace
+                 trade-off: the panel sits as an overlay above WPF
+                 content; the splash/overlay layers above won't blend
+                 with the video, which is fine for the experimental
+                 MF mode. Hidden by default — only made visible when
+                 PlaybackEngine = MediaFoundation. -->
+            <wfi:WindowsFormsHost x:Name="MfHost"
+                       Canvas.Left="0" Canvas.Top="0"
+                       Visibility="Collapsed">
+                <wf:Panel x:Name="MfPanel" BackColor="Black"/>
+            </wfi:WindowsFormsHost>
         </Canvas>
 
         <Image x:Name="rdpDisplay"
