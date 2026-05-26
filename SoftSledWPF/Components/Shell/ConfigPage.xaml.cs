@@ -20,7 +20,7 @@ namespace SoftSledWPF.Components.Shell {
     public partial class ConfigPage : UserControl {
 
         /// <summary>Sub-view currently visible. Used by ESC handler.</summary>
-        private enum View { Root, General, Pairing, Video, Ui, Debugging, About }
+        private enum View { Root, General, Pairing, Video, Audio, Ui, Debugging, About }
         private View _currentView = View.Root;
         private SoftSledConfig _config;
         private bool _suppressWrite;
@@ -112,6 +112,7 @@ namespace SoftSledWPF.Components.Shell {
                 Chk2DAnimations.IsChecked      = _config.Enable2DAnimations;
                 ChkIntenseAnimations.IsChecked = _config.EnableIntenseAnimations;
                 ChkOverscan.IsChecked          = _config.EnableOverscanMargin;
+                ChkExternalSync.IsChecked      = _config.UseExternalSyncMode;
                 ChkHdContent.IsChecked         = _config.EnableHdContent;
                 ChkUiSounds.IsChecked          = _config.EnableUiSounds;
                 ChkPopups.IsChecked            = _config.EnablePopups;
@@ -123,6 +124,7 @@ namespace SoftSledWPF.Components.Shell {
                 ChkLogAvCtrl.IsChecked         = _config.LogAvCtrlChannel;
                 ChkLogRdpFastpath.IsChecked    = _config.LogRdpFastpath;
                 RefreshResolutionButton();
+                RefreshAudioSyncDisplay();
                 UpdateAnimationDependencies();
 
                 PairingStatusText.Text = _config.IsPaired
@@ -145,6 +147,7 @@ namespace SoftSledWPF.Components.Shell {
             GeneralView.Visibility   = view == View.General   ? Visibility.Visible : Visibility.Collapsed;
             PairingView.Visibility   = view == View.Pairing   ? Visibility.Visible : Visibility.Collapsed;
             VideoView.Visibility     = view == View.Video     ? Visibility.Visible : Visibility.Collapsed;
+            AudioView.Visibility     = view == View.Audio     ? Visibility.Visible : Visibility.Collapsed;
             UiView.Visibility        = view == View.Ui        ? Visibility.Visible : Visibility.Collapsed;
             DebuggingView.Visibility = view == View.Debugging ? Visibility.Visible : Visibility.Collapsed;
             AboutView.Visibility     = view == View.About     ? Visibility.Visible : Visibility.Collapsed;
@@ -166,6 +169,9 @@ namespace SoftSledWPF.Components.Shell {
                     break;
                 case View.Video:
                     ChkRemoteRendering.Focus();
+                    break;
+                case View.Audio:
+                    BtnAudioSyncReset.Focus();
                     break;
                 case View.Ui:
                     ChkUiSounds.Focus();
@@ -201,6 +207,7 @@ namespace SoftSledWPF.Components.Shell {
             if (item == ItemGeneral)         ShowView(View.General);
             else if (item == ItemPairing)    ShowView(View.Pairing);
             else if (item == ItemVideo)      ShowView(View.Video);
+            else if (item == ItemAudio)      ShowView(View.Audio);
             else if (item == ItemUi)         ShowView(View.Ui);
             else if (item == ItemDebugging)  ShowView(View.Debugging);
             else if (item == ItemAbout)      ShowView(View.About);
@@ -220,6 +227,7 @@ namespace SoftSledWPF.Components.Shell {
             _config.Enable2DAnimations      = Chk2DAnimations.IsChecked == true;
             _config.EnableIntenseAnimations = ChkIntenseAnimations.IsChecked == true;
             _config.EnableOverscanMargin    = ChkOverscan.IsChecked == true;
+            _config.UseExternalSyncMode     = ChkExternalSync.IsChecked == true;
             _config.EnableHdContent         = ChkHdContent.IsChecked == true;
             _config.EnableUiSounds          = ChkUiSounds.IsChecked == true;
             _config.EnablePopups            = ChkPopups.IsChecked == true;
@@ -301,6 +309,56 @@ namespace SoftSledWPF.Components.Shell {
             if (_config == null) { BtnResolution.Content = "—"; return; }
             BtnResolution.Content =
                 $"{_config.SessionWidth} × {_config.SessionHeight}";
+        }
+
+        // ---- Audio sync offset adjuster -------------------------------
+
+        /// <summary>
+        /// Maximum allowed manual offset (per direction). 250 ms is
+        /// the upper end of what's plausible for HDMI / AVR latency;
+        /// anything beyond that is a pipeline problem, not an
+        /// offsettable display lag.
+        /// </summary>
+        private const int AudioSyncOffsetClampMs = 250;
+
+        private void RefreshAudioSyncDisplay() {
+            if (_config == null) { AudioSyncValueText.Text = "0 ms"; return; }
+            int ms = _config.AudioSyncOffsetMs;
+            AudioSyncValueText.Text = ms > 0
+                ? $"+{ms} ms"
+                : (ms == 0 ? "0 ms" : $"{ms} ms");
+        }
+
+        /// <summary>
+        /// Apply a delta to the audio-sync offset, clamp, persist,
+        /// and refresh the display. Shared by the ±10/±50/reset
+        /// button handlers — reset passes the negated current value
+        /// to force back to zero.
+        /// </summary>
+        private void AdjustAudioSyncOffset(int deltaMs) {
+            if (_suppressWrite || _config == null) return;
+            int next = _config.AudioSyncOffsetMs + deltaMs;
+            if (next < -AudioSyncOffsetClampMs) next = -AudioSyncOffsetClampMs;
+            if (next >  AudioSyncOffsetClampMs) next =  AudioSyncOffsetClampMs;
+            if (next == _config.AudioSyncOffsetMs) return;
+            _config.AudioSyncOffsetMs = next;
+            try { SoftSledConfigManager.WriteConfig(_config); }
+            catch (Exception ex) {
+                MessageBox.Show("Failed to save audio sync offset: " + ex.Message);
+                return;
+            }
+            RefreshAudioSyncDisplay();
+            ConfigChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void BtnAudioSyncMinusBig_Click(object sender, RoutedEventArgs e) => AdjustAudioSyncOffset(-50);
+        private void BtnAudioSyncMinus_Click   (object sender, RoutedEventArgs e) => AdjustAudioSyncOffset(-10);
+        private void BtnAudioSyncPlus_Click    (object sender, RoutedEventArgs e) => AdjustAudioSyncOffset(+10);
+        private void BtnAudioSyncPlusBig_Click (object sender, RoutedEventArgs e) => AdjustAudioSyncOffset(+50);
+
+        private void BtnAudioSyncReset_Click(object sender, RoutedEventArgs e) {
+            if (_config == null) return;
+            AdjustAudioSyncOffset(-_config.AudioSyncOffsetMs);
         }
 
         private void BtnResolution_Click(object sender, RoutedEventArgs e) {

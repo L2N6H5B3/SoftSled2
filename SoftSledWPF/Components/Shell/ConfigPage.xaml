@@ -40,6 +40,7 @@
                     <ListBoxItem x:Name="ItemGeneral"   Content="General"  IsSelected="True"/>
                     <ListBoxItem x:Name="ItemPairing"   Content="Pairing"/>
                     <ListBoxItem x:Name="ItemVideo"     Content="Video"/>
+                    <ListBoxItem x:Name="ItemAudio"     Content="Audio"/>
                     <ListBoxItem x:Name="ItemUi"        Content="UI"/>
                     <ListBoxItem x:Name="ItemDebugging" Content="Debugging"/>
                     <ListBoxItem x:Name="ItemAbout"     Content="About"/>
@@ -129,6 +130,10 @@
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Enable Overscan Margin"
                               Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkExternalSync"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Use external-sync audio (experimental — MP3 only)"
+                              Click="OnConfigChanged"/>
 
                     <!-- Resolution picker. The button shows the current
                          selection; clicking opens the ResolutionOverlay
@@ -148,6 +153,61 @@
                             Click="BtnResolution_Click"/>
                 </StackPanel>
                 </ScrollViewer>
+            </Grid>
+
+            <!-- ===== Audio sub-view ======================================= -->
+            <Grid x:Name="AudioView"
+                  Margin="100,200,100,80"
+                  Visibility="Collapsed">
+                <StackPanel HorizontalAlignment="Left" Width="640">
+                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
+                               Text="Audio sync offset"
+                               Foreground="{StaticResource WmcTextBrush}"
+                               Margin="10,0,0,8"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="10,0,0,16"
+                               TextWrapping="Wrap"
+                               Text="Adjust if audio appears out of sync with video — e.g. when an HDMI display adds picture-processing lag or an A/V receiver delays audio. Positive values delay audio (use when video lags); negative values delay video (use when audio lags). Applied automatically when the external-sync audio engine is enabled."/>
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Left"
+                                Margin="10,0,0,0">
+                        <Button x:Name="BtnAudioSyncMinusBig"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="-50ms"
+                                MinWidth="100"
+                                Click="BtnAudioSyncMinusBig_Click"/>
+                        <Button x:Name="BtnAudioSyncMinus"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="-10ms"
+                                MinWidth="100"
+                                Click="BtnAudioSyncMinus_Click"/>
+                        <TextBlock x:Name="AudioSyncValueText"
+                                   Style="{StaticResource WmcSubtitleStyle}"
+                                   Foreground="{StaticResource WmcTextBrush}"
+                                   VerticalAlignment="Center"
+                                   Width="160"
+                                   TextAlignment="Center"
+                                   Text="0 ms"/>
+                        <Button x:Name="BtnAudioSyncPlus"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="+10ms"
+                                MinWidth="100"
+                                Click="BtnAudioSyncPlus_Click"/>
+                        <Button x:Name="BtnAudioSyncPlusBig"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="+50ms"
+                                MinWidth="100"
+                                Click="BtnAudioSyncPlusBig_Click"/>
+                    </StackPanel>
+                    <Button x:Name="BtnAudioSyncReset"
+                            Style="{StaticResource WmcButtonStyle}"
+                            Content="Reset to 0 ms"
+                            HorizontalAlignment="Left"
+                            MinWidth="240"
+                            Margin="10,16,0,0"
+                            Click="BtnAudioSyncReset_Click"/>
+                </StackPanel>
             </Grid>
 
             <!-- ===== UI sub-view ========================================== -->

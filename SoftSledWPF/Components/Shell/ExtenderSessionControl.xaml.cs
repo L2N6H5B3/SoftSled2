@@ -52,6 +52,10 @@ namespace SoftSledWPF.Components.Shell {
         private SoftSledNative.FastpathCallback _fastpathDispatcher;
         private SoftSled.Components.AudioVisual.WmcFastpathOverlayRegionDecoder.OverlayRegion _lastOverlay;
         private SoftSled.Components.AudioVisual.FfmeMediaController _ffmeController;
+        // Phase 1 external-sync controller — alternative to FFME for
+        // audio-only MP3 sessions. Constructed when
+        // SoftSledConfig.UseExternalSyncMode is set; null otherwise.
+        private SoftSled.Components.AudioVisual.ExternalSync.ExternalSyncMediaController _extSyncController;
 
         private System.Threading.Tasks.TaskCompletionSource<bool> _videoOpenComplete;
 
@@ -413,8 +417,33 @@ namespace SoftSledWPF.Components.Shell {
             SplashHandler = new VirtualChannelSplashHandler(m_logger);
             SplashHandler.VirtualChannelSend += On_VirtualChannelSend;
 
-            _ffmeController = new SoftSled.Components.AudioVisual.FfmeMediaController(Media, m_logger);
-            AvCtrlHandler.MediaController = _ffmeController;
+            // Playback controller selection. Phase 1 of the external-
+            // sync plan: when SoftSledConfig.UseExternalSyncMode is
+            // set, ExternalSyncMediaController takes over (audio-only
+            // for now — owns its own libav decoder + NAudio renderer,
+            // bypasses FFME entirely for audio). Anything that needs
+            // video still uses FFME via the controller swap below.
+            // Phase 2/3 will move video into the same controller with
+            // FFME used as a video-only decoder driven by NAudio's
+            // master clock.
+            if (cfg.UseExternalSyncMode) {
+                _extSyncController = new SoftSled.Components.AudioVisual.ExternalSync
+                    .ExternalSyncMediaController(m_logger, cfg.AudioSyncOffsetMs);
+                AvCtrlHandler.MediaController = _extSyncController;
+                // Phase 2: hand the FFME MediaElement to the
+                // external-sync controller so it can chase NAudio's
+                // master clock via SpeedRatio nudges when video is
+                // present. The controller subscribes to MediaOpened
+                // / MediaClosed itself; until video opens it just
+                // sits idle.
+                _extSyncController.AttachVideoMediaElement(Media);
+                m_logger.LogInfo($"[controller] external-sync mode active " +
+                                 $"(audio: libav+NAudio; video: FFME with SpeedRatio nudges; " +
+                                 $"audioSyncOffset={cfg.AudioSyncOffsetMs}ms)");
+            } else {
+                _ffmeController = new SoftSled.Components.AudioVisual.FfmeMediaController(Media, m_logger);
+                AvCtrlHandler.MediaController = _ffmeController;
+            }
 
             _splashController = new SoftSled.Components.Splash.SplashController(
                 m_logger, Dispatcher, SplashPayloadBigEndian, SplashHandler.SendBytes);
@@ -535,6 +564,8 @@ namespace SoftSledWPF.Components.Shell {
             if (AvCtrlHandler != null) AvCtrlHandler.MediaController = null;
             try { _ffmeController?.Dispose(); } catch { }
             _ffmeController = null;
+            try { _extSyncController?.Dispose(); } catch { }
+            _extSyncController = null;
             if (_overlayDecoder != null) {
                 _overlayDecoder.OverlayRegionChanged -= OnOverlayRegionChanged;
                 _overlayDecoder.ZoomModeChanged -= OnZoomModeChanged;

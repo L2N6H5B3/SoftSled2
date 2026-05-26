@@ -1448,11 +1448,14 @@ namespace SoftSled.Components.VirtualChannel {
                                   $"(spec-prohibited), defaulting to 1.0x");
                 return 1.0;
             }
-            // Sanity-clamp to ±64x — DLNA negotiates speeds up to 20x in
-            // the captured corpus; anything beyond that is almost
-            // certainly a wire-format misinterpretation rather than a
-            // legitimate trick-play request.
-            if (rate < -64.0f || rate > 64.0f) {
+            // Sanity-clamp to ±256x. The captured WMC trick-play ladder
+            // goes 1, 2, 3, 10, 20, 50, 100, so 100x is a legitimate
+            // "fastest" speed (May 2026 test: RequestedPlayRate=100x
+            // was being rejected by an earlier ±64x clamp, masquerading
+            // as "fastest FF doesn't work"). 256x is well above any
+            // observed WMC value but still catches genuinely-broken
+            // wire-format misinterpretations.
+            if (rate < -256.0f || rate > 256.0f) {
                 m_logger?.LogInfo($"AVCTRL: DecodePlayRate(0x{wire:X8}={rate}) → " +
                                   $"out of range, defaulting to 1.0x");
                 return 1.0;

@@ -350,6 +350,19 @@ namespace SoftSled.Components.RTSP {
                 MonitorPts(isAudio: false, rtpTs: eventData.timestamp);
                 ArmDecoderOpenStopwatch();
 
+                // Capture the first video MAU's wire-side RTP timestamp
+                // for the external-sync controller (Phase 2.5). It uses
+                // the difference between audioFirstWirePts and
+                // videoFirstWirePts to target the server's intended
+                // sync (which is the authoritative truth across the
+                // RTCP-SR mapping), rather than just holding whatever
+                // skew the streams happened to have at sync-baseline.
+                // Idempotent — only the first packet counts.
+                if (System.Threading.Interlocked.CompareExchange(ref _firstVideoMauWirePtsRaw,
+                        unchecked((long)(uint)eventData.timestamp), -1L) == -1L) {
+                    Debug.WriteLine($"[ext-sync-anchor] first video MAU rtpTs={eventData.timestamp}");
+                }
+
                 // MPEG-TS unified container (preferred for modern codecs).
                 // Same idea as the PS path but uses 188-byte TS packets
                 // with per-stream PIDs + PCR + PAT/PMT — supports H264 and
@@ -462,6 +475,33 @@ namespace SoftSled.Components.RTSP {
                 // videoDepacketizer.NalUnitReady above.
                 MonitorPts(isAudio: true, rtpTs: eventData.timestamp);
                 ArmDecoderOpenStopwatch();
+
+                // External-audio consumer (Phase 2/3 of the FFME-bypass).
+                // When ExternalSyncMediaController is attached it owns
+                // audio decoding + rendering directly. The
+                // depacketized MAU here (WMRTP unwrapped: raw MP2/MP3
+                // frame bytes for VND.MS.WM-MPA, raw PCM samples for
+                // X-WMF-PF, etc.) is handed over and the muxer cascade
+                // is skipped. First MAU also commits the codec — wire
+                // codec is read from _wireAudioCodec which was set by
+                // the codec-specific path's CommitAudioPipelineForWireCodec
+                // call earlier in this same Rtp_AudioDataReceived
+                // invocation, so it's reliably populated by now.
+                if (_externalAudioMauArrived != null) {
+                    if (!_externalAudioCodecFired) {
+                        _externalAudioCodecFired = true;
+                        string wc = _wireAudioCodec ?? "VND.MS.WM-MPA";
+                        try { _externalAudioCodecCommit?.Invoke(BuildExternalAudioFormat(wc)); }
+                        catch (Exception ex) {
+                            Debug.WriteLine($"[ext-audio] codecCommit threw: {ex.Message}");
+                        }
+                    }
+                    try { _externalAudioMauArrived(eventData.data, eventData.timestamp); }
+                    catch (Exception ex) {
+                        Debug.WriteLine($"[ext-audio] mauArrived threw: {ex.Message}");
+                    }
+                    return;
+                }
 
                 // The silence injector taps each real MAU so it learns
                 // the wire cadence; the MAU itself still flows into
@@ -597,6 +637,174 @@ namespace SoftSled.Components.RTSP {
         // armed it via EnableAudioSilenceInjection. Disposed in Stop()
         // alongside the muxers.
         private SoftSled.Components.AudioVisual.AudioSilenceInjector _silenceInjector;
+
+        // First video MAU's wire-side RTP timestamp (90kHz units,
+        // stored as long so -1 can mean "not yet set" without
+        // colliding with valid 32-bit RTP values). Used by
+        // ExternalSyncMediaController in Phase 2.5 to compute the
+        // wireOffset between audio and video first-MAU times,
+        // letting it target the server's intended sync rather than
+        // the post-startup skew. Volatile-ish access via Interlocked
+        // because it's written on the depacketizer thread and read
+        // on the sync-controller dispatcher thread.
+        private long _firstVideoMauWirePtsRaw = -1L;
+
+        /// <summary>First video MAU's wire-side RTP timestamp,
+        /// converted to milliseconds at the 90 kHz RTP clock. Returns
+        /// -1 if no video MAU has been seen yet (e.g. audio-only
+        /// session or pre-PLAY).</summary>
+        public long FirstVideoMauWirePtsMs {
+            get {
+                long raw = System.Threading.Interlocked.Read(ref _firstVideoMauWirePtsRaw);
+                return raw < 0 ? -1L : raw / 90L;
+            }
+        }
+
+        // External-audio consumer (Phase 1/2 of the FFME-bypass audio
+        // path). When set, audio MAUs are routed to these callbacks
+        // INSTEAD of the muxer cascade — ExternalSyncMediaController
+        // uses this to feed its libav-decoder + NAudio renderer.
+        // _externalAudioCodecCommit fires once on the first audio
+        // packet (the codec is known from SDP at that point);
+        // _externalAudioMauArrived fires for each MAU.
+        private Action<SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat> _externalAudioCodecCommit;
+        private Action<byte[], uint> _externalAudioMauArrived;
+        private bool _externalAudioCodecFired;
+
+        /// <summary>
+        /// Hand audio MAU routing to an external consumer. When set,
+        /// audio MAUs bypass the PS/TS muxer + mp3FfmeProducer
+        /// cascade entirely. The codecCommit callback receives a
+        /// rich <see cref="SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat"/>
+        /// (wire codec + MPEG layer + sample-rate hint) parsed from
+        /// SDP — lets the consumer pick the right libav decoder ID.
+        /// Pass <c>null</c> for both to detach. Idempotent.
+        /// </summary>
+        public void SetExternalAudioConsumer(
+            Action<SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat> codecCommit,
+            Action<byte[], uint> mauArrived) {
+            _externalAudioCodecCommit  = codecCommit;
+            _externalAudioMauArrived   = mauArrived;
+            _externalAudioCodecFired   = false;   // re-arm for a new consumer
+        }
+
+        /// <summary>True when an external audio consumer is attached;
+        /// used by the FinalizePipelineSetup / TrySetupXxx helpers to
+        /// skip the muxer cascades that would otherwise interfere.</summary>
+        private bool IsExternalAudioActive => _externalAudioMauArrived != null;
+
+        /// <summary>
+        /// Build an <see cref="SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat"/>
+        /// from the SDP entry for the given wire codec. Looks up the
+        /// PT in <c>wmfPayloadDataDict</c>, finds the first audio
+        /// entry whose Codec matches, and parses fmtp for
+        /// <c>layer=</c> / <c>samplerate=</c> / <c>mode=</c> hints.
+        /// Returns a populated DTO even if the lookup fails (with
+        /// just the wire codec set) so the consumer always gets a
+        /// non-null commit notification.
+        /// </summary>
+        private SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat
+            BuildExternalAudioFormat(string wireCodec) {
+            var fmt = new SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat {
+                WireCodec = wireCodec,
+            };
+            foreach (var kv in wmfPayloadDataDict) {
+                var entry = kv.Value;
+                if (entry == null) continue;
+                if (entry.Type != MediaType.Audio) continue;
+                if (!string.Equals(entry.Codec, wireCodec, StringComparison.OrdinalIgnoreCase)) continue;
+                string fp = entry.FormatParameter ?? "";
+                // Parse the fmtp token list. Recognised keys:
+                //   layer=N (MPA family — MPEG audio layer 1/2/3)
+                //   samplerate=N (audio sample rate Hz)
+                //   mode=mono|stereo
+                //   channels=N (X-WMF-PF PCM)
+                //   bitspersample=N (X-WMF-PF PCM, 8/16/24/32)
+                //   codec=pcm_s16be|pcm_s16le (X-WMF-PF PCM endian hint)
+                //   bitrate=N (informational, not used here)
+                foreach (string token in fp.Split(';')) {
+                    string t = token.Trim();
+                    if (t.Length == 0) continue;
+                    int eq = t.IndexOf('=');
+                    if (eq <= 0) continue;
+                    string k = t.Substring(0, eq).Trim().ToLowerInvariant();
+                    string v = t.Substring(eq + 1).Trim();
+                    if (k == "layer"      && int.TryParse(v, out int layer)) fmt.MpegLayer = layer;
+                    else if (k == "samplerate" && int.TryParse(v, out int sr)) fmt.SampleRateHint = sr;
+                    else if (k == "channels"   && int.TryParse(v, out int ch)) fmt.ChannelsHint = ch;
+                    else if (k == "bitspersample" && int.TryParse(v, out int bps)) fmt.BitsPerSampleHint = bps;
+                    else if (k == "codec") {
+                        // For PCM the codec hint usually carries
+                        // endianness: pcm_s16be vs pcm_s16le.
+                        if (v.IndexOf("be", StringComparison.OrdinalIgnoreCase) >= 0) fmt.PcmBigEndian = true;
+                    }
+                    else if (k == "mode") {
+                        if      (v.Equals("mono",   StringComparison.OrdinalIgnoreCase)) fmt.ChannelsHint = 1;
+                        else if (v.Equals("stereo", StringComparison.OrdinalIgnoreCase)) fmt.ChannelsHint = 2;
+                    }
+                }
+                // For X-WMF-PF audio the fmtp tokens above are usually
+                // empty — the actual format is in the WAVEFORMATEX
+                // blob hex-encoded inside `config=`. SDP parsing
+                // already turned it into a parsed
+                // <see cref="WAVEFORMATEX"/> on
+                // <c>entry.AM_Media_Format.FormatData</c>. Pull rate
+                // / channels / bits-per-sample from there. (Don't
+                // overwrite if the fmtp explicitly carried them —
+                // the MPA family uses them, only PCM omits them.)
+                try {
+                    var wfx = entry.AM_Media_Format?.FormatData
+                        as SoftSled.Components.AudioVisual.FormatStructures.WAVEFORMATEX;
+                    if (wfx != null) {
+                        if (fmt.SampleRateHint == 0    && wfx.nSamplesPerSec > 0)
+                            fmt.SampleRateHint = wfx.nSamplesPerSec;
+                        if (fmt.ChannelsHint == 0      && wfx.nChannels > 0)
+                            fmt.ChannelsHint = wfx.nChannels;
+                        if (fmt.BitsPerSampleHint == 0 && wfx.wBitsPerSample > 0)
+                            fmt.BitsPerSampleHint = wfx.wBitsPerSample;
+                    }
+                } catch { /* AM_Media_Format may be null or FormatData absent */ }
+
+                // Last-resort fallback for sample rate ONLY: rtpmap
+                // ClockHz. For X-WMF-PF this is 1000 (a 1ms tick,
+                // not the audio sample rate) and is intentionally
+                // NOT used unless WAVEFORMATEX was unavailable —
+                // setting decoder sample_rate=1000 against a real
+                // 48kHz wire produces audio starvation (decoder
+                // produces 1/48 the expected samples, NAudio
+                // drains instantly). For MPA the ClockHz IS the
+                // audio rate (typically 90000 for MPA which is
+                // wrong but acceptable since MPA decoders read
+                // from the frame header anyway).
+                if (fmt.SampleRateHint == 0 && entry.ClockHz > 0) {
+                    bool isXWmfPf = string.Equals(wireCodec, "X-WMF-PF",
+                                                   StringComparison.OrdinalIgnoreCase);
+                    if (!isXWmfPf) fmt.SampleRateHint = entry.ClockHz;
+                }
+                break;
+            }
+            return fmt;
+        }
+
+        // PT-preference negotiation experiment removed after testing
+        // confirmed WMPNss ignores all known plausible mechanisms:
+        //   - Client `Bandwidth:` header (option 2, reverted) — ignored
+        //   - RFC 2616 q-graded `Accept:` — ignored
+        //   - Microsoft-style `Pragma: client-preferred-pt=` — ignored
+        //   - RTSP Transport extension `;rtp-pt=NN` — ignored
+        //   - `Require: com.microsoft.wm.ptselect` — 551 Option Not
+        //     Supported (definitively: no PT-select feature exists in
+        //     WMPNss 12.00.7601.23403). See commit-debug.log + wire dump
+        //     from May 2026 for the test trail.
+        //
+        // The selector + hint-builder helpers were removed with the
+        // SETUP hint injection — kept only the AC3 whitelist fix (real
+        // bug: AC3 PTs were missing .Codec assignment, masking them
+        // from any audio-PT enumeration we might do later). Future
+        // PT-preference work could resurrect this code from git history
+        // if a new mechanism becomes available (e.g. via WMRTP corpus
+        // reverse-engineering, or testing against a different server
+        // version that does honour one of the hints).
 
         // Drop counters for MAUs that arrive when no sink has been set up
         // for the corresponding codec — log throttled at every 256 to avoid
@@ -741,6 +949,18 @@ namespace SoftSled.Components.RTSP {
                     AddAuthorization(pause_message, username, password, auth_type, realm, nonce, url);
                 }
                 rtsp_client.SendMessage(pause_message);
+
+                // After PAUSE the server stops sending RTP. The next Play()
+                // MUST hit the wire even if (startMs, rate) match what was
+                // cached from the most recent pre-PAUSE PLAY — otherwise
+                // the wire-idempotency check at the top of Play() will
+                // suppress the resume PLAY and the server stays paused
+                // forever (observed: video frame stuck at pause-time
+                // position, audio continues from buffered samples but
+                // never gets new ones either).
+                _resumeNextPlay = true;
+                Debug.WriteLine("[rtsp] PAUSE sent — armed _resumeNextPlay " +
+                                "so the next Play() bypasses wire-idempotency");
             }
         }
 
@@ -810,21 +1030,43 @@ namespace SoftSled.Components.RTSP {
             // PAUSE/PLAY cycle. Skip the wire write if the requested
             // (startMs, rate) exactly matches what we last shipped.
             //
+            // EXCEPTION: a Pause() in between invalidates the cached
+            // wire state — the server has stopped sending RTP and needs
+            // a fresh PLAY to resume, even with identical params. The
+            // _resumeNextPlay flag set by Pause() forces this first
+            // post-PAUSE Play() through. After that, the suppression
+            // logic re-engages normally (so the second of two back-to-
+            // back WMC resume-Starts still gets suppressed).
+            //
             // -1 startMs is "use cached" — equate to the last-sent
             // startMs for the purposes of this check so a pure rate
             // change with no seek doesn't get artificially differentiated.
             long candidateStart = startMs >= 0 ? startMs : _lastSentStartMs;
-            if (_lastSentStartMs == candidateStart &&
+            if (!_resumeNextPlay &&
+                _lastSentStartMs == candidateStart &&
                 System.Math.Abs(_lastSentRate - rate) < 0.0001) {
                 Debug.WriteLine($"[rtsp] Play({startMs},{rate}) suppressed — " +
                                 $"wire state already (start={_lastSentStartMs}, rate={_lastSentRate})");
                 return;
+            }
+            if (_resumeNextPlay) {
+                Debug.WriteLine($"[rtsp] Play({startMs},{rate}) bypassing idempotency — " +
+                                $"resume-after-PAUSE armed");
+                _resumeNextPlay = false;
             }
 
             // Post-auto-PLAY: mid-session change. Send a fresh PLAY
             // that atomically replaces the prior playback params.
             SendPlayMessage(startMs, rate);
         }
+
+        /// <summary>Set by <see cref="Pause"/>, consumed (and cleared)
+        /// by the next <see cref="Play"/>. Forces that one Play through
+        /// the wire-idempotency check so resume-after-pause always hits
+        /// the server with a fresh PLAY — without this, identical
+        /// (startMs, rate) before and after a Pause/Resume cycle would
+        /// be suppressed and the server would stay paused.</summary>
+        private bool _resumeNextPlay;
 
         /// <summary>Most recent (startMs, rate) actually written to the
         /// RTSP wire by <see cref="SendPlayMessage"/>. Used to suppress
@@ -887,6 +1129,22 @@ namespace SoftSled.Components.RTSP {
             _initialPlayFired = true;
             _lastSentStartMs = startMs >= 0 ? startMs : _lastSentStartMs;
             _lastSentRate    = rate;
+
+            // Clear the cached start position after sending. Once the
+            // server has consumed this PLAY's Range and started
+            // streaming, "where we are" is the SERVER's current position,
+            // not the original seek. Subsequent SetRate() calls would
+            // re-fire PLAY with the same stale Range — observed: every
+            // PLAY in a session repeated Range=npt=156.850 (the open-
+            // time seek position) on every FF/RW, causing the server
+            // to restart playback at 156.850s for every speed change.
+            // -1 means "no Range header, continue from current server
+            // position" — exactly what mid-session rate changes want.
+            // Explicit seeks always call Play(startMs, ...) directly
+            // and supply a fresh startMs so this clear is safe.
+            if (startMs >= 0) {
+                _currentStartMsRequested = -1;
+            }
 
             rtsp_client.SendMessage(play_message);
         }
@@ -972,22 +1230,49 @@ namespace SoftSled.Components.RTSP {
         /// Build the <c>Buffer-Info.dlna.org</c> request-line header value
         /// from a bandwidth hint and the OptimisedPreroll flag.
         ///
-        /// Capture-observed default (Example 1 etc.):
-        /// <c>dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0</c>
-        ///
-        /// Our adjustments:
+        /// <para>Capture-observed Xbox 360 values (May 2026 capture from
+        /// a real Xbox playing the same NTSC_XAC3 recorded-TV stream
+        /// that WMPNss was under-feeding us at ~21% of real-time):</para>
         /// <list type="bullet">
-        ///   <item>dejitter scales inversely with bandwidth — clamp to the
-        ///   capture-observed 6624000 (≈6.6 MB) ceiling, drop to 16384
-        ///   floor.</item>
-        ///   <item>BTM=0 and BFR=0 when optimisedPreroll, else the
-        ///   capture defaults (BTM=0;BFR=0 was already the default in
-        ///   the corpus, but if the server later prefers a non-zero
-        ///   ramp we expose the knob here).</item>
-        ///   <item>CDB/TD held at capture defaults.</item>
+        ///   <item>Audio SETUP:
+        ///   <c>dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=1</c></item>
+        ///   <item>Video SETUP:
+        ///   <c>dejitter=6624000;CDB=39321600;BTM=0;TD=2000;BFR=1</c></item>
         /// </list>
+        ///
+        /// <para>Two important differences vs the previous SoftSled
+        /// values (which both used <c>CDB=6553600;BFR=0</c>):</para>
+        /// <list type="number">
+        ///   <item><b>BFR=1</b> (was 0). The Buffer-Info BFR field
+        ///   advertises that the client WILL send Buffer Fullness
+        ///   Report RTCP feedback (PT=205 FMT=3) — which we have
+        ///   always done per the <c>_audioBfrEnabled</c>/
+        ///   <c>_videoBfrEnabled</c> path. The previous BFR=0 was a
+        ///   self-inflicted lie that contradicted the actual BFR
+        ///   packets going out on RTCP. WMPNss appears to use BFR as
+        ///   a pacing-mode hint: BFR=0 → conservative throttle (~20%
+        ///   real-time), BFR=1 → rate-adaptive pacing using the BFR
+        ///   feedback (full real-time delivery as observed on
+        ///   Xbox).</item>
+        ///   <item><b>Per-stream CDB</b>: video SETUP uses
+        ///   <c>CDB=39321600</c> (≈37.5 MB, 6× the audio value) to
+        ///   match Xbox. CDB is the Content Data Buffer the client
+        ///   reserves for this stream; a larger video CDB lets the
+        ///   server burst more before pausing. Audio CDB stays at
+        ///   <c>6553600</c> (≈6.25 MB) per the Xbox capture.</item>
+        /// </list>
+        ///
+        /// <para>The <paramref name="isVideo"/> flag selects which CDB.
+        /// SET_PARAMETER mid-session defaults to the larger video CDB
+        /// (re-buffering scenarios typically target the bigger video
+        /// stream).</para>
+        ///
+        /// <para>dejitter sizing is unchanged: scales inversely with
+        /// bandwidth, capped at 6624000 (≈6.6 MB ≈ 1 s at 50 Mbps),
+        /// floor at 16384. BTM held at capture default (0).</para>
         /// </summary>
-        internal static string BuildBufferInfoHeader(long bandwidthBps, bool optimisedPreroll) {
+        internal static string BuildBufferInfoHeader(long bandwidthBps, bool optimisedPreroll,
+                                                     bool isVideo = true) {
             // dejitter inverse-scales with bandwidth: at 50 Mbps we can
             // get away with a small dejitter (~0.13s of 8-byte audio);
             // at 1 Mbps we need much more headroom. Cap at the captured
@@ -1003,8 +1288,8 @@ namespace SoftSled.Components.RTSP {
                 if (dejitter < 16384) dejitter = 16384;
             }
             int btm = optimisedPreroll ? 0 : 0;        // unchanged (capture default)
-            int bfr = optimisedPreroll ? 0 : 0;        // unchanged (capture default)
-            const int cdb = 6553600;
+            int bfr = 1;                                // see method doc — Xbox=1, was 0
+            int cdb = isVideo ? 39321600 : 6553600;    // per-stream CDB per Xbox capture
             const int td = 2000;
             return "Buffer-Info.dlna.org: dejitter=" + dejitter +
                    ";CDB=" + cdb +
@@ -1302,6 +1587,7 @@ namespace SoftSled.Components.RTSP {
             _currentRateRequested = 1.0;
             _lastSentStartMs = -1;
             _lastSentRate = 1.0;
+            _resumeNextPlay = false;
             _bufferInfoBandwidthBps = -1;
             _bufferInfoOptimisedPreroll = false;
 
@@ -1935,6 +2221,17 @@ namespace SoftSled.Components.RTSP {
             if (_pcmFfmeProducer != null) return;
             if (_psMuxer != null)         return; // PS path owns audio
 
+            // External-sync mode (Phase 3): ExternalSyncMediaController
+            // is consuming PCM audio MAUs directly via libav + NAudio.
+            // Setting up the FFME PCM pipeline here would spin up a
+            // producer that never sees bytes (the depacketizer event
+            // handler early-returns to the external consumer) and
+            // FFME's Media.Open would fail on the empty stream.
+            if (_externalAudioMauArrived != null) {
+                CommitDiagLog("TrySetupPcmFfmePipeline: skipped — external-sync consumer active");
+                return;
+            }
+
             foreach (var kv in wmfPayloadDataDict) {
                 var entry = kv.Value;
                 if (entry == null) continue;
@@ -2096,6 +2393,18 @@ namespace SoftSled.Components.RTSP {
             // active causes whichever fires first in dispatch to receive
             // PCM bytes as if they were MPA, which libav rejects.
             if (_pcmFfmeProducer != null) return false;
+
+            // External-sync mode: ExternalSyncMediaController is consuming
+            // audio MAUs directly via SetExternalAudioConsumer. Setting
+            // up the FFME mp3 pipeline here would spin up a producer
+            // that's never fed bytes (the depacketizer event handlers
+            // early-return after invoking the external consumer), then
+            // FFME's Media.Open fails with "Could not seek" on the
+            // empty stream. Skip cleanly.
+            if (_externalAudioMauArrived != null) {
+                CommitDiagLog("TrySetupMp3FfmePipeline: skipped — external-sync consumer active");
+                return false;
+            }
 
             // Allow rolling back to the NAudio path without rebuild for
             // diagnostic purposes — flip the env var and we keep the
@@ -2629,12 +2938,31 @@ namespace SoftSled.Components.RTSP {
             bool isAudPcm = aud.Equals("X-WMF-PF",     StringComparison.OrdinalIgnoreCase);
             bool isVidH264 = vid.Equals("X-WMF-PF",    StringComparison.OrdinalIgnoreCase);
 
+            CommitDiagLog($"FinalizePipelineSetup: isAudMpa={isAudMpa} isVidMpv={isVidMpv} isAudPcm={isAudPcm} isVidH264={isVidH264} extAudio={IsExternalAudioActive}");
+
+            // External-sync mode: audio is owned by the external
+            // controller (libav + NAudio). We must skip the combined
+            // PS/TS pipelines (they bundle audio into the muxer that
+            // would otherwise be fed to FFME), AND skip the dual
+            // audio FFME pipelines (their producers would stay empty
+            // because audio MAUs early-return to the external
+            // consumer in the depacketizer event handlers). Video-
+            // only producers DO still set up — FFME continues to
+            // decode/render video at its native rate, and the sync
+            // controller chases NAudio's master clock via SpeedRatio
+            // nudges.
+            if (IsExternalAudioActive) {
+                CommitDiagLog("FinalizePipelineSetup: external-sync active — skipping combined + audio pipelines");
+                if (isVidH264) TrySetupH264VideoProducer();
+                else if (isVidMpv) TrySetupMpvVideoProducer();
+                return;
+            }
+
             // 1. Combined PS pipeline for legacy MPA+MPV — gives FFME-clock
             //    A/V sync via a single muxed input stream. Returns false
             //    if it can't find both PTs in the SDP dict; fall through
             //    to dual-FFME in that case rather than leaving the
             //    session with no pipeline.
-            CommitDiagLog($"FinalizePipelineSetup: isAudMpa={isAudMpa} isVidMpv={isVidMpv} isAudPcm={isAudPcm} isVidH264={isVidH264}");
             if (isAudMpa && isVidMpv) {
                 CommitDiagLog("FinalizePipelineSetup: calling TrySetupMpegPsPipeline");
                 if (TrySetupMpegPsPipeline()) {
@@ -2956,6 +3284,27 @@ namespace SoftSled.Components.RTSP {
                     int frameLen = rtp_payload_len - 4;
                     byte[] frame = new byte[frameLen];
                     Array.Copy(e.Message.Data, rtp_payload_start + 4, frame, 0, frameLen);
+
+                    // External-audio consumer (Phase 1 FFME-bypass).
+                    // When ExternalSyncMediaController is the active
+                    // controller it owns audio decoding + rendering
+                    // directly via libav + NAudio. We hand it the
+                    // raw MP3 frame; the muxer / FFME producers
+                    // below are skipped.
+                    if (_externalAudioMauArrived != null) {
+                        if (!_externalAudioCodecFired) {
+                            _externalAudioCodecFired = true;
+                            try { _externalAudioCodecCommit?.Invoke(BuildExternalAudioFormat("MPA")); }
+                            catch (Exception ex) {
+                                Debug.WriteLine($"[ext-audio] codecCommit threw: {ex.Message}");
+                            }
+                        }
+                        try { _externalAudioMauArrived(frame, rtp_timestamp); }
+                        catch (Exception ex) {
+                            Debug.WriteLine($"[ext-audio] mauArrived threw: {ex.Message}");
+                        }
+                        return;
+                    }
 
                     // Notify the silence injector so it can learn
                     // cadence and (in video sessions) keep FFME's
@@ -3424,6 +3773,27 @@ namespace SoftSled.Components.RTSP {
                     int frameLen = rtp_payload_len - 4;
                     byte[] frame = new byte[frameLen];
                     Array.Copy(e.Message.Data, rtp_payload_start + 4, frame, 0, frameLen);
+
+                    // External-audio consumer (Phase 1 FFME-bypass).
+                    // When ExternalSyncMediaController is the active
+                    // controller it owns audio decoding + rendering
+                    // directly via libav + NAudio. We hand it the
+                    // raw MP3 frame; the muxer / FFME producers
+                    // below are skipped.
+                    if (_externalAudioMauArrived != null) {
+                        if (!_externalAudioCodecFired) {
+                            _externalAudioCodecFired = true;
+                            try { _externalAudioCodecCommit?.Invoke(BuildExternalAudioFormat("MPA")); }
+                            catch (Exception ex) {
+                                Debug.WriteLine($"[ext-audio] codecCommit threw: {ex.Message}");
+                            }
+                        }
+                        try { _externalAudioMauArrived(frame, rtp_timestamp); }
+                        catch (Exception ex) {
+                            Debug.WriteLine($"[ext-audio] mauArrived threw: {ex.Message}");
+                        }
+                        return;
+                    }
 
                     // Notify the silence injector so it can learn
                     // cadence and (in video sessions) keep FFME's
@@ -3903,7 +4273,15 @@ namespace SoftSled.Components.RTSP {
                                 //String[] valid_video_codecs = { "H264", "H265", "X-WMF-PF" };
                                 String[] valid_video_codecs = { "H264", "H265", "VND.MS.WM-MPV", "X-WMF-PF" };
                                 //String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "X-WMF-PF" /* for aac */}; // Note some are "mpeg4-generic" lower case
-                                String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "VND.MS.WM-MPA", "X-WMF-PF" /* for aac */}; // Note some are "mpeg4-generic" lower case
+                                // VND.MS.WM-AC3 added so AC3 PTs (e.g. 104/106/108 in NTSC_XAC3
+                                // recorded-TV SDP) get .Codec assigned. Without this, the rtpmap
+                                // branch skipped them and they only showed up via the fmtp branch
+                                // with FormatParameter set but Codec null — which then made them
+                                // invisible to SelectPreferredAudioPts (which filters on Codec).
+                                // AC3 is the most useful alternative for WMC's recorded-TV stream
+                                // shape (b=AS:197 fits AC3 2ch @ 192 kbps comfortably; doesn't fit
+                                // PCM 1.5 Mbps at all).
+                                String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "VND.MS.WM-MPA", "VND.MS.WM-AC3", "X-WMF-PF" /* for aac */}; // Note some are "mpeg4-generic" lower case
 
                                 //if (video && video_payload == -1 && Array.IndexOf(valid_video_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
                                 // Parse the rtpmap ClockRate (string, e.g. "90000"
@@ -4086,10 +4464,17 @@ namespace SoftSled.Components.RTSP {
                         setup_message.RtspUri = new Uri(control);
                         setup_message.AddTransport(transport);
                         setup_message.AddHeader(LanguageHeader);
-                        setup_message.AddHeader("Buffer-Info.dlna.org: dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0");
+                        // Per-stream Buffer-Info: video gets the larger CDB
+                        // (matches Xbox 360 capture — see
+                        // BuildBufferInfoHeader doc). The `video` bool is
+                        // set by the outer m= line loop and is in scope.
+                        setup_message.AddHeader(BuildBufferInfoHeader(
+                            _bufferInfoBandwidthBps, _bufferInfoOptimisedPreroll,
+                            isVideo: video));
                         //setup_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                         setup_message.AddHeader(SupportedHeader);
                         setup_message.AddHeader(UserAgent);
+
                         if (auth_type != null) {
                             AddAuthorization(setup_message, username, password, auth_type, realm, nonce, url);
                         }
@@ -4263,7 +4648,16 @@ namespace SoftSled.Components.RTSP {
                     RtspRequestSetup next_setup = setup_messages[0];
                     next_setup.Session = session;
                     next_setup.AddHeader(LanguageHeader);
-                    next_setup.AddHeader("Buffer-Info.dlna.org: dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0");
+                    // Per-stream Buffer-Info: video gets the larger CDB
+                    // (matches Xbox 360 capture). Derive stream type
+                    // from the SETUP URI's path tail (m= line control
+                    // URLs end in /audio or /video — see SDP loop).
+                    string nextSetupUriStr = next_setup.RtspUri?.ToString() ?? "";
+                    bool nextIsVideo = nextSetupUriStr.EndsWith("/video",
+                                          StringComparison.OrdinalIgnoreCase);
+                    next_setup.AddHeader(BuildBufferInfoHeader(
+                        _bufferInfoBandwidthBps, _bufferInfoOptimisedPreroll,
+                        isVideo: nextIsVideo));
                     //next_setup.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                     next_setup.AddHeader(SupportedHeader);
                     next_setup.AddHeader(UserAgent);

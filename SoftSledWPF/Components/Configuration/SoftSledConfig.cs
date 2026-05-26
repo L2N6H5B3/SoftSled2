@@ -73,5 +73,38 @@ namespace SoftSled.Components.Configuration {
         public int SessionWidth  = 1280;
         public int SessionHeight = 720;
 
+        // External-sync mode — Phase 1 of the FFME-bypass audio
+        // path. When true, audio decoding + rendering goes through
+        // a libav + NAudio pipeline owned by
+        // ExternalSyncMediaController instead of FFME. The audio
+        // device's playback position becomes the master clock,
+        // which (in later phases) the video pipeline will chase
+        // via SpeedRatio nudges. Phase 1 only covers MP3-only
+        // audio sessions; other content still uses the FFME path
+        // and this flag has no effect there. Default OFF —
+        // experimental.
+        public bool UseExternalSyncMode = false;
+
+        // Manual A/V sync offset, in milliseconds. Applied by the
+        // (Phase 2) sync controller to compensate for downstream
+        // audio/video latency that's outside our pipeline:
+        //   * HDMI displays often add 30-100 ms of video processing
+        //     lag (TV picture processing, motion smoothing, scaler)
+        //     that audio doesn't see.
+        //   * AVRs (A/V receivers) sometimes add their own audio
+        //     delay for DSP processing.
+        //
+        // Positive value = "audio is later than video" → controller
+        // delays audio output by this many ms to match.
+        // Negative value = "audio is earlier than video" → controller
+        // delays video instead (via FFME SpeedRatio nudges) to wait
+        // for audio.
+        //
+        // Range clamped at ±250 ms — beyond that any pipeline
+        // problem is structural rather than offsettable.
+        // Phase 1: stored only, not yet applied. The Phase 2 sync
+        // controller will consume this in its drift-correction loop.
+        public int AudioSyncOffsetMs = 0;
+
     }
 }
