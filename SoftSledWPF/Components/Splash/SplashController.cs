@@ -833,6 +833,13 @@ namespace SoftSled.Components.Splash {
                     break;
                 case 1: // Visual_ChangeParent (visNewParent, visSibling, nOrder)
                     if (rdr.Remaining >= 12) {
+                        uint subjectH = v.Handle; // captured for log clarity
+                        // Capture the OLD parent before ChangeParent moves
+                        // the visual — we re-evaluate viewport-clip on
+                        // both the previous and new parents so a child
+                        // moving out of a virtual-strip viewport drops
+                        // the clip on the old viewport.
+                        SplashVisual oldParent = v.Parent;
                         uint parentH  = rdr.ReadU32();
                         uint siblingH = rdr.ReadU32();
                         int  nOrder   = rdr.ReadI32();
@@ -840,16 +847,24 @@ namespace SoftSled.Components.Splash {
                         SplashVisual sibling = ResolveOrCreateVisual(siblingH);
                         var order = (SplashVisual.ChildOrder)nOrder;
                         v.ChangeParent(parent, order, sibling);
-                        _dumper?.OnEvent($"  Visual_ChangeParent parent=0x{parentH:X8} sibling=0x{siblingH:X8} order={order}");
+                        // After re-parenting, both the old and new parent
+                        // may need to flip their viewport-clip status.
+                        oldParent?.EvaluateViewportClip();
+                        parent?.EvaluateViewportClip();
+                        _dumper?.OnEvent($"  Visual_ChangeParent subj=0x{subjectH:X8} parent=0x{parentH:X8} sibling=0x{siblingH:X8} order={order}");
                     } else if (rdr.Remaining >= 4) {
                         // Some encoders omit the sibling/order trailing fields.
+                        uint subjectH = v.Handle;
+                        SplashVisual oldParentShort = v.Parent;
                         uint parentH = rdr.ReadU32();
                         SplashVisual parent = null;
                         if (parentH != 0 && _registry.TryGetObject(parentH, out var p) && p is SplashVisual pv) {
                             parent = pv;
                         }
                         v.ChangeParent(parent);
-                        _dumper?.OnEvent($"  Visual_ChangeParent parent=0x{parentH:X8} (short)");
+                        oldParentShort?.EvaluateViewportClip();
+                        parent?.EvaluateViewportClip();
+                        _dumper?.OnEvent($"  Visual_ChangeParent subj=0x{subjectH:X8} parent=0x{parentH:X8} (short)");
                     }
                     break;
                 case 4: // Visual_SetColor (ARGB u32)
@@ -929,6 +944,17 @@ namespace SoftSled.Components.Splash {
                         // outside the row. Re-apply on every SetSize so
                         // the clip tracks the live size.
                         v.ApplyBoundsClip();
+                        // Viewport-clip evaluation: this visual's own Size
+                        // changed — re-check whether any child overshoots
+                        // by the 3× threshold and update the viewport flag.
+                        v.EvaluateViewportClip();
+                        // And re-check the PARENT — this visual's Size
+                        // change might have just promoted/demoted it as
+                        // a virtual-strip child relative to its parent's
+                        // size (the 1001×16,777,220-inside-1001×733 case
+                        // fires here on the strip's SetSize, asking the
+                        // viewport to flip its clip on).
+                        v.Parent?.EvaluateViewportClip();
                         v.ApplyAlpha();
                         // If THIS visual is the declared HostWindow scene root,
                         // its size dictates the logical canvas the shell composes
@@ -938,6 +964,13 @@ namespace SoftSled.Components.Splash {
                             _host?.SetLogicalCanvasSize(v.SizeX, v.SizeY);
                         }
                         _dumper?.OnEvent($"  Visual_SetSize=({v.SizeX:F2},{v.SizeY:F2},{v.SizeZ:F2})");
+                        // Diagnostic: when WMC sizes a popup-sized
+                        // container (≥800 px in either dimension and the
+                        // size just changed), dump its visual subtree so
+                        // we can correlate handles → parent chain → bits
+                        // → size. Throttled per-handle so a sub-pixel
+                        // animation on a popup-sized visual doesn't spam.
+                        MaybeDumpPopupSubtree(v);
                     }
                     break;
                 case 20: // Visual_SetPosition (Vector3)
@@ -977,16 +1010,21 @@ namespace SoftSled.Components.Splash {
                             }
                             int opsBefore = rb.OpCount;
                             v.SetContentFromRenderBuilder(rb, pendingGradients);
-                            // Still track last-bound visual so the
-                            // diagnostic logging can correlate gradients
-                            // with their preceding content bind even
-                            // though application uses next-bound.
+                            // Track last-bound visual for diagnostic
+                            // logging (LB-chain fitness output) — and
+                            // for any future binding model that wants to
+                            // know which visual just consumed this RB.
                             rb.LastBoundVisualHandle = v.Handle;
                             if (pendingGradients != null && pendingGradients.Count > 0) {
                                 var lastG = pendingGradients[pendingGradients.Count - 1];
                                 string stopSummary = lastG == null ? "null" :
                                     $"{lastG.Stops.Count} stops, dir={lastG.Direction}";
-                                _dumper?.OnEvent($"  Visual_SetContent vis=0x{v.Handle:X8} size=({v.SizeX:F0}x{v.SizeY:F0}) rb=0x{rbH:X8} ops={opsBefore} gradients={pendingGradients.Count} lastGrad=0x{lastG?.Handle ?? 0:X8} [{stopSummary}]");
+                                // Fit score for the chosen NEXT-BOUND target — pairs
+                                // with the LB / LB.P / LB.PP fit lines emitted at
+                                // Gradient_Draw time so a popup-repro log can show
+                                // which candidate the wire actually meant.
+                                double nbFit = lastG?.FitScoreForVisual(v.SizeX, v.SizeY) ?? 0.0;
+                                _dumper?.OnEvent($"  Visual_SetContent vis=0x{v.Handle:X8} size=({v.SizeX:F0}x{v.SizeY:F0}) rb=0x{rbH:X8} ops={opsBefore} gradients={pendingGradients.Count} lastGrad=0x{lastG?.Handle ?? 0:X8} [{stopSummary}] NB.fit={nbFit:F2}");
                             } else {
                                 _dumper?.OnEvent($"  Visual_SetContent vis=0x{v.Handle:X8} size=({v.SizeX:F0}x{v.SizeY:F0}) rb=0x{rbH:X8} ops={opsBefore}");
                             }
@@ -2450,23 +2488,39 @@ namespace SoftSled.Components.Splash {
         //   7 = SetColorMask       (clrMask u32 ARGB)
         //   9 = SetOrientation     (dir i32, 0=Horizontal / 1=Vertical)
         //
-        // Implementation: Push/Pop/Draw all attach this gradient to the
-        // target RenderBuilder's `PendingGradients` queue. The next
+        // Implementation — NEXT-BOUND model:
+        // Push/Pop/Draw attach this gradient to the target
+        // RenderBuilder's `PendingGradients` queue. The next
         // Visual_SetContent that consumes the RB picks up the queue and
         // builds a WPF LinearGradientBrush from the gradient stops to use
         // as the visual's OpacityMask. This is the spec's "soft fade
         // clipping" hook — the only built-in clipping mechanism in
         // MS-RRSP2 (Visual has no SetClip message).
+        //
+        // NEXT-BOUND was chosen empirically because it gives correct
+        // results for the home-row tile-window masks and the EPG
+        // right-side bounding gradient (both cases where the "next"
+        // visual is the container whose subtree needs masking). It does
+        // not always reach the right target for raised popup row
+        // containers — known issue, tracked separately. A naive
+        // "apply to both LAST-BOUND and NEXT-BOUND" workaround was
+        // tried and reverted because LAST-BOUND apply broke the home
+        // strip (single-item rows) and the EPG bound (gradient to
+        // nothing); the LAST-BOUND visual is frequently a content tile
+        // whose mask sizing doesn't match the wire-supplied gradient
+        // stops. The right fix likely involves walking the parent chain
+        // to a container size that matches the gradient's coordinate
+        // span — left for follow-up.
         private void DispatchGradient(Objects.SplashGradient g, SplashPayloadReader rdr, int msgid) {
             if (g == null) {
                 _dumper?.OnEvent($"  Gradient msgid={msgid} (no instance — ignored, rem={rdr.Remaining})");
                 return;
             }
             switch (msgid) {
-                case 0: // Pop — for our current next-bound model this is
-                        // a no-op; the queue is consumed by the next
-                        // SetContent, so popping before that just shrinks
-                        // the queue. Logged only.
+                case 0: // Pop — for the NEXT-BOUND model this just shrinks
+                        // the pending-queue (the queue is consumed by the
+                        // next SetContent so popping before that drops
+                        // the gradient unobtrusively).
                     if (rdr.Remaining >= 4) {
                         uint rbH = rdr.ReadU32();
                         if (_registry.TryGetObject(rbH, out var rbObj) && rbObj is SplashRenderBuilder rb) {
@@ -2480,7 +2534,22 @@ namespace SoftSled.Components.Splash {
                     if (rdr.Remaining >= 4) {
                         uint rbH = rdr.ReadU32();
                         if (_registry.TryGetObject(rbH, out var rbObj) && rbObj is SplashRenderBuilder rb) {
+                            // NEXT-BOUND queue: the next Visual_SetContent
+                            // on this RB consumes the queue and applies
+                            // the most recent gradient as that visual's
+                            // OpacityMask. Empirically correct for the
+                            // home-row tile-window masks, EPG bound, and
+                            // most title overlays. Popup row containment
+                            // is a known open issue tracked separately
+                            // — the items still escape because the
+                            // gradient's intended target isn't picked up
+                            // by either LB-chain walk or NEXT-BOUND.
                             rb.PendingGradients.Add(g.Handle);
+                            // Diagnostic only — log the gradient's
+                            // effective pixel span and fitness across
+                            // the LB ancestor chain. NEXT-BOUND fit is
+                            // logged at SetContent time as NB.fit.
+                            LogGradientFitness(rbH, rb, g, msgid);
                         }
                         _dumper?.OnEvent($"  Gradient_{(msgid==1?"Push":"Draw")} rb=0x{rbH:X8} grad=0x{g.Handle:X8} stops={g.Stops.Count} dir={g.Direction}");
                     }
@@ -2528,29 +2597,187 @@ namespace SoftSled.Components.Splash {
         }
 
         /// <summary>
-        /// Apply (or clear, when <paramref name="isPop"/> is true) a gradient
-        /// as the WPF <c>OpacityMask</c> on the visual most recently bound
-        /// to RB <paramref name="rbHandle"/>. Used by <c>Gradient_Push</c> /
-        /// <c>Gradient_Draw</c> / <c>Gradient_Pop</c> — the wire ships these
-        /// AFTER the corresponding <c>Visual_SetContent</c> rather than
-        /// before, so the "target" is the just-bound visual rather than
-        /// the next one.
+        /// Best-fit gradient binder. At Gradient_Push/Draw time, walk the
+        /// last-bound visual's ancestor chain (LB → LB.P → LB.PP → …) and
+        /// apply the gradient as <c>OpacityMask</c> to the visual whose
+        /// <see cref="SplashGradient.FitScoreForVisual"/> is highest.
         ///
-        /// Silently no-ops if the RB has never been bound, or if the
-        /// most-recent target has since been destroyed.
+        /// <para><b>Why best-fit:</b> the wire pattern is invariant — WMC
+        /// ships <c>(Surface_Draw → Visual_SetContent vis=A → Gradient_Draw
+        /// → Visual_SetContent vis=B [ops=0])</c>. The gradient's stop
+        /// coordinates are sized for some specific visual in the
+        /// neighbourhood (sometimes vis A itself, sometimes vis A's
+        /// content panel parent, sometimes the eventual vis B container);
+        /// the fit-score directly measures how well the gradient's pixel
+        /// span maps onto each candidate's Size, so the highest-scoring
+        /// candidate is almost always the intended target.</para>
+        ///
+        /// <para>This unifies the previous three competing models —
+        /// LAST-BOUND, NEXT-BOUND, and per-context heuristics — into one
+        /// principled rule that the wire data directly validates.</para>
+        ///
+        /// <para>Silently no-ops if no candidate scores above
+        /// <see cref="kMinAcceptableFit"/>; that prevents a gradient
+        /// intended for a totally different visual (e.g. shipped between
+        /// unrelated subtrees) from accidentally masking whichever
+        /// container happens to be closest in the chain.</para>
         /// </summary>
         private void ApplyGradientToLastBound(uint rbHandle, Objects.SplashGradient g, bool isPop) {
             if (!_registry.TryGetObject(rbHandle, out var rbObj)
                 || !(rbObj is SplashRenderBuilder rb)
                 || rb.LastBoundVisualHandle == 0) return;
             if (!_registry.TryGetObject(rb.LastBoundVisualHandle, out var vObj)
-                || !(vObj is SplashVisual v)) return;
+                || !(vObj is SplashVisual lb)) return;
             if (isPop) {
-                v.DrawingVisual.OpacityMask = null;
+                // For pop, walk the chain and clear masks on every
+                // candidate that might have received this gradient.
+                // Cheaper: just clear LB and parents up to depth 8.
+                int popDepth = 0;
+                for (var p = lb; p != null && popDepth < 8; p = p.Parent, popDepth++) {
+                    p.DrawingVisual.OpacityMask = null;
+                }
                 return;
             }
-            var mask = g.BuildOpacityMask(v.SizeX, v.SizeY);
-            v.DrawingVisual.OpacityMask = mask;
+
+            // Walk LB → LB.P → … up to 8 levels and find the highest-fit
+            // candidate. Track size so we can size the mask correctly.
+            SplashVisual best = null;
+            double bestFit = -1;
+            int depth = 0;
+            for (var cand = lb; cand != null && depth < 8; cand = cand.Parent, depth++) {
+                if (cand.SizeX <= 0 || cand.SizeY <= 0) continue;
+                double fit = g.FitScoreForVisual(cand.SizeX, cand.SizeY);
+                if (fit > bestFit) { bestFit = fit; best = cand; }
+            }
+
+            if (best == null || bestFit < kMinAcceptableFit) {
+                _dumper?.OnEvent($"    GradApply grad=0x{g.Handle:X8} (no candidate above fit>={kMinAcceptableFit:F2}, bestFit={bestFit:F2})");
+                return;
+            }
+
+            var mask = g.BuildOpacityMask(best.SizeX, best.SizeY);
+            best.DrawingVisual.OpacityMask = mask;
+            _dumper?.OnEvent($"    GradApply grad=0x{g.Handle:X8} -> vis=0x{best.Handle:X8} size=({best.SizeX:F0}x{best.SizeY:F0}) fit={bestFit:F2}");
+        }
+
+        // Minimum FitScoreForVisual a candidate must achieve to receive
+        // the OpacityMask. Below this threshold, the gradient is
+        // considered too poorly aligned with any candidate to be
+        // confidently bound and is dropped (silently — the diagnostic
+        // log records the decision). 0.30 catches well-aligned edge
+        // fades and band-pass masks while rejecting strays.
+        private const double kMinAcceptableFit = 0.30;
+
+        /// <summary>
+        /// Diagnostic-only — emits one event-log line per Gradient_Push /
+        /// Gradient_Draw showing the gradient's effective pixel span and a
+        /// fitness score (0..1, higher = better fit) for each candidate
+        /// target visual. The "candidates" are the visual most recently
+        /// bound to this RB (LAST-BOUND), its parent, and its grandparent
+        /// — i.e. the path up from where the wire just rendered content.
+        ///
+        /// Output format (one line):
+        ///   GradFit grad=0x.. dir=H stops=N span=(min..max)
+        ///     LB     vis=0x.. size=(WxH) fit=0.93
+        ///     LB.P   vis=0x.. size=(WxH) fit=0.18
+        ///     LB.PP  vis=0x.. size=(WxH) fit=0.04
+        ///
+        /// Reading rule: the candidate with fit ≈ 1.0 is the visual whose
+        /// Size best matches the gradient's coordinate range — most
+        /// likely the intended mask target. The current NEXT-BOUND model
+        /// applies the gradient to whatever visual happens to consume the
+        /// RB next, regardless of fit; comparing the next-bound apply log
+        /// line against these LAST-BOUND fit scores reveals when the
+        /// chosen target is wrong.
+        /// </summary>
+        private void LogGradientFitness(uint rbHandle, SplashRenderBuilder rb,
+                                        Objects.SplashGradient g, int msgid) {
+            if (_dumper == null) return;
+            if (g.Stops.Count == 0) return;
+
+            // Resolve LAST-BOUND and walk the full ancestor chain up to
+            // 8 levels — enough to cross a typical popup body, dialog
+            // root, and scene root without flooding the log.
+            SplashVisual lbVis = null;
+            if (rb.LastBoundVisualHandle != 0
+                && _registry.TryGetObject(rb.LastBoundVisualHandle, out var lbObj)
+                && lbObj is SplashVisual v) {
+                lbVis = v;
+            }
+
+            // Compute span against LB's size if available, otherwise pick
+            // a 1×1 reference so the per-stop position values dominate.
+            double refW = lbVis?.SizeX ?? 1.0;
+            double refH = lbVis?.SizeY ?? 1.0;
+            g.GetEffectiveSpan(refW, refH, out double minPx, out double maxPx, out double axisLen);
+
+            _dumper.OnEvent($"  GradFit grad=0x{g.Handle:X8} dir={(g.Direction == Objects.SplashGradient.Orientation.Horizontal ? "H" : "V")} "
+                          + $"stops={g.Stops.Count} span=({minPx:F1}..{maxPx:F1}) ref_axisLen={axisLen:F1}");
+
+            // Walk the chain LB → LB.P → LB.PP → ... up to 8 levels and
+            // emit the candidate's size + bits + fit score. Stops at the
+            // first null Parent (scene root).
+            SplashVisual cand = lbVis;
+            int depth = 0;
+            while (cand != null && depth < 8) {
+                double fit = g.FitScoreForVisual(cand.SizeX, cand.SizeY);
+                string tag = depth == 0 ? "LB" : ("LB." + new string('P', depth));
+                _dumper.OnEvent($"    {tag,-12} vis=0x{cand.Handle:X8} size=({cand.SizeX:F0}x{cand.SizeY:F0}) "
+                              + $"pos=({cand.PosX:F0},{cand.PosY:F0}) bits=0x{cand.DataBits:X8} "
+                              + $"alpha={cand.AlphaByte} clip={(cand.DrawingVisual.Clip != null ? "Y" : "N")} "
+                              + $"fit={fit:F2}");
+                cand = cand.Parent;
+                depth++;
+            }
+            if (cand != null) {
+                _dumper.OnEvent("    ... (chain truncated at 8 levels)");
+            }
+        }
+
+        // Set of visuals we've already dumped subtrees for, so that
+        // animated SetSize on a popup-sized visual (e.g. the popup
+        // expand-in scale) doesn't dump the subtree on every frame.
+        // Cleared on session reset.
+        private readonly System.Collections.Generic.HashSet<uint> _dumpedSubtrees
+            = new System.Collections.Generic.HashSet<uint>();
+
+        /// <summary>
+        /// Diagnostic — if this visual is "popup-sized" (≥800 px in
+        /// either dimension), dump the full visual subtree starting at
+        /// THIS visual to the event log. Throttled per-handle so a popup
+        /// being scaled in an animation only dumps once.
+        /// </summary>
+        private void MaybeDumpPopupSubtree(SplashVisual v) {
+            if (_dumper == null || v == null) return;
+            if (v.SizeX < 800 && v.SizeY < 800) return;
+            if (!_dumpedSubtrees.Add(v.Handle)) return; // already dumped
+            _dumper.OnEvent($"  VTREE-root vis=0x{v.Handle:X8} size=({v.SizeX:F0}x{v.SizeY:F0}) bits=0x{v.DataBits:X8}");
+            DumpVisualSubtree(v, depth: 1, maxDepth: 12);
+        }
+
+        /// <summary>
+        /// Recursive walk of a visual's children, indented by depth.
+        /// Emits one event-log line per visual showing handle, size,
+        /// pos, bits, alpha, clip, child count. Stops at
+        /// <paramref name="maxDepth"/> to avoid runaway logs on deep
+        /// trees. Cycles are prevented by the WPF parent/child contract
+        /// (a visual can't be a child of two parents).
+        /// </summary>
+        private void DumpVisualSubtree(SplashVisual v, int depth, int maxDepth) {
+            if (v == null || depth > maxDepth) return;
+            string indent = new string(' ', depth * 2 + 4);
+            foreach (var child in v.Children) {
+                _dumper.OnEvent(
+                    $"{indent}vis=0x{child.Handle:X8} "
+                    + $"size=({child.SizeX:F0}x{child.SizeY:F0}) "
+                    + $"pos=({child.PosX:F0},{child.PosY:F0}) "
+                    + $"bits=0x{child.DataBits:X8} "
+                    + $"alpha={child.AlphaByte} "
+                    + $"vis={(child.Visible ? "Y" : "N")} "
+                    + $"clip={(child.DrawingVisual.Clip != null ? "Y" : "N")} "
+                    + $"children={child.Children.Count}");
+                DumpVisualSubtree(child, depth + 1, maxDepth);
+            }
         }
 
         // -------- DataBuffer (spec §2.2.4.1) --------

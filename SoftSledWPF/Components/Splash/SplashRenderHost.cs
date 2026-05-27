@@ -32,6 +32,13 @@ namespace SoftSled.Components.Splash {
         // is still 0 and a one-shot paint would draw a 0×0 rectangle.
         private Color? _pendingBackground;
 
+        // Cached frozen brush for the current background colour, recreated
+        // only when the colour itself changes. Avoids allocating a fresh
+        // SolidColorBrush on every layout pass (OnRenderSizeChanged hits
+        // RenderBackground for every WMC reconnect, splash visibility flip,
+        // and live host resize).
+        private SolidColorBrush _backgroundBrush;
+
         // Logical canvas size (TV resolution the WMC shell composes for).
         // The scene-root visual's Size dictates this; SplashController
         // sets it via SetLogicalCanvasSize. The _rootVisual is scaled by
@@ -68,7 +75,14 @@ namespace SoftSled.Components.Splash {
 
         /// <summary>Repaint the background visual with the given color.</summary>
         public void SetBackground(Color c) {
-            _pendingBackground = c;
+            if (_pendingBackground != c) {
+                _pendingBackground = c;
+                // Colour changed — drop the cached brush so RenderBackground
+                // rebuilds it. The previous brush is frozen, so no need to
+                // detach it explicitly; WPF GC reclaims it once nothing
+                // references it.
+                _backgroundBrush = null;
+            }
             RenderBackground();
         }
 
@@ -121,8 +135,13 @@ namespace SoftSled.Components.Splash {
                     // will retry once a real size arrives.
                     return;
                 }
-                var brush = new SolidColorBrush(c); brush.Freeze();
-                dc.DrawRectangle(brush, null, new Rect(0, 0, w, h));
+                // Reuse the cached brush when only the host size changed
+                // (the colour itself is invalidated by SetBackground).
+                if (_backgroundBrush == null) {
+                    _backgroundBrush = new SolidColorBrush(c);
+                    _backgroundBrush.Freeze();
+                }
+                dc.DrawRectangle(_backgroundBrush, null, new Rect(0, 0, w, h));
             }
         }
 
