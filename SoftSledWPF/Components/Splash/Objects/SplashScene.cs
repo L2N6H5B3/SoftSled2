@@ -139,6 +139,26 @@ namespace SoftSled.Components.Splash.Objects {
         public bool  Visible = true;
         public uint  ContentRenderBuilderHandle = 0;
 
+        // Handle of the gradient currently providing this visual's
+        // OpacityMask, or 0 if no gradient is applied. Tracked so the
+        // controller can rebuild the WPF brush when the gradient's
+        // Offset or ColorMask changes (e.g. an Animation[GradientOffset]
+        // sweep, the WMC selection-highlight pattern) without having
+        // to re-execute the whole SetContent path. Cleared by
+        // SetContentFromRenderBuilder when no gradient is pending.
+        public uint AppliedGradientHandle;
+
+        // MS-RRSP2 Visual_SetLayer (spec §2.2.4.6.6). Layer is a z-order
+        // override applied amongst the visual's siblings: lower Layer
+        // paints first (appears behind), higher Layer paints later
+        // (appears in front). WMC ships this 582+ times per session
+        // mostly with values 0 or 1 (back/front toggles) and a long tail
+        // up to ~99 for stacking depth. Sibling order from
+        // Visual_ChangeParent's nOrder is the default; SetLayer
+        // overrides it. Applied by re-ordering this visual's index in
+        // its parent's DrawingVisual.Children via ApplyLayer().
+        public uint Layer;
+
         // Cached per-visual transforms — reused across ApplyTransform
         // calls instead of allocating fresh ones each time. WPF Transform
         // objects are mutable while unfrozen; we just update properties
@@ -198,10 +218,21 @@ namespace SoftSled.Components.Splash.Objects {
             var siblings = newParent != null ? newParent.DrawingVisual.Children : null;
             int index = ResolveInsertIndex(siblings, order, sibling);
             if (newParent != null) {
-                newParent.Children.Add(this);
+                // Insert into BOTH lists at the SAME index so they stay
+                // in lockstep. Previous code Add()'d to newParent.Children
+                // (always appending) but Insert()'d into siblings at a
+                // computed index — for order=Bottom/Before/Behind the two
+                // lists end up referring to different visuals at the same
+                // index. Anything that later cross-correlates the lists
+                // (Visual_SetLayer / ApplyLayer, the VTREE diagnostic
+                // dump) trips on the divergence with "Specified Visual
+                // is already a child of another Visual" or "index out
+                // of range" errors.
                 if (index < 0 || index >= siblings.Count) {
+                    newParent.Children.Add(this);
                     siblings.Add(DrawingVisual);
                 } else {
+                    newParent.Children.Insert(index, this);
                     siblings.Insert(index, DrawingVisual);
                 }
             } else {
@@ -306,6 +337,71 @@ namespace SoftSled.Components.Splash.Objects {
             // opacity multiplexes Visible, AlphaByte and the
             // DataBits-driven hide rule.
             DrawingVisual.Opacity = ComputeEffectiveOpacity();
+        }
+
+        /// <summary>
+        /// Re-position this visual amongst its parent's children to honour
+        /// the current <see cref="Layer"/> value. Spec §2.2.4.6.6 — lower
+        /// Layer = back, higher = front. WPF VisualCollection paints
+        /// index 0 first (behind) and index Count-1 last (in front), so
+        /// we sort the parent's children by Layer ascending and re-insert
+        /// at the position matching this visual's rank.
+        ///
+        /// <para>Stability: visuals with the same Layer keep their
+        /// existing relative order (the order set by Visual_ChangeParent's
+        /// nOrder is the default, and SetLayer with ties leaves it
+        /// alone).</para>
+        ///
+        /// <para>Cost: O(n) where n is the parent's child count, which is
+        /// usually small (one menu strip's worth of tiles). Acceptable
+        /// for the ~582 SetLayer fires per session we observe.</para>
+        ///
+        /// <para>No-op if this visual is unparented (still on the host
+        /// root); the host root has no notion of Layer-based z-order.</para>
+        /// </summary>
+        public void ApplyLayer() {
+            if (Parent == null) return;
+            var sibList   = Parent.Children;
+            var sibVisual = Parent.DrawingVisual.Children;
+            int n = sibList.Count;
+            if (n <= 1) return;
+
+            // Use the WPF VisualCollection as the source of truth for
+            // the current index — that's the collection ApplyLayer will
+            // physically mutate, so any lockstep drift between the two
+            // lists must be reconciled here.
+            int currentIdx = sibVisual.IndexOf(this.DrawingVisual);
+            if (currentIdx < 0) return;
+
+            // Sanity: if the SplashVisual bookkeeping list disagrees about
+            // where this visual sits, the two lists got out of lockstep
+            // (historically this happened in ChangeParent with
+            // order=Bottom/Before/Behind). Bail out — re-sorting would
+            // misalign the lists further. ChangeParent now keeps them in
+            // lockstep so this should never fire post-fix.
+            int currentIdxList = sibList.IndexOf(this);
+            if (currentIdxList != currentIdx) return;
+
+            // Compute this visual's target index by counting how many
+            // siblings have a strictly-lower Layer (those paint before us)
+            // plus a stable tie-breaker for siblings with the same Layer
+            // that already sit before us in the current order.
+            int targetIdx = 0;
+            for (int i = 0; i < n; i++) {
+                if (i == currentIdx) continue;
+                var s = sibList[i];
+                if (s.Layer < Layer || (s.Layer == Layer && i < currentIdx)) {
+                    targetIdx++;
+                }
+            }
+            if (targetIdx == currentIdx) return;
+
+            // Move both lists in lockstep. Remove-then-insert is the only
+            // mutation pattern VisualCollection supports for re-ordering.
+            sibList.RemoveAt(currentIdx);
+            sibVisual.RemoveAt(currentIdx);
+            sibList.Insert(targetIdx, this);
+            sibVisual.Insert(targetIdx, this.DrawingVisual);
         }
 
         /// <summary>
@@ -424,12 +520,14 @@ namespace SoftSled.Components.Splash.Objects {
             // and are tracked separately.
             if (pendingGradients != null && pendingGradients.Count > 0) {
                 var last = pendingGradients[pendingGradients.Count - 1];
+                AppliedGradientHandle = last?.Handle ?? 0;
                 var mask = last?.BuildOpacityMask(SizeX, SizeY);
                 DrawingVisual.OpacityMask = mask;
             } else {
                 // No queued gradients = no mask. Clearing is important so
                 // a previously masked visual that gets re-bound without
                 // gradients doesn't retain the stale mask.
+                AppliedGradientHandle = 0;
                 DrawingVisual.OpacityMask = null;
             }
             // Empirical: the WMC server reuses the same RenderBuilder
@@ -967,6 +1065,64 @@ namespace SoftSled.Components.Splash.Objects {
         public SplashDataBuffer(uint handle, byte[] bytes)
             : base(handle, SplashClassKind.DataBuffer, "DataBuffer") {
             Bytes = bytes ?? new byte[0];
+        }
+    }
+
+    // -------- SoundBuffer --------
+
+    /// <summary>
+    /// MS-RRSP2 SoundBuffer (spec §2.2.4.19). Holds the raw bytes of a
+    /// loaded sound asset — typically a WAV file or raw PCM payload that
+    /// was previously deposited by the server as a DataBuffer and is now
+    /// being claimed by the audio subsystem.
+    ///
+    /// <para>Wire lifecycle:</para>
+    /// <list type="bullet">
+    ///   <item><c>XAudSoundDevice_CreateSoundBuffer</c> registers an empty
+    ///         SoundBuffer with the given handle.</item>
+    ///   <item><c>SoundBuffer_LoadSoundData(dataBuffer u32)</c> references a
+    ///         DataBuffer whose bytes become this SoundBuffer's
+    ///         <see cref="Bytes"/>.</item>
+    /// </list>
+    ///
+    /// <para>Many <see cref="SplashSound"/> instances can share one
+    /// SoundBuffer — WMC's MCE shell loads ~3 distinct UI sound assets and
+    /// instantiates dozens of Sound objects that reference them for
+    /// concurrent / repeated playback.</para>
+    /// </summary>
+    internal sealed class SplashSoundBuffer : SplashGenericObject {
+        /// <summary>Handle of the DataBuffer that supplied the bytes
+        /// (set when <c>SoundBuffer_LoadSoundData</c> fires).
+        /// 0 until the load completes.</summary>
+        public uint DataBufferHandle { get; set; }
+
+        /// <summary>The actual sound bytes — typically a complete WAV file
+        /// (RIFF/WAVE header + PCM data) for splash UI sounds, but the
+        /// player accepts raw PCM as a fallback. Empty until LoadSoundData
+        /// runs.</summary>
+        public byte[] Bytes { get; set; } = System.Array.Empty<byte>();
+
+        public SplashSoundBuffer(uint handle, string className)
+            : base(handle, SplashClassKind.SoundBuffer, className) { }
+    }
+
+    // -------- Sound --------
+
+    /// <summary>
+    /// MS-RRSP2 Sound (spec §2.2.4.20). A playable instance bound to a
+    /// <see cref="SplashSoundBuffer"/>. <c>Sound_Play</c> triggers playback
+    /// of the buffer's bytes; <c>Sound_Stop</c> halts. WMC's MCE shell uses
+    /// these for navigation clicks / focus chimes / error feedback.
+    /// </summary>
+    internal sealed class SplashSound : SplashGenericObject {
+        /// <summary>Handle of the SoundBuffer that supplies this sound's
+        /// playable bytes. Set at construction by
+        /// <c>XAudSoundDevice_CreateSound</c>.</summary>
+        public uint SoundBufferHandle { get; }
+
+        public SplashSound(uint handle, uint soundBufferHandle, string className)
+            : base(handle, SplashClassKind.Sound, className) {
+            SoundBufferHandle = soundBufferHandle;
         }
     }
 

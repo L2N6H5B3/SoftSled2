@@ -54,6 +54,16 @@ namespace SoftSled.Components.Configuration {
         // wants on top of the WMC UI.
         public bool EnableLogger = false;
 
+        // Play splash-channel UI sound effects (Sound_Play / SoundBuffer_LoadSoundData
+        // from MS-RRSP2 §2.2.4.19/§2.2.4.20). WMC's MCE shell ships
+        // navigation clicks / focus chimes / error sounds through the splash
+        // channel as well as through the RDP fast-path 0x0D audio updates
+        // that WmcFastpathAudioPlayer already plays. Both channels may carry
+        // the same sounds — enabling this can produce audible doubling.
+        // Default ON so newly-implemented UI feedback is heard; flip OFF if
+        // every navigation click sounds twice.
+        public bool EnableSplashAudio = true;
+
         // Per-virtual-channel + fastpath log toggles. Each gates whether
         // the corresponding handler's diagnostic output reaches the
         // logger (and the on-screen overlay). Persisted only — no

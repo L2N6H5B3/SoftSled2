@@ -275,6 +275,7 @@
     <Compile Include="Components\Splash\SplashPayloadReader.cs" />
     <Compile Include="Components\Splash\SplashRawDumper.cs" />
     <Compile Include="Components\Splash\SplashRenderHost.cs" />
+    <Compile Include="Components\Splash\SplashSoundPlayer.cs" />
     <Compile Include="Components\Splash\SplashWireReassembler.cs" />
     <Compile Include="Components\VirtualChannel\VirtualChannelAvCtrlHandler.cs" />
     <Compile Include="Components\VirtualChannel\VirtualChannelSplashHandler.cs" />

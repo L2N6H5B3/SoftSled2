@@ -148,12 +148,21 @@ namespace SoftSled.Components.Splash {
             return _registry.EnumerateSurfaceHandles();
         }
 
+        // Splash-channel UI sound player. Lazily constructed on the first
+        // SoundBuffer / Sound message so the NAudio output device isn't
+        // initialised in sessions that never trigger splash audio. Null
+        // when EnableSplashAudio is false — Sound_Play messages then
+        // still acknowledge but produce no audio.
+        private SplashSoundPlayer _soundPlayer;
+        private readonly bool _enableSplashAudio;
+
         public SplashController(Logger logger, Dispatcher uiDispatcher, bool payloadBigEndian,
-                                Action<byte[]> sendBytes) {
+                                Action<byte[]> sendBytes, bool enableSplashAudio = true) {
             _logger          = logger;
             _uiDispatcher    = uiDispatcher ?? throw new ArgumentNullException(nameof(uiDispatcher));
             _payloadBigEndian = payloadBigEndian;
             _sendBytes       = sendBytes;
+            _enableSplashAudio = enableSplashAudio;
             _dumper          = SplashRawDumper.CreateFromEnv(logger);
 
             _wire.ServerHandshakeReceived += OnServerHandshake;
@@ -238,6 +247,11 @@ namespace SoftSled.Components.Splash {
         private void OnShutdown(object s, EventArgs e) {
             _logger?.LogDebug("SPLASH: Shutdown command received");
             _dumper?.OnEvent("Shutdown");
+            // Release the NAudio output device(s) — otherwise a fresh
+            // session would accumulate a stale player whose disposed
+            // outputs still hold device handles.
+            try { _soundPlayer?.Dispose(); } catch { }
+            _soundPlayer = null;
         }
 
         private void OnParseError(object s, SplashWireReassembler.ParseErrorArgs e) {
@@ -421,6 +435,8 @@ namespace SoftSled.Components.Splash {
                     case SplashClassKind.Gradient:      DispatchGradient(obj as Objects.SplashGradient, rdr, msgid); break;
                     case SplashClassKind.DataBuffer:    DispatchDataBuffer(obj, rdr, msgid); break;
                     case SplashClassKind.XAudSoundDevice: DispatchXAudSoundDevice(rdr, msgid); break;
+                    case SplashClassKind.SoundBuffer:   DispatchSoundBuffer(obj as Objects.SplashSoundBuffer, rdr, msgid); break;
+                    case SplashClassKind.Sound:         DispatchSound(obj as Objects.SplashSound, rdr, msgid); break;
                     case SplashClassKind.WaitCursor:    DispatchWaitCursor(obj as Objects.SplashWaitCursor, rdr, msgid); break;
                     default:
                         _dumper?.OnEvent($"  {obj.Kind} msgid={msgid} (unhandled, rem={rdr.Remaining})");
@@ -851,6 +867,12 @@ namespace SoftSled.Components.Splash {
                         // may need to flip their viewport-clip status.
                         oldParent?.EvaluateViewportClip();
                         parent?.EvaluateViewportClip();
+                        // Re-apply Layer ordering: if Visual_SetLayer
+                        // arrived BEFORE this ChangeParent (WMC sometimes
+                        // sets state then attaches), our nOrder insertion
+                        // above ignored the layer. ApplyLayer re-sorts
+                        // this visual amongst its new siblings.
+                        v.ApplyLayer();
                         _dumper?.OnEvent($"  Visual_ChangeParent subj=0x{subjectH:X8} parent=0x{parentH:X8} sibling=0x{siblingH:X8} order={order}");
                     } else if (rdr.Remaining >= 4) {
                         // Some encoders omit the sibling/order trailing fields.
@@ -864,6 +886,7 @@ namespace SoftSled.Components.Splash {
                         v.ChangeParent(parent);
                         oldParentShort?.EvaluateViewportClip();
                         parent?.EvaluateViewportClip();
+                        v.ApplyLayer();
                         _dumper?.OnEvent($"  Visual_ChangeParent subj=0x{subjectH:X8} parent=0x{parentH:X8} (short)");
                     }
                     break;
@@ -881,9 +904,16 @@ namespace SoftSled.Components.Splash {
                         _dumper?.OnEvent($"  Visual_SetAlpha={v.AlphaByte}");
                     }
                     break;
-                case 8: // Visual_SetLayer
+                case 8: // Visual_SetLayer (layer: u32)
+                        // Spec §2.2.4.6.6 — re-positions this visual in
+                        // its parent's z-order. Lower Layer = back,
+                        // higher = front. WMC ships this 580+ times per
+                        // session (mostly 0/1 toggles) so silently
+                        // logging it loses real ordering.
                     if (rdr.Remaining >= 4) {
                         uint layer = rdr.ReadU32();
+                        v.Layer = layer;
+                        v.ApplyLayer();
                         _dumper?.OnEvent($"  Visual_SetLayer={layer}");
                     }
                     break;
@@ -1830,6 +1860,24 @@ namespace SoftSled.Components.Splash {
                         _dumper?.OnEvent($"  Animation[{anim.Kind}]_Stop anim=0x{anim.Handle:X8} (no cmd)");
                     }
                     break;
+                case 25: // Stop with implicit cmd from SetStopCommand
+                         // (no body). Not explicitly documented in the
+                         // spec sections we have, but the wire pattern is
+                         // unambiguous:
+                         //   * Body=0 (no cmd override)
+                         //   * Fires terminally — anims receiving msgid=25
+                         //     never get Played again
+                         //   * Fires when WMC starts NEW animations on the
+                         //     same target visual (so the old animation
+                         //     needs to be torn down)
+                         // Behaviour matches msgid=24 (Stop) with the body
+                         // elided — apply the stored SetStopCommand. WMC
+                         // sends this 100+ times per session for infinite-
+                         // loop fade/slide animations when navigation
+                         // replaces the visual being animated.
+                    StopAnimation(anim);
+                    _dumper?.OnEvent($"  Animation[{anim.Kind}]_StopDefault anim=0x{anim.Handle:X8} cmd={anim.StopCommand} (msgid=25, no body)");
+                    break;
                 case 26: // Play
                     StartAnimation(anim);
                     _dumper?.OnEvent($"  Animation[{anim.Kind}]_Play anim=0x{anim.Handle:X8} target=0x{anim.TargetVisual:X8} kfs={anim.KeyframeCount}");
@@ -2325,6 +2373,26 @@ namespace SoftSled.Components.Splash {
         /// matching property and re-issue the WPF transform.
         /// </summary>
         private void ApplyAnimationValue(Objects.SplashAnimation a, Objects.AnimationKeyframe kf) {
+            // Gradient-targeted animations: the AnimationManager_Build*
+            // call's viSubject was a Gradient handle, not a Visual.
+            // Resolve as Gradient, mutate the property, and rebuild every
+            // visual's OpacityMask that's currently using this gradient.
+            // The selection-sweep highlight in MCE menus (e.g. the
+            // "Recorder Storage" focus animation) uses this pattern —
+            // without it the gradient stays at its initial Offset (0)
+            // and the U-shape mask sits permanently centred over text.
+            if (a.Kind == Objects.AnimationKind.GradientOffset
+                || a.Kind == Objects.AnimationKind.GradientColorMask) {
+                if (!_registry.TryGetObject(a.TargetVisual, out var gObj)
+                    || !(gObj is Objects.SplashGradient g)) return;
+                if (a.Kind == Objects.AnimationKind.GradientOffset) {
+                    g.Offset = kf.FloatValue;
+                } else {
+                    g.ColorMask = kf.ArgbValue;
+                }
+                RebuildMasksForGradient(g.Handle);
+                return;
+            }
             if (!_registry.TryGetObject(a.TargetVisual, out var obj) || !(obj is SplashVisual v)) return;
             switch (a.Kind) {
                 case Objects.AnimationKind.Position:
@@ -2372,8 +2440,32 @@ namespace SoftSled.Components.Splash {
                     // We don't yet apply v.Color to rendering (no tint
                     // pipeline). Logged for visibility.
                     break;
-                // GradientColorMask/GradientOffset deferred — slice 5.3 if
-                // the MCE shell actually animates gradients.
+                // GradientColorMask / GradientOffset are handled at the
+                // top of this method (they target a Gradient, not a
+                // Visual) — see the gradient-animation early-return.
+            }
+        }
+
+        /// <summary>
+        /// Look up every <see cref="SplashVisual"/> whose OpacityMask
+        /// is currently sourced from the given gradient, and rebuild the
+        /// WPF brush against the visual's current Size. Called whenever
+        /// the gradient's Offset / ColorMask changes — either statically
+        /// (Gradient_SetOffset / Gradient_SetColorMask messages) or
+        /// dynamically (Animation[GradientOffset] / [GradientColorMask]
+        /// tick).
+        ///
+        /// Cheap in practice: the registry is small (a few thousand
+        /// objects), the per-visual cost is one WPF LinearGradientBrush
+        /// allocation which is then frozen, and gradient mutations are
+        /// rare relative to per-frame redraws.
+        /// </summary>
+        private void RebuildMasksForGradient(uint gradHandle) {
+            if (!_registry.TryGetObject(gradHandle, out var gObj)
+                || !(gObj is Objects.SplashGradient g)) return;
+            foreach (var v in _registry.EnumerateVisualsWithGradient(gradHandle)) {
+                if (v.SizeX <= 0 || v.SizeY <= 0) continue;
+                v.DrawingVisual.OpacityMask = g.BuildOpacityMask(v.SizeX, v.SizeY);
             }
         }
 
@@ -2571,6 +2663,10 @@ namespace SoftSled.Components.Splash {
                     if (rdr.Remaining >= 4) {
                         float o = rdr.ReadFloat32();
                         g.Offset = o;
+                        // If the gradient was already bound as a mask on
+                        // any visual, rebuild — Offset shifts the stop
+                        // positions and changes which pixels are masked.
+                        RebuildMasksForGradient(g.Handle);
                         _dumper?.OnEvent($"  Gradient_SetOffset grad=0x{g.Handle:X8} off={o:F3}");
                     }
                     break;
@@ -2578,6 +2674,12 @@ namespace SoftSled.Components.Splash {
                     if (rdr.Remaining >= 4) {
                         uint argb = rdr.ReadU32();
                         g.ColorMask = argb;
+                        // ColorMask doesn't affect the current alpha-only
+                        // BuildOpacityMask output, but rebuild defensively
+                        // — if BuildOpacityMask ever starts honouring it
+                        // (e.g. for tinted overlays), the existing masks
+                        // would otherwise be stale until next SetContent.
+                        RebuildMasksForGradient(g.Handle);
                         _dumper?.OnEvent($"  Gradient_SetColorMask grad=0x{g.Handle:X8} argb=0x{argb:X8}");
                     }
                     break;
@@ -2800,29 +2902,32 @@ namespace SoftSled.Components.Splash {
         }
 
         // -------- XAudSoundDevice (spec §2.2.4.24) --------
-        // We don't render audio via splash (the AV pipeline handles that),
-        // but acknowledging keeps the event log clean.
+        // Drives the splash UI sound system. CreateSound and
+        // CreateSoundBuffer set up the playback objects; the actual
+        // playback path is in DispatchSound / DispatchSoundBuffer.
         //   0 = CreateSound        (idNewSound u32, soundBuffer u32) — body=8
         //   1 = CreateSoundBuffer  (idNewBuffer i32, info SoundHeader 22B, _priv_objcb u32, _priv_ctxcb u32)
         //   6 = Create             (post-init)
         private void DispatchXAudSoundDevice(SplashPayloadReader rdr, int msgid) {
             switch (msgid) {
-                case 0: // CreateSound
+                case 0: // CreateSound — binds a new Sound to an existing
+                        // SoundBuffer. The pairing must be captured here so
+                        // Sound_Play (which carries no buffer reference) can
+                        // resolve back to the source bytes.
                     if (rdr.Remaining >= 8) {
                         uint idNewSound = rdr.ReadU32();
                         uint sndBuf     = rdr.ReadU32();
-                        // Register the new sound so a later message on it
-                        // isn't an "unknown handle".
                         _registry.RegisterObject(idNewSound,
-                            new SplashGenericObject(idNewSound, SplashClassKind.Sound, "Sound"));
+                            new Objects.SplashSound(idNewSound, sndBuf, "Sound"));
                         _dumper?.OnEvent($"  XAudSoundDevice_CreateSound -> sound=0x{idNewSound:X8} buf=0x{sndBuf:X8}");
                     }
                     break;
-                case 1: // CreateSoundBuffer
+                case 1: // CreateSoundBuffer — empty buffer awaiting
+                        // SoundBuffer_LoadSoundData to populate its bytes.
                     if (rdr.Remaining >= 4) {
                         int idNewBuf = rdr.ReadI32();
                         _registry.RegisterObject((uint)idNewBuf,
-                            new SplashGenericObject((uint)idNewBuf, SplashClassKind.SoundBuffer, "SoundBuffer"));
+                            new Objects.SplashSoundBuffer((uint)idNewBuf, "SoundBuffer"));
                         _dumper?.OnEvent($"  XAudSoundDevice_CreateSoundBuffer -> buf=0x{idNewBuf:X8}");
                     }
                     break;
@@ -2833,6 +2938,88 @@ namespace SoftSled.Components.Splash {
                     _dumper?.OnEvent($"  XAudSoundDevice msgid={msgid} (unhandled, rem={rdr.Remaining})");
                     break;
             }
+        }
+
+        // -------- SoundBuffer (spec §2.2.4.19) --------
+        //   0 = LoadSoundData (dataBuffer u32) — references a DataBuffer
+        //       whose bytes become this SoundBuffer's payload. Spec body
+        //       is documented as 4 bytes (the dataBuffer ref) but the
+        //       wire ships 8 — the extra 4 are probably a format hint;
+        //       reading just the first u32 is sufficient.
+        private void DispatchSoundBuffer(Objects.SplashSoundBuffer sb, SplashPayloadReader rdr, int msgid) {
+            if (sb == null) {
+                _dumper?.OnEvent($"  SoundBuffer msgid={msgid} (no instance — ignored, rem={rdr.Remaining})");
+                return;
+            }
+            switch (msgid) {
+                case 0: // LoadSoundData
+                    if (rdr.Remaining >= 4) {
+                        uint dataBufferH = rdr.ReadU32();
+                        sb.DataBufferHandle = dataBufferH;
+                        if (_registry.TryGetObject(dataBufferH, out var dbObj)
+                            && dbObj is Objects.SplashDataBuffer db) {
+                            sb.Bytes = db.Bytes;
+                            _dumper?.OnEvent($"  SoundBuffer_LoadSoundData buf=0x{sb.Handle:X8} data=0x{dataBufferH:X8} bytes={db.Bytes.Length}");
+                        } else {
+                            _dumper?.OnEvent($"  SoundBuffer_LoadSoundData buf=0x{sb.Handle:X8} data=0x{dataBufferH:X8} (DataBuffer not found — sound will be silent)");
+                        }
+                    }
+                    break;
+                default:
+                    _dumper?.OnEvent($"  SoundBuffer msgid={msgid} (unhandled, rem={rdr.Remaining})");
+                    break;
+            }
+        }
+
+        // -------- Sound (spec §2.2.4.20) --------
+        //   0 = Stop — stops playback, releases lock from Play
+        //   1 = Play — starts playback (restarts if already playing)
+        private void DispatchSound(Objects.SplashSound snd, SplashPayloadReader rdr, int msgid) {
+            if (snd == null) {
+                _dumper?.OnEvent($"  Sound msgid={msgid} (no instance — ignored, rem={rdr.Remaining})");
+                return;
+            }
+            switch (msgid) {
+                case 0: // Stop
+                    _dumper?.OnEvent($"  Sound_Stop sound=0x{snd.Handle:X8}");
+                    if (_enableSplashAudio) _soundPlayer?.Stop(snd.Handle);
+                    break;
+                case 1: // Play
+                    if (_enableSplashAudio) {
+                        if (_soundPlayer == null) {
+                            // Lazy init — defer NAudio device opening until
+                            // the first Play. Saves resources in sessions
+                            // that never trigger splash audio.
+                            _soundPlayer = new SplashSoundPlayer(_logger);
+                        }
+                        byte[] bytes = ResolveSoundBytes(snd);
+                        if (bytes != null && bytes.Length > 0) {
+                            _soundPlayer.Play(snd.Handle, bytes);
+                            _dumper?.OnEvent($"  Sound_Play sound=0x{snd.Handle:X8} buf=0x{snd.SoundBufferHandle:X8} bytes={bytes.Length}");
+                        } else {
+                            _dumper?.OnEvent($"  Sound_Play sound=0x{snd.Handle:X8} buf=0x{snd.SoundBufferHandle:X8} (no bytes — skipped)");
+                        }
+                    } else {
+                        _dumper?.OnEvent($"  Sound_Play sound=0x{snd.Handle:X8} (audio disabled by config)");
+                    }
+                    break;
+                default:
+                    _dumper?.OnEvent($"  Sound msgid={msgid} (unhandled, rem={rdr.Remaining})");
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Resolve a Sound's playable bytes by walking
+        /// Sound.SoundBufferHandle → SoundBuffer.Bytes. Returns null if
+        /// any link is missing (the SoundBuffer was destroyed, never had
+        /// LoadSoundData called, etc.).
+        /// </summary>
+        private byte[] ResolveSoundBytes(Objects.SplashSound snd) {
+            if (snd.SoundBufferHandle == 0) return null;
+            if (!_registry.TryGetObject(snd.SoundBufferHandle, out var sbObj)
+                || !(sbObj is Objects.SplashSoundBuffer sb)) return null;
+            return sb.Bytes;
         }
 
         // -------- WaitCursor (spec §2.2.4.8) --------

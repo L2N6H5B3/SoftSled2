@@ -445,8 +445,18 @@ namespace SoftSledWPF.Components.Shell {
                 AvCtrlHandler.MediaController = _ffmeController;
             }
 
+            // Read the splash-audio toggle here — config is also read again
+            // later in this method (line ~524) for the mouse + pairing fields,
+            // but the SplashController is constructed earlier and needs to
+            // know whether the UI sound player should be wired in. Reading
+            // the config twice is cheap (small XML file, ~1 ms).
+            bool enableSplashAudio = true;
+            try {
+                enableSplashAudio = SoftSledConfigManager.ReadConfig()?.EnableSplashAudio ?? true;
+            } catch { /* config missing — default ON */ }
             _splashController = new SoftSled.Components.Splash.SplashController(
-                m_logger, Dispatcher, SplashPayloadBigEndian, SplashHandler.SendBytes);
+                m_logger, Dispatcher, SplashPayloadBigEndian, SplashHandler.SendBytes,
+                enableSplashAudio: enableSplashAudio);
             _splashController.AttachHost(splashHost);
             SplashHandler.AttachController(_splashController);
 
