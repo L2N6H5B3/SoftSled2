@@ -1317,32 +1317,53 @@ namespace SoftSled.Components.Splash.Objects {
             // Sort by pixel position so the gradient is monotone.
             System.Array.Sort(coords, (a, b) => a.Pixel.CompareTo(b.Pixel));
 
-            // Skip-rule for "overlay-effect" gradients (no clipping):
-            // every stop whose pixel position falls INSIDE the visual's
-            // own bounds is val=0. Wire pattern from WMC's action panels
-            // (e.g. delete / play buttons): val=1 at x=-20, val=0 at x=20,
-            // val=0 at x=W-20, val=1 at x=W+20 — a U-shape with the
-            // value-1 anchors *outside* the visual. The two stops inside
-            // the visual (x=20 and x=W-20) are both 0, so the gradient
-            // is effectively defining an "all hidden inside" mask that,
-            // applied as an OpacityMask, makes the visual's middle
-            // disappear — but real WMC clearly renders these buttons
-            // fully visible, so the gradient must NOT be functioning as
-            // a clip mask here. Treating "all inside-stops are 0" as
-            // "no clip" preserves real strip-mask gradients (like the
-            // home-screen tile window which has val=1 stops inside the
-            // visual) and lets these decorative U-shape gradients pass
-            // through without hiding the content.
+            // Skip-rule for TRUE U-shape gradients (val=1 outside on BOTH
+            // sides, val=0 inside). Wire pattern from WMC's action panels
+            // (e.g. delete / play buttons):
+            //   val=1 at x=-20  (outside, before min edge)
+            //   val=0 at x=20   (inside)
+            //   val=0 at x=W-20 (inside)
+            //   val=1 at x=W+20 (outside, past max edge)
+            // The two val=1 stops on either side mean the gradient is
+            // shaped as a U with both anchors outside — there's no way
+            // to apply it as an OpacityMask without erasing the visual's
+            // middle. Real WMC clearly renders these buttons fully visible,
+            // so the gradient must function as some other effect (perhaps
+            // a fill that's only drawn at the val=1 edges).
+            //
+            // CRITICAL DISTINCTION from one-sided edge fades: many
+            // legitimate gradients (e.g. the settings-page title fade-in:
+            // val=1 at y=-94, val=0 at y=6) also have val=0 inside and
+            // val=1 outside, but only on ONE side — the other side has
+            // either no stop or val=0 well within bounds. Those produce
+            // a meaningful soft fade that we DO want to apply. The
+            // earlier heuristic ("all inside stops are val=0") was too
+            // broad and dropped both cases identically — the title page
+            // ended up rendered as a flat-coloured rectangle instead of
+            // the wire-intended top-fade.
+            //
+            // Refined predicate: skip iff there is val>0.01 BOTH before
+            // the min edge AND past the max edge — the unambiguous U
+            // signature. One-sided fades (val=1 only on one side) fall
+            // through and are applied normally.
             bool hasInsideStop = false;
             bool allInsideStopsZero = true;
+            bool hasOutsideMinVal1 = false; // a val>0 stop at pixel < -0.5
+            bool hasOutsideMaxVal1 = false; // a val>0 stop at pixel > axisLen+0.5
             foreach (var c in coords) {
                 if (c.Pixel >= -0.5 && c.Pixel <= axisLen + 0.5) {
                     hasInsideStop = true;
-                    if (c.Value > 0.01f) { allInsideStopsZero = false; break; }
+                    if (c.Value > 0.01f) allInsideStopsZero = false;
+                } else {
+                    if (c.Value > 0.01f) {
+                        if (c.Pixel < -0.5)            hasOutsideMinVal1 = true;
+                        else /* c.Pixel > axisLen+0.5 */ hasOutsideMaxVal1 = true;
+                    }
                 }
             }
-            if (hasInsideStop && allInsideStopsZero) {
-                return null; // skip — no clip mask, content stays fully visible
+            if (hasInsideStop && allInsideStopsZero
+                && hasOutsideMinVal1 && hasOutsideMaxVal1) {
+                return null; // skip — true U-shape, no useful mask
             }
 
             // Collapse the absolute range to a [0,1] gradient parameter,
