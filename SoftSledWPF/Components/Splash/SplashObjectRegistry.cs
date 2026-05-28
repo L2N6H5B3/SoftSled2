@@ -140,6 +140,8 @@ namespace SoftSled.Components.Splash {
                 case "HostWindow":            return SplashClassKind.HostWindow;
                 case "XAudSoundDevice":       return SplashClassKind.XAudSoundDevice;
                 case "Dx9Device":             return SplashClassKind.Dx9Device;
+                case "InputRouter":           return SplashClassKind.InputRouter;
+                case "DesktopManager":        return SplashClassKind.DesktopManager;
                 default:                      return SplashClassKind.Unknown;
             }
         }
@@ -159,6 +161,12 @@ namespace SoftSled.Components.Splash {
         WaitCursor, DynamicSurfaceFactory, ParticleSystem, NullDevice,
         SoundBuffer, Sound, SoundDevice, XeDevice, HostWindow,
         XAudSoundDevice, Dx9Device,
+        // Splash::Desktop subsystem — not in MS-RRSP2 §2.2.4 but observed
+        // on the wire (Broker_CreateObject of class
+        // "Splash::Desktop::InputRouter" / "Splash::Desktop::DesktopManager"
+        // during shell init). Configured once per session via a few
+        // singleton-style messages; no rendering side effects.
+        InputRouter, DesktopManager,
     }
 
     /// <summary>
