@@ -374,7 +374,7 @@ namespace SoftSledWPF.Components.Shell {
             freeRdpClient.DataReceived += FreeRdpClient_DataReceived;
             freeRdpClient.StateChanged += FreeRdpClient_StateChanged;
             freeRdpClient.FrameReady += FreeRdpClient_FrameReady;
-            foreach (var ch in new[] { "McxSess", "MCECaps", "devcaps", "avctrl", "VCHD", "splash" })
+            foreach (var ch in new[] { "McxSess", "devcaps", "avctrl", "splash" })
                 freeRdpClient.RegisterChannel(ch);
 
 

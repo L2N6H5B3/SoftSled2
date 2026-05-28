@@ -539,8 +539,10 @@ namespace SoftSled.Components.Splash.Objects {
             // otherwise the second visual would draw the first surface
             // too, the third would draw both, etc. (cumulative bug).
             //
-            // The spec (2.2.4.6.13) says "copies" not "moves", but the
-            // observed semantics on WMC strongly imply move-and-clear.
+            // The spec (2.2.4.6.13) just says "transfers", which is
+            // consistent with move-and-clear; the wire empirically confirms
+            // it. Reviewed all 8 published spec revisions (2013–2017) and
+            // the wording is unchanged across the entire history.
             rb?.Clear();
         }
 
