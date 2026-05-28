@@ -437,7 +437,19 @@ namespace SoftSled.Components.Splash {
                     case SplashClassKind.XAudSoundDevice: DispatchXAudSoundDevice(rdr, msgid); break;
                     case SplashClassKind.SoundBuffer:   DispatchSoundBuffer(obj as Objects.SplashSoundBuffer, rdr, msgid); break;
                     case SplashClassKind.Sound:         DispatchSound(obj as Objects.SplashSound, rdr, msgid); break;
+                    case SplashClassKind.SoundDevice:   DispatchSoundDeviceLegacy(rdr, msgid); break;
                     case SplashClassKind.WaitCursor:    DispatchWaitCursor(obj as Objects.SplashWaitCursor, rdr, msgid); break;
+                    // Group 3 — defensive dispatchers. Spec-coded but
+                    // without observed wire activity in our test logs;
+                    // decode known fields cleanly so any future wire
+                    // activity is named rather than "Unknown msgid=N".
+                    case SplashClassKind.Line:                  DispatchLine(obj, rdr, msgid); break;
+                    case SplashClassKind.VideoPool:             DispatchVideoPool(obj, rdr, msgid); break;
+                    case SplashClassKind.ContextRelay:          DispatchContextRelay(obj, rdr, msgid); break;
+                    case SplashClassKind.DynamicSurfaceFactory: DispatchDynamicSurfaceFactory(obj, rdr, msgid); break;
+                    case SplashClassKind.ParticleSystem:        DispatchParticleSystem(obj, rdr, msgid); break;
+                    case SplashClassKind.InputRouter:           DispatchInputRouter(obj, rdr, msgid); break;
+                    case SplashClassKind.DesktopManager:        DispatchDesktopManager(obj, rdr, msgid); break;
                     default:
                         _dumper?.OnEvent($"  {obj.Kind} msgid={msgid} (unhandled, rem={rdr.Remaining})");
                         break;
@@ -3205,6 +3217,163 @@ namespace SoftSled.Components.Splash {
                 sb.Append(data[i].ToString("X2"));
             }
             return sb.ToString();
+        }
+
+        // ================================================================
+        // Group 3 — Spec-coded, low-activity / unobserved class dispatchers.
+        //
+        // Each handler decodes the spec-documented fields and logs cleanly
+        // so any wire activity is named rather than "Unknown msgid=N". None
+        // of these have functional rendering hooks yet — they're stubs ready
+        // to be promoted to real handlers when WMC's MCE shell actually
+        // exercises them. The decoded field names + handle references in the
+        // logs make that promotion straightforward: when a class fires, the
+        // log already tells us what bytes to interpret.
+        // ================================================================
+
+        // -------- Line (spec §2.2.4.16) — never observed --------
+        //   0 = SetThickness   (flThickness f32)
+        //   1 = SetColor       (clr u32 ARGB)
+        //   2 = CommitLine     (rb u32)     — adds the line to a RB
+        //   3 = DrawPoint      (rb u32)     — adds a polyline vertex
+        private void DispatchLine(ISplashObject obj, SplashPayloadReader rdr, int msgid) {
+            switch (msgid) {
+                case 0:
+                    if (rdr.Remaining >= 4) {
+                        float th = rdr.ReadFloat32();
+                        _dumper?.OnEvent($"  Line_SetThickness line=0x{obj.Handle:X8} flThickness={th:F2}");
+                    }
+                    break;
+                case 1:
+                    if (rdr.Remaining >= 4) {
+                        uint argb = rdr.ReadU32();
+                        _dumper?.OnEvent($"  Line_SetColor line=0x{obj.Handle:X8} argb=0x{argb:X8}");
+                    }
+                    break;
+                case 2:
+                    if (rdr.Remaining >= 4) {
+                        uint rbH = rdr.ReadU32();
+                        _dumper?.OnEvent($"  Line_CommitLine line=0x{obj.Handle:X8} rb=0x{rbH:X8} (no-op stub)");
+                    }
+                    break;
+                case 3:
+                    if (rdr.Remaining >= 4) {
+                        uint rbH = rdr.ReadU32();
+                        _dumper?.OnEvent($"  Line_DrawPoint line=0x{obj.Handle:X8} rb=0x{rbH:X8} (no-op stub)");
+                    }
+                    break;
+                default:
+                    _dumper?.OnEvent($"  Line msgid={msgid} (unhandled, rem={rdr.Remaining})");
+                    break;
+            }
+        }
+
+        // -------- VideoPool (spec §2.2.4.13) — never observed --------
+        // Mirrors SurfacePool structurally (Allocate/Free/CreateSurface/etc.)
+        // but specifically for video frame surfaces. Promoting to a real
+        // handler requires plumbing into the playback surface allocator.
+        //   0 = Draw, 1 = CreateSurface, 2 = Free, 3 = Allocate,
+        //   4 = SetEmptyColor, 5 = SetPriority, 7 = NotifyVideoSizeChanged
+        private void DispatchVideoPool(ISplashObject obj, SplashPayloadReader rdr, int msgid) {
+            _dumper?.OnEvent($"  VideoPool pool=0x{obj.Handle:X8} msgid={msgid} rem={rdr.Remaining} (stub — no functional handler)");
+        }
+
+        // -------- ContextRelay (spec §2.2.4.2) — never observed --------
+        //   0 = UnlinkContext  (idExisting u32, idAlias u32)
+        //   1 = LinkContext    (idExisting u32, idAlias u32)
+        //   2 = Create         (protocol i32, stServer BLOBREF, stSession BLOBREF)
+        // Inter-context message routing for multi-app scenarios; our
+        // implementation is single-context so these are metadata only.
+        private void DispatchContextRelay(ISplashObject obj, SplashPayloadReader rdr, int msgid) {
+            switch (msgid) {
+                case 0:
+                case 1:
+                    if (rdr.Remaining >= 8) {
+                        uint existing = rdr.ReadU32();
+                        uint alias    = rdr.ReadU32();
+                        string op = msgid == 1 ? "Link" : "Unlink";
+                        _dumper?.OnEvent($"  ContextRelay_{op}Context relay=0x{obj.Handle:X8} existing=0x{existing:X8} alias=0x{alias:X8}");
+                    }
+                    break;
+                case 2:
+                    if (rdr.Remaining >= 4) {
+                        int proto = rdr.ReadI32();
+                        string protoName = proto == 1 ? "RDP-VC"
+                                         : proto == 2 ? "TCP"
+                                         : proto == 3 ? "UDP"
+                                         : proto == 4 ? "NamedPipes"
+                                         : $"?({proto})";
+                        _dumper?.OnEvent($"  ContextRelay_Create relay=0x{obj.Handle:X8} protocol={protoName} (BLOBREFs unread, rem={rdr.Remaining})");
+                    }
+                    break;
+                default:
+                    _dumper?.OnEvent($"  ContextRelay msgid={msgid} (unhandled, rem={rdr.Remaining})");
+                    break;
+            }
+        }
+
+        // -------- DynamicSurfaceFactory (spec §2.2.4.18) — observed 1-2× --------
+        //   0 = CloseInstance         (nUniqueID i32)
+        //   1 = CreateVideoInstance   (nUniqueID, idClassContext, devOwner, surScene, poolScene) — 20 B
+        //   2 = CreateSurfaceInstance (nUniqueID, idClassContext, devOwner, surScene, poolScene) — 20 B
+        // Promoting to a real handler would tie a DynamicSurface instance
+        // to a SurfacePool/VideoPool — neither of which we model functionally.
+        private void DispatchDynamicSurfaceFactory(ISplashObject obj, SplashPayloadReader rdr, int msgid) {
+            switch (msgid) {
+                case 0:
+                    if (rdr.Remaining >= 4) {
+                        int uid = rdr.ReadI32();
+                        _dumper?.OnEvent($"  DynamicSurfaceFactory_CloseInstance dsf=0x{obj.Handle:X8} uid={uid}");
+                    }
+                    break;
+                case 1:
+                case 2:
+                    if (rdr.Remaining >= 20) {
+                        int  uid       = rdr.ReadI32();
+                        uint clsCtx    = rdr.ReadU32();
+                        uint devOwner  = rdr.ReadU32();
+                        uint surScene  = rdr.ReadU32();
+                        uint poolScene = rdr.ReadU32();
+                        string kind = msgid == 1 ? "Video" : "Surface";
+                        _dumper?.OnEvent($"  DynamicSurfaceFactory_Create{kind}Instance dsf=0x{obj.Handle:X8} uid={uid} clsCtx=0x{clsCtx:X8} dev=0x{devOwner:X8} surface=0x{surScene:X8} pool=0x{poolScene:X8}");
+                    }
+                    break;
+                default:
+                    _dumper?.OnEvent($"  DynamicSurfaceFactory msgid={msgid} (unhandled, rem={rdr.Remaining})");
+                    break;
+            }
+        }
+
+        // -------- ParticleSystem — never observed, not in our extract of spec --------
+        // Decorative class for particle effects. Probably unused in the MCE
+        // shell. Logged only.
+        private void DispatchParticleSystem(ISplashObject obj, SplashPayloadReader rdr, int msgid) {
+            _dumper?.OnEvent($"  ParticleSystem ps=0x{obj.Handle:X8} msgid={msgid} rem={rdr.Remaining} (stub — class not in spec extract)");
+        }
+
+        // -------- SoundDevice (spec §2.2.4.21) — legacy, superseded by XAudSoundDevice --------
+        // Older WMC builds used SoundDevice for audio; this WMC build
+        // uses XAudSoundDevice exclusively (we handle that elsewhere).
+        // Kept as a stub for compatibility with older WMC server builds.
+        //   0 = CreateSound, 1 = CreateSoundBuffer, 2 = EvictExternalResources, 3 = CreateExternalResources
+        private void DispatchSoundDeviceLegacy(SplashPayloadReader rdr, int msgid) {
+            _dumper?.OnEvent($"  SoundDevice msgid={msgid} rem={rdr.Remaining} (legacy stub — XAudSoundDevice is primary)");
+        }
+
+        // -------- InputRouter (Splash::Desktop::InputRouter) --------
+        // Not in MS-RRSP2 spec. Observed during shell init: 2 messages
+        // (msgid=1, 2; both 8-byte body) on a single instance, never
+        // touched again. Configuration only — no rendering side effects.
+        private void DispatchInputRouter(ISplashObject obj, SplashPayloadReader rdr, int msgid) {
+            _dumper?.OnEvent($"  InputRouter ir=0x{obj.Handle:X8} msgid={msgid} rem={rdr.Remaining} (Splash::Desktop — spec undocumented, ack only)");
+        }
+
+        // -------- DesktopManager (Splash::Desktop::DesktopManager) --------
+        // Not in MS-RRSP2 spec. Observed during shell init: msgid=2 (body=0)
+        // and msgid=4 (body=8) on a single instance, never touched again.
+        // Configuration only — no rendering side effects.
+        private void DispatchDesktopManager(ISplashObject obj, SplashPayloadReader rdr, int msgid) {
+            _dumper?.OnEvent($"  DesktopManager dm=0x{obj.Handle:X8} msgid={msgid} rem={rdr.Remaining} (Splash::Desktop — spec undocumented, ack only)");
         }
     }
 }
