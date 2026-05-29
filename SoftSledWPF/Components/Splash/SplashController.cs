@@ -48,6 +48,27 @@ namespace SoftSled.Components.Splash {
         private readonly System.Diagnostics.Stopwatch _animClock = new System.Diagnostics.Stopwatch();
         private bool _animTickHooked;
 
+        // ---- Batch-synchronised animation start-time (task #170+) ----
+        // Without this, every Animation_Play inside a single message batch
+        // captured its own _animClock.Elapsed value the moment the message
+        // arrived — and because each message dispatch takes wall-clock
+        // microseconds-to-milliseconds, the StartTimeMs values for anims
+        // that the wire intended to run in lock-step drifted by a few ms.
+        // Visible symptom: on a home-screen-after-Recorded-TV transition,
+        // the fade-out of the previous row's label was a few ms ahead of
+        // the slide-in covering it, so a descender like the "y" in "movie
+        // library" was briefly visible past the new row's mask.
+        //
+        // Fix: every StartAnimation that fires while we're inside the
+        // outermost DispatchBatch shares ONE timestamp, latched at the
+        // first such call within the batch. Plays initiated outside a
+        // batch (e.g. chained from an OnComplete handler on the anim
+        // tick) still read the clock fresh — that's correct, those
+        // aren't part of any wire batch.
+        private int    _batchDepth;
+        private bool   _batchAnimStartLatched;
+        private double _batchAnimStartMs;
+
         // Context IDs assigned in the handshake. idContextApp is the
         // server-side app context (typically 1); idContextRender is the
         // client-side context we were assigned (typically 2). Used as
@@ -307,6 +328,24 @@ namespace SoftSled.Components.Splash {
                 _dumper?.OnEvent("Batch too short (no header)");
                 return;
             }
+            // Outermost batch resets the StartAnimation timestamp latch
+            // (see comment on _batchAnimStartLatched). Nested batches
+            // (from predicate-buffer reentry) share the outer batch's
+            // latched value so cross-batch animations stay lock-step
+            // with each other too — predicate buffers carry setup for
+            // the outer batch's Plays and conceptually belong to the
+            // same logical wire event.
+            bool isOutermostBatch = (_batchDepth == 0);
+            if (isOutermostBatch) _batchAnimStartLatched = false;
+            _batchDepth++;
+            try {
+                DispatchBatchInner(payload);
+            } finally {
+                _batchDepth--;
+            }
+        }
+
+        private void DispatchBatchInner(byte[] payload) {
             // MessageBatch header (8 B, BE per framing rules).
             uint idPredicateBuffer = ReadU32BE(payload, 0);
             uint uOffsetFirstEntry = ReadU32BE(payload, 4);
@@ -1872,21 +1911,30 @@ namespace SoftSled.Components.Splash {
                         _dumper?.OnEvent($"  Animation[{anim.Kind}]_Stop anim=0x{anim.Handle:X8} (no cmd)");
                     }
                     break;
-                case 25: // Stop with implicit cmd from SetStopCommand
-                         // (no body). Not explicitly documented in the
-                         // spec sections we have, but the wire pattern is
-                         // unambiguous:
+                case 25: // Animation msgid=0x19 (25) — NOT in any published
+                         // MS-RRSP2 revision (verified across all 8 PDFs
+                         // 2013-2017; msgid catalogue tops out at 0x23 and
+                         // 0x19 is one of the gap slots, alongside 0x1C
+                         // 0x1F 0x20 0x22). Treating it as "Stop with the
+                         // stored SetStopCommand" — by analogy with
+                         // msgid=24 (Stop with explicit cmd) but without
+                         // a body — produced visually correct results
+                         // across the home / EPG / settings / Recorded TV
+                         // / FORMULA 1 flows. Wire pattern is unambiguous:
                          //   * Body=0 (no cmd override)
                          //   * Fires terminally — anims receiving msgid=25
                          //     never get Played again
                          //   * Fires when WMC starts NEW animations on the
                          //     same target visual (so the old animation
                          //     needs to be torn down)
-                         // Behaviour matches msgid=24 (Stop) with the body
-                         // elided — apply the stored SetStopCommand. WMC
-                         // sends this 100+ times per session for infinite-
-                         // loop fade/slide animations when navigation
-                         // replaces the visual being animated.
+                         // Confirmed NOT the cause of a navigation-transition
+                         // bleed-through fragment we suspected earlier
+                         // (verified by toggling this to a no-op and
+                         // re-running; the fragment was still present,
+                         // which turned out to be a Movies-row tile-strip
+                         // mask leak — a "y" descender from "movie library"
+                         // poking past the row OpacityMask. Tracked
+                         // separately.).
                     StopAnimation(anim);
                     _dumper?.OnEvent($"  Animation[{anim.Kind}]_StopDefault anim=0x{anim.Handle:X8} cmd={anim.StopCommand} (msgid=25, no body)");
                     break;
@@ -1977,7 +2025,32 @@ namespace SoftSled.Components.Splash {
         private void StartAnimation(Objects.SplashAnimation anim) {
             EnsureAnimTickHooked();
             if (!_animClock.IsRunning) _animClock.Start();
-            anim.StartTimeMs = _animClock.Elapsed.TotalMilliseconds;
+            // Batch-synchronised StartTimeMs: every Play inside a single
+            // DispatchBatch shares ONE timestamp, captured at the first
+            // Play within that batch. Animations the wire intended to
+            // start in lock-step (e.g. all show-anims for a single
+            // navigation: row-A fade-out + row-B slide-in + spinner
+            // fade-in + tile rotation) therefore see identical progress
+            // values on every tick. Without this, each anim captured
+            // its own _animClock.Elapsed at message-dispatch time and
+            // they drifted by a few ms — visible as a Movies-row "y"
+            // descender peeking past the new-row mask during the brief
+            // window where the fade-out lagged the slide-in.
+            //
+            // Outside a batch (e.g. anim chained from OnComplete on the
+            // anim tick), use the fresh clock — those are standalone
+            // chains, not co-scheduled wire events.
+            double startMs;
+            if (_batchDepth > 0) {
+                if (!_batchAnimStartLatched) {
+                    _batchAnimStartMs = _animClock.Elapsed.TotalMilliseconds;
+                    _batchAnimStartLatched = true;
+                }
+                startMs = _batchAnimStartMs;
+            } else {
+                startMs = _animClock.Elapsed.TotalMilliseconds;
+            }
+            anim.StartTimeMs = startMs;
             anim.CompletedRepeats = 0;
             anim.Playing = true;
             anim.OnCompleteFired = false; // re-arm for this Play cycle
