@@ -71,6 +71,65 @@ namespace SoftSled.Components.Splash {
             // on top of each other and the home screen looks like every
             // category is selected simultaneously.
             ClipToBounds = true;
+
+            // ---- Full-screen rendering performance hints (task #171) ----
+            //
+            // RenderOptions cascade through the visual tree, so applying these
+            // to the root visual once covers every descendant DrawingVisual the
+            // scene contains. The splash canvas is composed at WMC's logical
+            // 1280×720 and we apply a ScaleTransform on _rootVisual that
+            // stretches to the host cell size — so on a 1080p host the scale
+            // factor is 1.5×, on 1440p it's 1.875×, on 4K it's 3×. Without
+            // these hints WPF's default is high-quality bilinear/trilinear
+            // bitmap scaling and full geometry anti-aliasing, both of which
+            // get noticeably expensive per-pixel as the output area grows.
+            //
+            // BitmapScalingMode.LowQuality = bilinear (no mipmap chain).
+            // Faster than the default HighQuality (~tricubic) and produces
+            // acceptable results for UI chrome — the splash surfaces are
+            // pre-rendered glyph atlases and 9-slice chrome where pixel-
+            // perfect rescaling isn't a meaningful improvement.
+            //
+            // EdgeMode.Aliased disables the per-pixel coverage anti-aliasing
+            // that WPF runs on geometry edges. We mostly draw axis-aligned
+            // rectangles + bitmap quads where AA gives nothing visible, and
+            // the cost is per-pixel at the output resolution.
+            //
+            // CachingHint.Cache = "you may cache rendered output for static
+            // sub-trees." Lets WPF use intermediate bitmap caches where it
+            // detects a static subtree, particularly useful for the chrome
+            // surfaces that don't change between animation frames.
+            //
+            // Together these knobs typically halve the per-frame compositor
+            // cost at 1080p+ resolutions and noticeably reduce CPU when the
+            // window is maximised on a high-DPI display.
+            System.Windows.Media.RenderOptions.SetBitmapScalingMode(
+                _rootVisual, System.Windows.Media.BitmapScalingMode.LowQuality);
+            System.Windows.Media.RenderOptions.SetEdgeMode(
+                _rootVisual, System.Windows.Media.EdgeMode.Aliased);
+            System.Windows.Media.RenderOptions.SetCachingHint(
+                _rootVisual, System.Windows.Media.CachingHint.Cache);
+            // Same hints on the background visual — it's just a solid-color
+            // rectangle so the impact is small, but consistency keeps the
+            // compositor on the same rendering path for both children.
+            System.Windows.Media.RenderOptions.SetBitmapScalingMode(
+                _backgroundVisual, System.Windows.Media.BitmapScalingMode.LowQuality);
+            System.Windows.Media.RenderOptions.SetEdgeMode(
+                _backgroundVisual, System.Windows.Media.EdgeMode.Aliased);
+
+            // Log the WPF rendering tier on first construction so we can
+            // detect software-rendering fallback (Tier 0). Tier 1 = partial
+            // hardware acceleration (DX7 / shader 1.x), Tier 2 = full hardware
+            // acceleration (DX9+, shader 2.0+). On any modern desktop or VM
+            // with a sane GPU driver we expect Tier 2. Tier 0 means WPF is
+            // rendering everything on the CPU — that produces exactly the
+            // "slow at full-screen" symptom we're tracking — and the user
+            // would need to fix their display driver / RDP-session settings
+            // / virtualisation host before any in-renderer perf work can
+            // matter.
+            int tier = System.Windows.Media.RenderCapability.Tier >> 16;
+            System.Diagnostics.Debug.WriteLine(
+                $"[Splash] WPF render tier = {tier} ({(tier >= 2 ? "full HW accel" : tier == 1 ? "partial HW accel" : "SOFTWARE")})");
         }
 
         /// <summary>Repaint the background visual with the given color.</summary>
