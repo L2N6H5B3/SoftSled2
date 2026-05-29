@@ -157,35 +157,44 @@ namespace SoftSledWPF.Components.Shell {
         }
 
         // ------- Mouse forwarding --------------------------------------
-        // Wired on rdpDisplay (not the window) because all coordinate maths
-        // is relative to the displayed bitmap. All handlers early-return if
-        // !_sessionActive || !_mouseEnabled || bitmap not ready.
+        // Wired on MouseInputLayer — a transparent Border that sits above
+        // BOTH rdpDisplay and splashHost — so mouse events reach these
+        // handlers regardless of which layer is currently the visible UI
+        // (splash-only navigation pages, mixed splash + RDP, RDP-only).
+        // Previously these were attached to rdpDisplay, which silently
+        // dropped events whenever rdpDisplay was Hidden (a Hidden element
+        // doesn't hit-test in WPF). All coordinate math still resolves
+        // against rdpDisplay's layout slot — both elements occupy the
+        // same Grid cell, so e.GetPosition(rdpDisplay) returns the same
+        // value it would have when the handlers lived on rdpDisplay
+        // itself, and TryMapToRdp keeps working unchanged.
 
         private void AttachMouseHandlers() {
-            rdpDisplay.MouseMove += RdpDisplay_MouseMove;
-            rdpDisplay.MouseDown += RdpDisplay_MouseDown;
-            rdpDisplay.MouseUp += RdpDisplay_MouseUp;
-            rdpDisplay.MouseWheel += RdpDisplay_MouseWheel;
-            rdpDisplay.MouseLeave += RdpDisplay_MouseLeave;
-            rdpDisplay.Focusable = true;
+            MouseInputLayer.MouseMove  += RdpDisplay_MouseMove;
+            MouseInputLayer.MouseDown  += RdpDisplay_MouseDown;
+            MouseInputLayer.MouseUp    += RdpDisplay_MouseUp;
+            MouseInputLayer.MouseWheel += RdpDisplay_MouseWheel;
+            MouseInputLayer.MouseLeave += RdpDisplay_MouseLeave;
+            MouseInputLayer.Focusable   = true;
             ApplyMouseCursorPolicy();
         }
 
         private void DetachMouseHandlers() {
-            try { rdpDisplay.MouseMove -= RdpDisplay_MouseMove; } catch { }
-            try { rdpDisplay.MouseDown -= RdpDisplay_MouseDown; } catch { }
-            try { rdpDisplay.MouseUp -= RdpDisplay_MouseUp; } catch { }
-            try { rdpDisplay.MouseWheel -= RdpDisplay_MouseWheel; } catch { }
-            try { rdpDisplay.MouseLeave -= RdpDisplay_MouseLeave; } catch { }
-            rdpDisplay.Cursor = null;
+            try { MouseInputLayer.MouseMove  -= RdpDisplay_MouseMove;  } catch { }
+            try { MouseInputLayer.MouseDown  -= RdpDisplay_MouseDown;  } catch { }
+            try { MouseInputLayer.MouseUp    -= RdpDisplay_MouseUp;    } catch { }
+            try { MouseInputLayer.MouseWheel -= RdpDisplay_MouseWheel; } catch { }
+            try { MouseInputLayer.MouseLeave -= RdpDisplay_MouseLeave; } catch { }
+            MouseInputLayer.Cursor = null;
         }
 
-        // Hide the local cursor over the RDP surface when forwarding is on,
-        // so the server-painted remote cursor is the only one the user sees.
-        // When mouse forwarding is disabled, restore the default arrow so it
-        // is obvious nothing is being forwarded.
+        // Hide the local cursor when forwarding is on, so the server-painted
+        // remote cursor is the only one the user sees. When mouse forwarding
+        // is disabled, restore the default arrow so it is obvious nothing is
+        // being forwarded. Applied to the input layer so it covers the entire
+        // session region (including the splash overlay area).
         private void ApplyMouseCursorPolicy() {
-            rdpDisplay.Cursor = _mouseEnabled ? Cursors.None : Cursors.Arrow;
+            MouseInputLayer.Cursor = _mouseEnabled ? Cursors.None : Cursors.Arrow;
         }
 
         // Map a WPF point on rdpDisplay back to RDP framebuffer pixels.
@@ -241,7 +250,9 @@ namespace SoftSledWPF.Components.Shell {
             if (!TryMapToRdp(e.GetPosition(rdpDisplay), out var x, out var y)) return;
             // Ensure focus is on the session so subsequent keyboard input is gated
             // correctly through ForwardKey (shell-level capture also requires it).
-            rdpDisplay.Focus();
+            // Focus the input layer (always visible) rather than rdpDisplay
+            // (which may be Hidden during a splash-only navigation page).
+            MouseInputLayer.Focus();
             SendMouseMove(x, y);
             switch (e.ChangedButton) {
                 case MouseButton.Left:

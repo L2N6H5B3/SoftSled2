@@ -39,6 +39,17 @@
                                  Visibility="Collapsed"
                                  IsHitTestVisible="False"/>
 
+        <!-- Mouse input capture layer (task #170 follow-up). Always-present
+             transparent Border that sits above BOTH rdpDisplay and splashHost
+             so mouse moves/clicks reach RdpDisplay_* handlers regardless of
+             which layer is currently the visible UI. Without this, mouse
+             events vanish whenever rdpDisplay is hidden (e.g. during a
+             splash-only session) because Hidden elements don't hit-test.
+             Background="Transparent" is required for the Border to receive
+             hits — null background = no hit-test. -->
+        <Border x:Name="MouseInputLayer"
+                Background="Transparent"/>
+
         <!-- Connecting status overlay. Shown from Start() until either
              FreeRDP transitions to Active or the splash overlay first
              paints something (whichever fires first). Sits in the same
