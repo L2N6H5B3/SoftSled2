@@ -77,6 +77,79 @@ namespace SoftSled.Components.Configuration {
         public bool LogAvCtrlChannel  = false;
         public bool LogRdpFastpath    = false;
 
+        // Gates the A/V playback log group: FFME (Media.Open/Close, MediaOpened/Failed),
+        // the FFME and external-sync controllers, the libav decoder throughput,
+        // the [zoom] mode log, and the [surface-router] info lines. Defaulted ON
+        // so existing behaviour is preserved when users upgrade; flip OFF when
+        // isolating splash-channel diagnostics from playback noise. Unlike the
+        // per-VC channel toggles above, this one defaults true because A/V
+        // events were always emitted before this toggle existed.
+        public bool LogAvPlayback     = true;
+
+        // Mirror every textbox-logger line to a timestamped file under
+        // LogFileDirectory. Critical for diagnosing release-build crashes
+        // on remote machines where the on-screen overlay is unreachable
+        // (the app may close before any session UI is up). Defaulted ON
+        // because the cost is negligible (a few KB/s, auto-flushed) and
+        // a captured log is the difference between "we know what crashed"
+        // and "please reproduce while I shoulder-surf".
+        public bool   LogToFile        = true;
+        // Directory the per-session log file is created in. Empty string
+        // means "use the platform default" — %LocalAppData%/SoftSled/Logs
+        // on Windows. Resolved at session start; changes take effect on
+        // the NEXT session, not mid-flight.
+        public string LogFileDirectory = "";
+        // Directory the advanced diagnostic dumps (splash raw bytes,
+        // fastpath payloads, audio PCM) are written under. Empty string
+        // means "use the platform default" — %LocalAppData%/SoftSled/Dumps.
+        // Changes take effect on the NEXT session start (the dump dirs
+        // are pushed into env vars at session-start time).
+        public string DumpsDirectory   = "";
+
+        // ---- Advanced / env-var-driven diagnostics --------------------
+        //
+        // Each of these mirrors a SOFTSLED_* environment variable that
+        // call sites already check at session-start time. At session
+        // start, ExtenderSessionControl applies these into the process-
+        // scope env vars so existing consumers (RtspWireDumper.cs,
+        // SplashRawDumper.cs, WmcFastpathAudioPlayer.cs, etc.) don't
+        // need to change. Path-style dumps auto-route to
+        // %LocalAppData%/SoftSled/Dumps/<x>; the Debugging page surfaces
+        // an "Open" button so you can find them without typing the
+        // path.
+        //
+        // Mutual relationship with the env vars themselves: the config
+        // values OVERRIDE any pre-existing env var when the session
+        // starts. So a checkbox click in the GUI always wins over a
+        // `set SOFTSLED_X=1` in the shell. If you need shell-set vars
+        // to win, leave the GUI checkbox UNticked — we only WRITE the
+        // env var when the box is ticked.
+
+        // Dump the splash MS-RRSP2 wire bytes and the decoded event
+        // log to disk (mirrors SOFTSLED_SPLASH_RAW_DUMP). Default OFF
+        // because the wire dump is big (~60 MB for a 30-minute session).
+        public bool EnableSplashRawDump   = false;
+        // Dump the RDP fastpath raw payloads (mirrors
+        // SOFTSLED_FASTPATH_RAW_DUMP). Useful for the GDI-mode overlay
+        // diagnostics. Off by default.
+        public bool EnableFastpathRawDump = false;
+        // Dump fastpath audio PCM payloads as per-slot WAV files
+        // (mirrors SOFTSLED_AUDIO_DUMP). Off by default.
+        public bool EnableAudioDump       = false;
+        // Wire-level dump of every RTSP request and response on the
+        // control channel (mirrors SOFTSLED_RTSP_WIRE_DUMP). Off by
+        // default — the dump grows with session activity but is
+        // small per request.
+        public bool EnableRtspWireDump    = false;
+        // Verbose tracing of the fastpath audio decoder state machine
+        // (mirrors SOFTSLED_AUDIO_TRACE). Off by default — gets
+        // noisy when audio is actively playing.
+        public bool EnableAudioTrace      = false;
+        // Route RTSP audio through NAudio instead of the FFME path
+        // (mirrors SOFTSLED_AUDIO_VIA_NAUDIO). Diagnostic / fallback
+        // for audio-stack troubleshooting. Off by default.
+        public bool EnableAudioViaNAudio  = false;
+
         // Initial desktop / session resolution requested from the RDP
         // server. Picked from the resolution overlay in the Video sub-
         // page.
@@ -94,6 +167,41 @@ namespace SoftSled.Components.Configuration {
         // and this flag has no effect there. Default OFF —
         // experimental.
         public bool UseExternalSyncMode = false;
+
+        // Heuristic PiP routing: when active video is playing, the
+        // splash controller sniffs for gradient-only ~16:9 Visuals in
+        // the bottom-left of the screen and routes the video element
+        // onto the first match. Works because WMC's MS-RRSP2 wire does
+        // NOT actually emit VideoPool_Draw (spec §2.2.4.13.1, msgid 0)
+        // on this corpus — WMC relies on the Xbox hardware-overlay
+        // convention which we can't replicate. The heuristic
+        // approximates the result by finding the placeholder Visual the
+        // overlay WOULD have landed on.
+        //
+        // ---- DEFAULTED OFF — known-broken in two ways ----
+        //   1. The right candidate often isn't what the heuristic
+        //      catches. Captured corpus has THREE PiP-shaped Visuals
+        //      per chrome rebuild: a 258×145 horizontal-gradient
+        //      selector ring (the actually-visible focused tile) and
+        //      a pair of 256×144 / 256×148 vertical-gradient
+        //      placeholders in scrolled-off carousel rows whose
+        //      parent-chain accumulates to negative Y. The Vertical-
+        //      gradient filter targets the wrong tree.
+        //   2. Z-order: the WPF Grid in ExtenderSessionControl.xaml
+        //      puts splashHost ABOVE MediaCanvas, so the splash
+        //      scene-graph's placeholder gradient is drawn ON TOP
+        //      of the video element. Even if (1) were fixed, the
+        //      user would see the gradient, not the video. Needs
+        //      either alpha=0 on the locked Visual or a ZIndex
+        //      promotion of MediaCanvas while a PIP is locked.
+        //
+        // The diagnostic events ([PIP-CAND], [PIP-LOCK], [PIP-UNLOCK])
+        // and the VideoPipCandidateChanged hook stay live so future
+        // work can iterate on a better discriminator without rewiring
+        // the plumbing. Flip ON via the Debugging page to test new
+        // heuristics; expect false-positive shrinks until both issues
+        // above are addressed.
+        public bool EnableSplashPipRouting = false;
 
         // Manual A/V sync offset, in milliseconds. Applied by the
         // (Phase 2) sync controller to compensate for downstream

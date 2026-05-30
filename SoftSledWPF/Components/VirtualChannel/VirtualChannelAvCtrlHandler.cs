@@ -357,7 +357,15 @@ namespace SoftSled.Components.VirtualChannel {
                         int OpenMediaPayloadSurfaceID = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4 + OpenMediaPayloadURLLength);
                         int OpenMediaPayloadTimeOut = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4 + OpenMediaPayloadURLLength + 4);
 
-                        m_logger?.LogDebug($"AVCTRL: OpenMedia ({OpenMediaPayloadURL})");
+                        // Promoted to LogInfo + extra fields so the surface
+                        // routing in Splash/RUI mode can be diagnosed from
+                        // the log alone. SurfaceID is the MS-RRSP2
+                        // DynamicSurfaceFactory uid that the splash channel
+                        // assigns at CreateVideoInstance time — see the
+                        // SurfaceRouter wire-up for the resolve chain.
+                        m_logger?.LogInfo($"AVCTRL: OpenMedia URL=\"{OpenMediaPayloadURL}\" " +
+                                          $"SurfaceID={OpenMediaPayloadSurfaceID} " +
+                                          $"Timeout={OpenMediaPayloadTimeOut}s");
 
                         // Re-arm the first-Start ack deferral for the
                         // new session.

@@ -15,6 +15,21 @@
          tears them back down so the user can return to the landing page
          without process exit. -->
     <Grid>
+        <!-- Splash HostWindow background fill (MS-RRSP2 §2.2.4.23.2).
+             Painted at the BOTTOM of the visual stack so the video plane
+             (MediaCanvas) can composite over it and the splash scene
+             graph (splashHost) can paint over both — matches the Xbox /
+             WMC hardware model of "video plane between background and
+             UI". SplashController pushes HostWindow_SetBackgroundColor
+             updates here via the BackgroundColorSink callback wired in
+             ExtenderSessionControl.xaml.cs; default Transparent so a
+             session that never sets a background colour leaves whatever
+             rdpDisplay shows (GDI mode) or just the parent's grey
+             showing through (RUI mode before HostWindow_SetBackgroundColor
+             arrives). -->
+        <Rectangle x:Name="splashBackgroundFill"
+                   Fill="Transparent"/>
+
         <Canvas x:Name="MediaCanvas" ClipToBounds="True">
             <ffme:MediaElement x:Name="Media"
                        Canvas.Left="0" Canvas.Top="0"

@@ -238,6 +238,12 @@
             <Grid x:Name="DebuggingView"
                   Margin="100,200,100,80"
                   Visibility="Collapsed">
+                <!-- Wrap in ScrollViewer so the growing list of toggles
+                     stays reachable. Matches the Video sub-view pattern. -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              PanningMode="VerticalOnly"
+                              Focusable="False">
                 <StackPanel HorizontalAlignment="Left" Width="640">
                     <CheckBox x:Name="ChkLogger"
                               Style="{StaticResource WmcCheckBoxStyle}"
@@ -265,7 +271,138 @@
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Include RDP Fastpath logs"
                               Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkLogAvPlayback"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Include A/V (FFME / sync) logs"
+                              Click="OnConfigChanged"/>
+
+                    <!-- Heuristic PiP routing toggle. Disabled when WMC's
+                         chrome false-positives on the bottom-left 16:9
+                         filter (e.g. some Home-screen carousels match
+                         the same shape signature). -->
+                    <CheckBox x:Name="ChkEnableSplashPipRouting"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Auto-shrink video to splash PiP placeholder (heuristic)"
+                              Margin="0,16,0,0"
+                              Click="OnConfigChanged"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="10,4,0,8"
+                               TextWrapping="Wrap"
+                               Text="WMC's wire protocol doesn't actually tell us where to draw the video plane (Xbox uses a hardware overlay we can't replicate). When ON, the splash controller sniffs for a 16:9 gradient-only Visual in the bottom-left quadrant and routes the video element there. Turn OFF if the video shrinks on screens that don't actually have a PiP."/>
+
+                    <!-- File logging — survives a crash so release-build
+                         hangs on remote machines can still be diagnosed. -->
+                    <CheckBox x:Name="ChkLogToFile"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Write logs to file"
+                              Margin="0,16,0,0"
+                              Click="OnConfigChanged"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="10,4,0,8"
+                               TextWrapping="Wrap"
+                               Text="A timestamped log file is created per session in the folder shown below. Auto-flushed so a crash still leaves a captured log on disk."/>
+                    <StackPanel Orientation="Horizontal" Margin="10,0,0,0">
+                        <TextBlock x:Name="LogFolderPath"
+                                   Style="{StaticResource WmcBodyStyle}"
+                                   Foreground="{StaticResource WmcSubtleTextBrush}"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   MaxWidth="360"
+                                   Text="(folder)"/>
+                        <Button x:Name="BtnOpenLogFolder"
+                                Content="Open"
+                                Margin="12,0,0,0"
+                                Padding="14,4"
+                                Click="OnOpenLogFolderClick"/>
+                        <Button x:Name="BtnChangeLogFolder"
+                                Content="Change..."
+                                Margin="6,0,0,0"
+                                Padding="14,4"
+                                Click="OnChangeLogFolderClick"/>
+                    </StackPanel>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="10,4,0,0"
+                               FontSize="12"
+                               Text="Log path changes take effect on the NEXT app launch."/>
+
+                    <!-- =================================================
+                         Advanced diagnostics — these surface env-var
+                         toggles that previously had to be set before
+                         launch via `set SOFTSLED_X=Y`. The config
+                         values are translated into process-scope env
+                         vars at session start, so existing call sites
+                         keep working unchanged.
+                         ================================================= -->
+                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
+                               Text="Advanced diagnostic dumps"
+                               Foreground="{StaticResource WmcTextBrush}"
+                               Margin="0,32,0,4"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="0,0,0,16"
+                               TextWrapping="Wrap"
+                               Text="Mirror of the SOFTSLED_* environment variables. Files are written to the folder shown below. Changes take effect on the NEXT session start."/>
+
+                    <CheckBox x:Name="ChkDumpSplashRaw"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Dump splash wire bytes + events (SOFTSLED_SPLASH_RAW_DUMP)"
+                              Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkDumpFastpathRaw"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Dump RDP fastpath payloads (SOFTSLED_FASTPATH_RAW_DUMP)"
+                              Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkDumpAudio"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Dump fastpath audio PCM (SOFTSLED_AUDIO_DUMP)"
+                              Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkDumpRtspWire"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Dump RTSP control-channel wire (SOFTSLED_RTSP_WIRE_DUMP)"
+                              Click="OnConfigChanged"/>
+
+                    <StackPanel Orientation="Horizontal" Margin="10,8,0,0">
+                        <TextBlock x:Name="DumpFolderPath"
+                                   Style="{StaticResource WmcBodyStyle}"
+                                   Foreground="{StaticResource WmcSubtleTextBrush}"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   MaxWidth="360"
+                                   Text="(folder)"/>
+                        <Button x:Name="BtnOpenDumpFolder"
+                                Content="Open"
+                                Margin="12,0,0,0"
+                                Padding="14,4"
+                                Click="OnOpenDumpFolderClick"/>
+                        <Button x:Name="BtnChangeDumpFolder"
+                                Content="Change..."
+                                Margin="6,0,0,0"
+                                Padding="14,4"
+                                Click="OnChangeDumpFolderClick"/>
+                    </StackPanel>
+
+                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
+                               Text="Advanced behaviour toggles"
+                               Foreground="{StaticResource WmcTextBrush}"
+                               Margin="0,32,0,4"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="0,0,0,16"
+                               TextWrapping="Wrap"
+                               Text="These change runtime behaviour rather than producing files. Use for isolating audio-pipeline issues."/>
+
+                    <CheckBox x:Name="ChkAudioTrace"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Verbose fastpath audio trace (SOFTSLED_AUDIO_TRACE)"
+                              Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkAudioViaNAudio"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Route RTSP audio via NAudio (SOFTSLED_AUDIO_VIA_NAUDIO)"
+                              Click="OnConfigChanged"/>
                 </StackPanel>
+                </ScrollViewer>
             </Grid>
 
             <!-- ===== About sub-view ======================================= -->

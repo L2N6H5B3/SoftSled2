@@ -123,6 +123,25 @@ namespace SoftSledWPF.Components.Shell {
                 ChkLogMcxSess.IsChecked        = _config.LogMcxSessChannel;
                 ChkLogAvCtrl.IsChecked         = _config.LogAvCtrlChannel;
                 ChkLogRdpFastpath.IsChecked    = _config.LogRdpFastpath;
+                ChkLogAvPlayback.IsChecked     = _config.LogAvPlayback;
+                ChkEnableSplashPipRouting.IsChecked = _config.EnableSplashPipRouting;
+                ChkLogToFile.IsChecked         = _config.LogToFile;
+                LogFolderPath.Text             = SoftSledWPF.Components.Shell
+                                                          .ExtenderSessionControl
+                                                          .GetLogDirectoryForConfig()
+                                                  ?? "(default: %LocalAppData%/SoftSled/Logs)";
+
+                // Advanced env-var-driven toggles (Debugging sub-view).
+                ChkDumpSplashRaw.IsChecked     = _config.EnableSplashRawDump;
+                ChkDumpFastpathRaw.IsChecked   = _config.EnableFastpathRawDump;
+                ChkDumpAudio.IsChecked         = _config.EnableAudioDump;
+                ChkDumpRtspWire.IsChecked      = _config.EnableRtspWireDump;
+                ChkAudioTrace.IsChecked        = _config.EnableAudioTrace;
+                ChkAudioViaNAudio.IsChecked    = _config.EnableAudioViaNAudio;
+                DumpFolderPath.Text            = SoftSledWPF.Components.Shell
+                                                          .ExtenderSessionControl
+                                                          .GetDumpsRootDirectory()
+                                                  ?? "(default: %LocalAppData%/SoftSled/Dumps)";
                 RefreshResolutionButton();
                 RefreshAudioSyncDisplay();
                 UpdateAnimationDependencies();
@@ -238,6 +257,15 @@ namespace SoftSledWPF.Components.Shell {
             _config.LogMcxSessChannel       = ChkLogMcxSess.IsChecked == true;
             _config.LogAvCtrlChannel        = ChkLogAvCtrl.IsChecked == true;
             _config.LogRdpFastpath          = ChkLogRdpFastpath.IsChecked == true;
+            _config.LogAvPlayback           = ChkLogAvPlayback.IsChecked == true;
+            _config.EnableSplashPipRouting  = ChkEnableSplashPipRouting.IsChecked == true;
+            _config.LogToFile               = ChkLogToFile.IsChecked == true;
+            _config.EnableSplashRawDump     = ChkDumpSplashRaw.IsChecked == true;
+            _config.EnableFastpathRawDump   = ChkDumpFastpathRaw.IsChecked == true;
+            _config.EnableAudioDump         = ChkDumpAudio.IsChecked == true;
+            _config.EnableRtspWireDump      = ChkDumpRtspWire.IsChecked == true;
+            _config.EnableAudioTrace        = ChkAudioTrace.IsChecked == true;
+            _config.EnableAudioViaNAudio    = ChkAudioViaNAudio.IsChecked == true;
 
             try {
                 SoftSledConfigManager.WriteConfig(_config);
@@ -359,6 +387,101 @@ namespace SoftSledWPF.Components.Shell {
         private void BtnAudioSyncReset_Click(object sender, RoutedEventArgs e) {
             if (_config == null) return;
             AdjustAudioSyncOffset(-_config.AudioSyncOffsetMs);
+        }
+
+        /// <summary>
+        /// Open the directory where session log files are written. Falls
+        /// back to launching the parent if the leaf doesn't exist yet
+        /// (it's created lazily when a session opens its first file).
+        /// </summary>
+        private void OnOpenLogFolderClick(object sender, RoutedEventArgs e) {
+            OpenFolderOrExplain("log",
+                SoftSledWPF.Components.Shell.ExtenderSessionControl.GetLogDirectoryForConfig());
+        }
+
+        /// <summary>
+        /// Open the root dump directory (siblings: splash/, fastpath/,
+        /// audio/). Auto-creates the directory if it doesn't exist yet —
+        /// individual sub-dirs are created lazily by the dumper that
+        /// owns them.
+        /// </summary>
+        private void OnOpenDumpFolderClick(object sender, RoutedEventArgs e) {
+            OpenFolderOrExplain("dump",
+                SoftSledWPF.Components.Shell.ExtenderSessionControl.GetDumpsRootDirectory());
+        }
+
+        /// <summary>
+        /// "Change log folder" — opens a folder picker, stores the
+        /// chosen path in <see cref="SoftSledConfig.LogFileDirectory"/>,
+        /// and refreshes the displayed path. Takes effect on next app
+        /// launch (the AppLog is opened at App.OnStartup; mid-session
+        /// changes don't move the open file).
+        /// </summary>
+        private void OnChangeLogFolderClick(object sender, RoutedEventArgs e) {
+            if (_config == null) return;
+            string chosen = PickFolder("Choose folder for SoftSled log files", _config.LogFileDirectory);
+            if (chosen == null) return;
+            _config.LogFileDirectory = chosen;
+            try { SoftSledConfigManager.WriteConfig(_config); }
+            catch (Exception ex) { MessageBox.Show("Couldn't save config: " + ex.Message); return; }
+            LogFolderPath.Text = chosen;
+        }
+
+        /// <summary>
+        /// "Change dumps folder" — same UX as above but stores into
+        /// <see cref="SoftSledConfig.DumpsDirectory"/>. Takes effect on
+        /// next session start (dump dirs are pushed into env vars at
+        /// session-start time, not app-start).
+        /// </summary>
+        private void OnChangeDumpFolderClick(object sender, RoutedEventArgs e) {
+            if (_config == null) return;
+            string chosen = PickFolder("Choose folder for SoftSled dump output", _config.DumpsDirectory);
+            if (chosen == null) return;
+            _config.DumpsDirectory = chosen;
+            try { SoftSledConfigManager.WriteConfig(_config); }
+            catch (Exception ex) { MessageBox.Show("Couldn't save config: " + ex.Message); return; }
+            DumpFolderPath.Text = chosen;
+        }
+
+        /// <summary>
+        /// Show a WinForms FolderBrowserDialog with the given title /
+        /// initial selection. Returns the chosen path, or null when the
+        /// user cancels. Uses WinForms because WPF on .NET Framework
+        /// 4.6.1 has no built-in folder picker — we already reference
+        /// System.Windows.Forms for related shell work, so no new dep.
+        /// </summary>
+        private static string PickFolder(string description, string initialPath) {
+            using (var dlg = new System.Windows.Forms.FolderBrowserDialog()) {
+                dlg.Description = description;
+                dlg.ShowNewFolderButton = true;
+                if (!string.IsNullOrWhiteSpace(initialPath)
+                    && System.IO.Directory.Exists(initialPath)) {
+                    dlg.SelectedPath = initialPath;
+                }
+                var result = dlg.ShowDialog();
+                if (result != System.Windows.Forms.DialogResult.OK) return null;
+                return dlg.SelectedPath;
+            }
+        }
+
+        /// <summary>Shared "open in explorer" plumbing for the Debugging-page folder buttons.</summary>
+        private static void OpenFolderOrExplain(string kind, string dir) {
+            if (string.IsNullOrEmpty(dir)) {
+                MessageBox.Show($"Couldn't resolve the {kind} folder path. " +
+                                "Check the config Debugging section.");
+                return;
+            }
+            try {
+                if (!System.IO.Directory.Exists(dir)) {
+                    System.IO.Directory.CreateDirectory(dir);
+                }
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
+                    FileName        = dir,
+                    UseShellExecute = true,
+                });
+            } catch (Exception ex) {
+                MessageBox.Show($"Couldn't open the {kind} folder:\n{dir}\n\n{ex.Message}");
+            }
         }
 
         private void BtnResolution_Click(object sender, RoutedEventArgs e) {

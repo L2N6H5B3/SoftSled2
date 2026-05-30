@@ -164,5 +164,27 @@ namespace SoftSled.Components.Splash {
                 throw new InvalidOperationException(
                     $"SplashPayloadReader: tried to read {n} byte(s), only {_limit - _pos} remaining");
         }
+
+        /// <summary>
+        /// Return a hex string of the bytes that remain unread, WITHOUT
+        /// advancing the position. Diagnostic only — used by
+        /// <c>SplashController</c> to surface message bodies we don't
+        /// otherwise decode (unhandled msgids, video-family probing,
+        /// PiP-candidate detection). Format: "AA-BB-CC-..."; truncated
+        /// past <paramref name="maxBytes"/> with " ...(+N more)" so a
+        /// malformed huge trailer doesn't blow up the log file.
+        /// </summary>
+        public string PeekRemainingHex(int maxBytes = 128) {
+            int n = _limit - _pos;
+            if (n <= 0) return "(empty)";
+            int take = n < maxBytes ? n : maxBytes;
+            var sb = new System.Text.StringBuilder(take * 3);
+            for (int i = 0; i < take; i++) {
+                if (i > 0) sb.Append('-');
+                sb.Append(_buf[_pos + i].ToString("X2"));
+            }
+            if (n > take) sb.Append($" ...(+{n - take} more)");
+            return sb.ToString();
+        }
     }
 }

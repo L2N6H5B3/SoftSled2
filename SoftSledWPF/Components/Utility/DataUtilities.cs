@@ -69,9 +69,9 @@ namespace SoftSled.Components.Utility {
             return BitConverter.ToInt64(result, 0);
         }
 
-        public static byte[] GetInt4Byte(int integer) {
+        public static byte[] GetInt4Byte(int integer, bool reverse = true) {
             byte[] result = BitConverter.GetBytes(integer);
-            if (BitConverter.IsLittleEndian) {
+            if (BitConverter.IsLittleEndian && reverse) {
                 Array.Reverse(result);
             }
             return result;

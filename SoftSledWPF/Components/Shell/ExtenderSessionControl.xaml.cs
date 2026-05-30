@@ -32,6 +32,28 @@ namespace SoftSledWPF.Components.Shell {
     public partial class ExtenderSessionControl : UserControl {
 
         private Logger m_logger;
+        // Concrete handle to the per-session FileLogger so Stop() can
+        // Dispose it (which flushes the close-marker line). null when
+        // file logging is disabled in config or failed to initialise.
+        private FileLogger _fileLogger;
+        // Aliased logger for the A/V playback log group ([ffme], [engine],
+        // [controller], [external-sync], [zoom], [decoder], [mf]). Set to
+        // either m_logger or null in StartInternal based on
+        // SoftSledConfig.LogAvPlayback. All A/V-related log call sites in
+        // this file use this instead of m_logger directly so the toggle
+        // takes effect without per-site conditionals — flip it OFF when
+        // isolating splash-channel diagnostics from playback noise.
+        private Logger _avLogger;
+        // Aliased logger for the RDP-fastpath log group, specifically the
+        // [overlay] dispatcher-side lines emitted from OnOverlayRegionChanged
+        // / ApplyOverlayMapping. Gated by SoftSledConfig.LogRdpFastpath so
+        // it shares its toggle with the raw [fp-overlay] decode lines that
+        // WmcFastpathOverlayRegionDecoder emits — flipping the one checkbox
+        // turns the whole overlay diagnostic stack on or off. The toggle is
+        // separate from _avLogger because fastpath overlay updates can fire
+        // many times per second and shouldn't pollute the default-ON A/V
+        // playback log group.
+        private Logger _fastpathLogger;
         private ExtenderDevice m_device;
         private ExtenderCapabilities m_capabilities;
 
@@ -227,8 +249,11 @@ namespace SoftSledWPF.Components.Shell {
         // Send a position-only MOVE event, deduped at framebuffer-pixel
         // granularity. Returns false if the position couldn't be mapped.
         private bool SendMouseMove(ushort rdpX, ushort rdpY) {
+            // If the Mouse hasn't moved position since last send, return with no action
             if (rdpX == _lastSentRX && rdpY == _lastSentRY) return true;
+            // Send Mouse Move Action
             bool ok = freeRdpClient.SendMouse(SoftSledNative.PTR_FLAGS_MOVE, rdpX, rdpY);
+            // If Last Mouse Move Action was Acknowledged, save position
             if (ok) { _lastSentRX = rdpX; _lastSentRY = rdpY; }
             return ok;
         }
@@ -378,6 +403,23 @@ namespace SoftSledWPF.Components.Shell {
 
             // Load the SoftSled Config
             var cfg = SoftSledConfigManager.ReadConfig();
+            // Apply the env-var-driven diagnostic toggles to the process
+            // environment so existing call sites (RtspWireDumper,
+            // SplashRawDumper, WmcFastpathAudioPlayer, etc.) that read
+            // SOFTSLED_* vars don't need to know about config. Must
+            // happen BEFORE any of those consumers are constructed.
+            ApplyAdvancedDumpConfig(cfg);
+            // Wire the A/V playback log toggle — all [ffme]/[engine]/etc.
+            // call sites use _avLogger so flipping LogAvPlayback OFF in
+            // the Debugging page silences the entire playback log group
+            // without needing per-site guards.
+            _avLogger = cfg.LogAvPlayback ? m_logger : null;
+            // Wire the RDP-fastpath log toggle (shares its checkbox with
+            // the raw [fp-overlay] decoder logs). The [overlay] dispatcher-
+            // side lines from OnOverlayRegionChanged / ApplyOverlayMapping
+            // log through this instead of _avLogger so they don't spam the
+            // default-ON A/V group.
+            _fastpathLogger = cfg.LogRdpFastpath ? m_logger : null;
             // Load the Extender Capabilities
             m_capabilities = new ExtenderCapabilities();
             // Create the FreeRDP Client
@@ -439,7 +481,7 @@ namespace SoftSledWPF.Components.Shell {
             // master clock.
             if (cfg.UseExternalSyncMode) {
                 _extSyncController = new SoftSled.Components.AudioVisual.ExternalSync
-                    .ExternalSyncMediaController(m_logger, cfg.AudioSyncOffsetMs);
+                    .ExternalSyncMediaController(_avLogger, cfg.AudioSyncOffsetMs);
                 AvCtrlHandler.MediaController = _extSyncController;
                 // Phase 2: hand the FFME MediaElement to the
                 // external-sync controller so it can chase NAudio's
@@ -448,11 +490,11 @@ namespace SoftSledWPF.Components.Shell {
                 // / MediaClosed itself; until video opens it just
                 // sits idle.
                 _extSyncController.AttachVideoMediaElement(Media);
-                m_logger.LogInfo($"[controller] external-sync mode active " +
-                                 $"(audio: libav+NAudio; video: FFME with SpeedRatio nudges; " +
-                                 $"audioSyncOffset={cfg.AudioSyncOffsetMs}ms)");
+                _avLogger?.LogInfo($"[controller] external-sync mode active " +
+                                   $"(audio: libav+NAudio; video: FFME with SpeedRatio nudges; " +
+                                   $"audioSyncOffset={cfg.AudioSyncOffsetMs}ms)");
             } else {
-                _ffmeController = new SoftSled.Components.AudioVisual.FfmeMediaController(Media, m_logger);
+                _ffmeController = new SoftSled.Components.AudioVisual.FfmeMediaController(Media, _avLogger);
                 AvCtrlHandler.MediaController = _ffmeController;
             }
 
@@ -469,6 +511,22 @@ namespace SoftSledWPF.Components.Shell {
                 m_logger, Dispatcher, SplashPayloadBigEndian, SplashHandler.SendBytes,
                 enableSplashAudio: enableSplashAudio);
             _splashController.AttachHost(splashHost);
+            // Push HostWindow / Window background-colour updates into the
+            // dedicated Rectangle that sits at the bottom of the Grid
+            // (see ExtenderSessionControl.xaml). This keeps the FFME
+            // video plane (MediaCanvas) and the splash scene-graph
+            // (splashHost) cleanly layered above the background fill,
+            // so video composites correctly without needing the splash
+            // to suppress its own background.
+            _splashController.SetBackgroundColorSink(c => {
+                if (Dispatcher.CheckAccess()) {
+                    splashBackgroundFill.Fill = new SolidColorBrush(c);
+                } else {
+                    Dispatcher.BeginInvoke(new Action(() => {
+                        splashBackgroundFill.Fill = new SolidColorBrush(c);
+                    }));
+                }
+            });
             SplashHandler.AttachController(_splashController);
 
             // Surface routing for DMCT OpenMedia. In GDI mode this is a
@@ -478,8 +536,15 @@ namespace SoftSledWPF.Components.Shell {
             // VideoSurfaceRequested → SurfaceRouter.RouteVideoToSurface.
             var renderMode = m_capabilities?.GetRenderMode()
                              ?? SoftSled.Components.Extender.WMCRenderMode.GDI;
+            // Read the PiP routing toggle here rather than carrying the
+            // whole config through to SurfaceRouter — keeps the
+            // SurfaceRouter API surface lean and lets the user disable
+            // the heuristic without touching the router itself when
+            // it false-positives at their resolution.
+            var routerCfg = SoftSledConfigManager.ReadConfig();
             _surfaceRouter = new SoftSled.Components.AudioVisual.SurfaceRouter(
-                renderMode, MediaCanvas, Media, _splashController, m_logger);
+                renderMode, MediaCanvas, Media, _splashController, m_logger,
+                pipRoutingEnabled: routerCfg.EnableSplashPipRouting);
             AvCtrlHandler.VideoSurfaceRequested += sid => _surfaceRouter.RouteVideoToSurface(sid);
             AvCtrlHandler.VideoPipelineClosed += () => _surfaceRouter.ReleaseSurface();
 
@@ -501,10 +566,10 @@ namespace SoftSledWPF.Components.Shell {
                         var openSw = System.Diagnostics.Stopwatch.StartNew();
                         await Media.Open(stream);
                         openSw.Stop();
-                        m_logger.LogInfo($"[ffme] Media.Open succeeded in {openSw.ElapsedMilliseconds}ms " +
-                                         $"({(hasVideo ? "video+audio" : "audio-only")})");
+                        _avLogger?.LogInfo($"[ffme] Media.Open succeeded in {openSw.ElapsedMilliseconds}ms " +
+                                           $"({(hasVideo ? "video+audio" : "audio-only")})");
                     } catch (Exception ex) {
-                        m_logger.LogError($"[ffme] Media.Open failed: {ex.Message}");
+                        _avLogger?.LogError($"[ffme] Media.Open failed: {ex.Message}");
                     } finally {
                         _videoOpenComplete?.TrySetResult(true);
                     }
@@ -518,20 +583,20 @@ namespace SoftSledWPF.Components.Shell {
                             var done = await System.Threading.Tasks.Task.WhenAny(
                                 tcs, System.Threading.Tasks.Task.Delay(2000));
                             if (done != tcs) {
-                                m_logger.LogInfo("[ffme] audio open: video TCS timed out, opening anyway");
+                                _avLogger?.LogInfo("[ffme] audio open: video TCS timed out, opening anyway");
                             }
                         }
                         await MediaAudio.Open(stream);
-                        m_logger.LogInfo("[ffme] MediaAudio.Open succeeded (PCM audio pipeline)");
+                        _avLogger?.LogInfo("[ffme] MediaAudio.Open succeeded (PCM audio pipeline)");
                     } catch (Exception ex) {
-                        m_logger.LogError($"[ffme] MediaAudio.Open failed: {ex.Message}");
+                        _avLogger?.LogError($"[ffme] MediaAudio.Open failed: {ex.Message}");
                     }
                 }));
 
             AvCtrlHandler.VideoPipelineClosed += () =>
                 Dispatcher.BeginInvoke(new Action(async () => {
-                    try { await Media.Close(); } catch (Exception ex) { m_logger.LogError($"[ffme] Media.Close failed: {ex.Message}"); }
-                    try { await MediaAudio.Close(); } catch (Exception ex) { m_logger.LogError($"[ffme] MediaAudio.Close failed: {ex.Message}"); }
+                    try { await Media.Close(); } catch (Exception ex) { _avLogger?.LogError($"[ffme] Media.Close failed: {ex.Message}"); }
+                    try { await MediaAudio.Close(); } catch (Exception ex) { _avLogger?.LogError($"[ffme] MediaAudio.Close failed: {ex.Message}"); }
                     Media.Visibility = Visibility.Collapsed;
                     _lastOverlay = null;
                     _videoOpenComplete?.TrySetResult(false);
@@ -616,6 +681,18 @@ namespace SoftSledWPF.Components.Shell {
             _pressedMouseFlags = 0;
             _pressedXFlags = 0;
             _lastSentRX = -1; _lastSentRY = -1;
+
+            // Session-end marker — written through m_logger so it also
+            // hits the textbox. Reaches the app log if file logging is on.
+            try { m_logger?.LogInfo("[session] stop"); } catch { }
+
+            // Dispose the file logger ONLY if we own it (we created a
+            // per-session FileLogger because App.AppLog was null at
+            // session start). When App.AppLog is the file sink we leave
+            // disposal to App.OnExit so subsequent sessions in the same
+            // app run keep writing to the same file.
+            try { _fileLogger?.Dispose(); } catch { }
+            _fileLogger = null;
         }
 
         private void MediaCanvas_SizeChanged(object sender, SizeChangedEventArgs sizeEv) {
@@ -706,10 +783,10 @@ namespace SoftSledWPF.Components.Shell {
                     bool loaded = Unosquare.FFME.Library.LoadFFmpegAsync()
                                    .GetAwaiter().GetResult();
                     sw.Stop();
-                    m_logger?.LogInfo($"[ffme] preload completed in {sw.ElapsedMilliseconds}ms " +
-                                      $"(loaded={loaded}, version={Unosquare.FFME.Library.FFmpegVersionInfo})");
+                    _avLogger?.LogInfo($"[ffme] preload completed in {sw.ElapsedMilliseconds}ms " +
+                                       $"(loaded={loaded}, version={Unosquare.FFME.Library.FFmpegVersionInfo})");
                 } catch (Exception ex) {
-                    m_logger?.LogError($"[ffme] preload failed: {ex.Message}");
+                    _avLogger?.LogError($"[ffme] preload failed: {ex.Message}");
                 }
             });
 
@@ -762,7 +839,7 @@ namespace SoftSledWPF.Components.Shell {
                                                      $"[MEDIA_FAILED] {ex}");
                         }
                     } catch { }
-                    m_logger.LogError($"[ffme] MediaFailed: {e.ErrorException?.Message ?? "(no message)"}");
+                    _avLogger?.LogError($"[ffme] MediaFailed: {e.ErrorException?.Message ?? "(no message)"}");
                 };
                 Media.MediaInitializing += (s, e) => {
                     try {
@@ -822,17 +899,37 @@ namespace SoftSledWPF.Components.Shell {
                                                      "[MEDIA_OPENED]");
                         }
                     } catch { }
-                    m_logger.LogInfo("[ffme] MediaOpened");
+                    _avLogger?.LogInfo("[ffme] MediaOpened");
                 };
 
                 Unosquare.FFME.Library.FFmpegLogLevel = 32;
             } catch (Exception ex) {
-                m_logger?.LogError($"[ffme] log capture init failed: {ex.Message}");
+                _avLogger?.LogError($"[ffme] log capture init failed: {ex.Message}");
             }
         }
 
         private void OnOverlayRegionChanged(object sender,
             SoftSled.Components.AudioVisual.WmcFastpathOverlayRegionDecoder.OverlayRegion region) {
+            // INFO log under the A/V playback toggle so the user can tell
+            // — without enabling the noisier raw fastpath decode log —
+            // whether WMC is sending fastpath video-position updates AT
+            // ALL (which is how WMC drives PiP positioning in GDI mode,
+            // and might or might not still drive it in RUI mode).
+            //
+            // Rate-limit: only log when the region actually CHANGED so a
+            // mid-video stream of identical "stay full-screen" updates
+            // doesn't flood the log. _lastOverlay is the dispatcher-thread
+            // snapshot updated below.
+            bool changed = _lastOverlay == null
+                           || _lastOverlay.X      != region.X
+                           || _lastOverlay.Y      != region.Y
+                           || _lastOverlay.Width  != region.Width
+                           || _lastOverlay.Height != region.Height;
+            if (changed) {
+                _fastpathLogger?.LogInfo($"[overlay] fastpath video-region update " +
+                                         $"{region} " +
+                                         $"(srcSpace = RDP framebuffer pixels; this is the WMC PiP-position signal)");
+            }
             Dispatcher.BeginInvoke(new Action(() => {
                 _lastOverlay = region;
                 ApplyOverlayMapping(region);
@@ -856,7 +953,7 @@ namespace SoftSledWPF.Components.Shell {
                         stretch = System.Windows.Media.Stretch.Uniform; break;
                 }
                 Media.Stretch = stretch;
-                m_logger.LogInfo($"[zoom] WMC mode {mode} → Media.Stretch={stretch}");
+                _avLogger?.LogInfo($"[zoom] WMC mode {mode} → Media.Stretch={stretch}");
             }));
         }
 
@@ -864,7 +961,15 @@ namespace SoftSledWPF.Components.Shell {
             SoftSled.Components.AudioVisual.WmcFastpathOverlayRegionDecoder.OverlayRegion region) {
             if (region == null || MediaCanvas == null) return;
             var bmp = freeRdpClient?.Bitmap;
-            if (bmp == null || bmp.PixelWidth <= 0 || bmp.PixelHeight <= 0) return;
+            if (bmp == null || bmp.PixelWidth <= 0 || bmp.PixelHeight <= 0) {
+                // ApplyOverlayMapping needs the RDP framebuffer size as
+                // its coordinate space — without a bitmap there's no way
+                // to scale region pixels into WPF coords. Log so the
+                // user can tell the difference between "overlay update
+                // arrived but no bitmap" vs "no overlay updates at all."
+                _fastpathLogger?.LogInfo($"[overlay] update {region} arrived but no RDP framebuffer — skipped");
+                return;
+            }
             double srcW = bmp.PixelWidth;
             double srcH = bmp.PixelHeight;
 
@@ -888,9 +993,14 @@ namespace SoftSledWPF.Components.Shell {
             Media.Width = wpfW;
             Media.Height = wpfH;
 
-            m_logger.LogDebug($"[overlay] RDP {region} (src {srcW}x{srcH}) → " +
-                              $"WPF ({wpfX:F1},{wpfY:F1}) {wpfW:F1}x{wpfH:F1} " +
-                              $"in {cellW:F1}x{cellH:F1} cell, scale={scale:F3}");
+            // Promoted from Debug to Info (under _avLogger) so the user
+            // can see — at a glance, without enabling raw fastpath log —
+            // when fastpath overlay updates actually reposition the FFME
+            // element. This is the consequence of the [overlay] fastpath
+            // video-region update log a couple of methods above.
+            _fastpathLogger?.LogInfo($"[overlay] APPLIED RDP {region} (src {srcW:F0}x{srcH:F0}) → " +
+                                     $"FFME at WPF ({wpfX:F1},{wpfY:F1}) {wpfW:F1}x{wpfH:F1} " +
+                                     $"in {cellW:F1}x{cellH:F1} cell, scale={scale:F3}");
         }
 
         private void SizeMediaToCanvasFill() {
@@ -907,8 +1017,54 @@ namespace SoftSledWPF.Components.Shell {
         }
 
         void InitialiseLogger() {
-            m_logger = new TextBoxLogger(loggerTextBox, Window.GetWindow(this));
+            // Build the underlying loggers. The textbox is the in-session
+            // overlay (Ctrl+L to show); the file sink is the post-mortem
+            // capture that survives a crash. Composing them through
+            // CompositeLogger keeps every existing m_logger.Log* call
+            // site unchanged while broadcasting to both sinks transparently.
+            var textboxLogger = new TextBoxLogger(loggerTextBox, Window.GetWindow(this));
+
+            // PREFER the app-lifetime file logger created in App.OnStartup.
+            // It captures global exception handlers and any pre-session
+            // diagnostics. The session and the app share the same file so
+            // a crash that ends the session/app leaves one coherent
+            // timeline on disk.
+            Logger fileSink = SoftSledWPF.App.AppLog;
+            bool fileSinkIsAppOwned = (fileSink != null);
+
+            // Fallback: if App.OnStartup couldn't init a file logger but
+            // the config now says LogToFile=true (e.g. the user toggled
+            // the checkbox after app launch), spin up a per-session file
+            // here. We own its Dispose in Stop() in that case.
+            if (fileSink == null) {
+                try {
+                    var cfg = SoftSledConfigManager.ReadConfig();
+                    if (cfg.LogToFile) {
+                        string logFilePath = ResolveLogFilePath(cfg.LogFileDirectory);
+                        _fileLogger = new FileLogger(logFilePath);
+                        fileSink = _fileLogger;
+                    }
+                } catch (Exception ex) {
+                    // Log-init failure must not block session start.
+                    System.Diagnostics.Debug.WriteLine("[FileLogger init] " + ex);
+                }
+            }
+
+            m_logger = fileSink != null
+                ? (Logger)new CompositeLogger(textboxLogger, fileSink)
+                : textboxLogger;
             m_logger.IsLoggingDebug = true;
+
+            // Session-start marker — useful both in the textbox and in
+            // the file timeline (e.g. when the app log contains multiple
+            // sessions from a long-running process).
+            if (fileSinkIsAppOwned) {
+                m_logger.LogInfo("[session] start — file sink: app log (shared across sessions)");
+            } else if (_fileLogger != null) {
+                m_logger.LogInfo($"[session] start — file sink: per-session ({_fileLogger.Path})");
+            } else {
+                m_logger.LogInfo("[session] start — file sink: none (LogToFile is off)");
+            }
 
             // Apply the persistent EnableLogger toggle from config. The
             // textbox starts Collapsed in XAML so the default ("not shown")
@@ -918,6 +1074,105 @@ namespace SoftSledWPF.Components.Shell {
                     SetLoggerVisible(true);
                 }
             } catch { /* config read failure → leave hidden */ }
+        }
+
+        /// <summary>
+        /// Build the absolute path to the session log file. The directory
+        /// is taken from <paramref name="configuredDir"/> when non-empty,
+        /// otherwise defaults to <c>%LocalAppData%/SoftSled/Logs</c>. The
+        /// filename is per-session and timestamped so concurrent runs
+        /// don't clobber each other and so the user can correlate a
+        /// crash by its timestamp.
+        /// </summary>
+        private static string ResolveLogFilePath(string configuredDir) {
+            string dir = configuredDir;
+            if (string.IsNullOrWhiteSpace(dir)) {
+                string localAppData = Environment.GetFolderPath(
+                    Environment.SpecialFolder.LocalApplicationData);
+                dir = System.IO.Path.Combine(localAppData, "SoftSled", "Logs");
+            }
+            string fileName = $"softsled-{DateTime.Now:yyyyMMdd-HHmmss}-pid{System.Diagnostics.Process.GetCurrentProcess().Id}.log";
+            return System.IO.Path.Combine(dir, fileName);
+        }
+
+        /// <summary>
+        /// Returns the directory the file logger is writing to (or would
+        /// write to per current config), without actually opening a file.
+        /// Used by the "Open log folder" button on the Debugging page.
+        /// </summary>
+        internal static string GetLogDirectoryForConfig() {
+            try {
+                var cfg = SoftSledConfigManager.ReadConfig();
+                return System.IO.Path.GetDirectoryName(ResolveLogFilePath(cfg.LogFileDirectory));
+            } catch {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Root directory for diagnostic dumps — splash raw bytes,
+        /// fastpath payloads, audio PCM. Surfaced by the Debugging
+        /// page's "Open dumps folder" button. Honours
+        /// <see cref="SoftSledConfig.DumpsDirectory"/>; falls back to
+        /// the platform default when empty.
+        /// </summary>
+        internal static string GetDumpsRootDirectory() {
+            try {
+                string dir = null;
+                try { dir = SoftSledConfigManager.ReadConfig()?.DumpsDirectory; } catch { }
+                if (string.IsNullOrWhiteSpace(dir)) {
+                    dir = System.IO.Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "SoftSled", "Dumps");
+                }
+                return dir;
+            } catch {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Translate the diagnostic-toggle config fields into process-
+        /// scope environment variables that the existing SOFTSLED_*
+        /// consumers (RtspWireDumper, SplashRawDumper,
+        /// WmcFastpathAudioPlayer, RTSPClient audio routing) already
+        /// read. The config values always WIN over any shell-set env
+        /// vars — a ticked checkbox is the most explicit signal of
+        /// intent we can get. An unticked box clears the corresponding
+        /// env var so subsequent toggles take effect on the next
+        /// session.
+        /// </summary>
+        private static void ApplyAdvancedDumpConfig(SoftSledConfig cfg) {
+            string dumpsRoot = GetDumpsRootDirectory();
+            string splashDir   = cfg.EnableSplashRawDump   && dumpsRoot != null
+                                 ? System.IO.Path.Combine(dumpsRoot, "splash")   : null;
+            string fastpathDir = cfg.EnableFastpathRawDump && dumpsRoot != null
+                                 ? System.IO.Path.Combine(dumpsRoot, "fastpath") : null;
+            string audioDir    = cfg.EnableAudioDump       && dumpsRoot != null
+                                 ? System.IO.Path.Combine(dumpsRoot, "audio")    : null;
+            // RDPGFX dump shares the SAME enable flag as fastpath — both
+            // are RDP-layer diagnostics for the PiP-positioning hunt and
+            // there's no use case for one without the other right now.
+            // The native rdpgfx_main.c dumper (in our patched
+            // freerdp-client3.dll) creates rdpgfx-raw.log inside this
+            // directory; it needs the dir to exist before the env var
+            // is read at session start. Ensure_directory below.
+            string rdpgfxDir   = cfg.EnableFastpathRawDump && dumpsRoot != null
+                                 ? System.IO.Path.Combine(dumpsRoot, "rdpgfx")   : null;
+            if (rdpgfxDir != null) {
+                try { System.IO.Directory.CreateDirectory(rdpgfxDir); } catch { }
+            }
+
+            try { Environment.SetEnvironmentVariable("SOFTSLED_SPLASH_RAW_DUMP",   splashDir); }   catch { }
+            try { Environment.SetEnvironmentVariable("SOFTSLED_FASTPATH_RAW_DUMP", fastpathDir); } catch { }
+            try { Environment.SetEnvironmentVariable("SOFTSLED_RDPGFX_RAW_DUMP",   rdpgfxDir); }   catch { }
+            try { Environment.SetEnvironmentVariable("SOFTSLED_AUDIO_DUMP",        audioDir); }    catch { }
+            try { Environment.SetEnvironmentVariable("SOFTSLED_RTSP_WIRE_DUMP",
+                cfg.EnableRtspWireDump   ? "1" : null); } catch { }
+            try { Environment.SetEnvironmentVariable("SOFTSLED_AUDIO_TRACE",
+                cfg.EnableAudioTrace     ? "1" : null); } catch { }
+            try { Environment.SetEnvironmentVariable("SOFTSLED_AUDIO_VIA_NAUDIO",
+                cfg.EnableAudioViaNAudio ? "1" : null); } catch { }
         }
 
         /// <summary>
@@ -978,6 +1233,11 @@ namespace SoftSledWPF.Components.Shell {
 
         private void On_VirtualChannelSend(object sender, VirtualChannelSendArgs e) {
             freeRdpClient.SendOnVirtualChannel(e.channelName, e.data);
+
+            //// Additional Code to attempt to start the Splash Handshake
+            //if (e.channelName == "devcaps" && e.additional == "BIG") {
+            //    SplashHandler.StartHandshake();
+            //}
         }
 
         private void FreeRdpClient_StateChanged(object sender, StateChangedEventArgs e) {
@@ -1045,9 +1305,34 @@ namespace SoftSledWPF.Components.Shell {
                     $"text=\"{e.statusText}\")");
             }
 
+            // In RUI mode the splash channel is the only UI source — the
+            // WMC server pushes the entire shell over MS-RRSP2 onto
+            // splashHost, and rdpDisplay just shows whatever fallback
+            // framebuffer the host happens to paint (typically a
+            // 1280×720 letterbox of the player chrome). When DMCT
+            // OpenMedia kicks off video playback, that fallback
+            // framebuffer ends up pillarboxed in the centre of our
+            // client area, painting opaque over the FFME video element
+            // sitting underneath and leaving only ~25-pixel "bars"
+            // visible on each side. Solution: never make rdpDisplay
+            // Visible in RUI mode — the splash IS the UI and the FFME
+            // element (positioned by SurfaceRouter) is the video.
+            var renderMode = m_capabilities?.GetRenderMode()
+                             ?? SoftSled.Components.Extender.WMCRenderMode.GDI;
+            bool isRui = renderMode == SoftSled.Components.Extender.WMCRenderMode.RUI;
             Dispatcher.BeginInvoke(new Action(() => {
                 if (e.shellOpen) {
-                    rdpDisplay.Visibility = Visibility.Visible;
+                    if (!isRui) {
+                        rdpDisplay.Visibility = Visibility.Visible;
+                    } else {
+                        // Be defensive — if anything previously
+                        // flipped rdpDisplay to Visible (e.g. an early
+                        // status arrived under GDI assumption before
+                        // capabilities were established), force it
+                        // back to Hidden so it can't cover the splash
+                        // composition or the FFME video plane.
+                        rdpDisplay.Visibility = Visibility.Hidden;
+                    }
                     // WMC shell is now ready to paint — drop the curtain
                     // so the RDP / splash layers underneath become visible.
                     // We do this here rather than on FreeRDP State.Active

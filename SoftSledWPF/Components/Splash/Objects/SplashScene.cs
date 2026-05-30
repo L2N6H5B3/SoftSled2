@@ -58,6 +58,11 @@ namespace SoftSled.Components.Splash.Objects {
 
     internal sealed class SplashWindow : SplashGenericObject {
 
+        // The SplashRenderHost reference is no longer wired here —
+        // background paint is owned by the layered Rectangle outside
+        // splashHost (see ExtenderSessionControl.xaml). This class
+        // just records the colour as state and lets the controller's
+        // background-color sink push it to the actual paint surface.
         private readonly SplashRenderHost _host;
 
         public Color BackgroundColor { get; private set; } = Colors.Transparent;
@@ -69,13 +74,22 @@ namespace SoftSled.Components.Splash.Objects {
         }
 
         public void SetBackgroundColor(Color c) {
+            // Record state only. The wire dispatch in
+            // SplashController.DispatchWindow forwards Window_SetBackgroundColor
+            // (msgid=0) to the background-color sink directly — keeping
+            // the actual paint side-effect out of SplashWindow lets us
+            // composite background ↓ video ↓ scene-graph cleanly in the
+            // outer Grid.
             BackgroundColor = c;
-            _host?.SetBackground(c);
         }
 
         public override void OnDestroyed() {
-            // Clear the host background when the window goes away.
-            _host?.SetBackground(Colors.Transparent);
+            // Window destruction doesn't reset the host background — the
+            // HostWindow background sticks until a subsequent
+            // HostWindow_SetBackgroundColor explicitly overrides it.
+            // (The previous "reset to transparent" behaviour was a
+            // side-effect of painting through SplashRenderHost; the
+            // layered model leaves this to whoever owns the sink.)
         }
     }
 

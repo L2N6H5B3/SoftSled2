@@ -39,21 +39,34 @@ namespace SoftSled.Components.AudioVisual {
         private readonly SplashController _splash;    // may be null in GDI mode
         private readonly Logger _logger;
         private readonly Dispatcher _dispatcher;
+        private readonly bool _pipRoutingEnabled;
 
         private int _currentSurfaceId = -1;
         private bool _subscribed;
+        // Latest PiP rectangle reported by SplashController.
+        // Empty = no PiP, route video to the full host bounds.
+        // Populated = strict PIP-CAND match (see SplashController's
+        // PIP-LOCK logic); routes the video element to the PiP
+        // rectangle until either the PiP visual is destroyed, video
+        // closes, or the host re-resolves a different surface rect.
+        private Rect _currentPipRect = Rect.Empty;
 
         public SurfaceRouter(WMCRenderMode mode,
                              Canvas canvas,
                              FrameworkElement primary,
                              SplashController splashController,
-                             Logger logger) {
+                             Logger logger,
+                             bool pipRoutingEnabled = true) {
             _mode    = mode;
             _canvas  = canvas ?? throw new ArgumentNullException(nameof(canvas));
             _primary = primary ?? throw new ArgumentNullException(nameof(primary));
             _splash  = splashController;
             _logger  = logger;
             _dispatcher = canvas.Dispatcher;
+            _pipRoutingEnabled = pipRoutingEnabled;
+            if (!pipRoutingEnabled) {
+                _logger?.LogInfo("[surface-router] PiP routing DISABLED by config — video stays at the full surface rect.");
+            }
         }
 
         /// <summary>
@@ -73,6 +86,9 @@ namespace SoftSled.Components.AudioVisual {
                     if (surfaceId != 0) {
                         _logger?.LogInfo($"[surface-router] GDI mode received non-zero surface " +
                                          $"ID {surfaceId} — ignoring, using full canvas.");
+                    } else {
+                        _logger?.LogInfo("[surface-router] GDI mode — sizing video element to full canvas " +
+                                         "(WMC will reposition via fastpath overlay updates)");
                     }
                     SizeToCanvas();
                     return;
@@ -84,13 +100,20 @@ namespace SoftSled.Components.AudioVisual {
                         SizeToCanvas();
                         return;
                     }
-                    if (!_splash.TryGetSurfaceScreenRect((uint)surfaceId, out var rect) ||
-                        rect.IsEmpty || rect.Width <= 0 || rect.Height <= 0) {
-                        _logger?.LogInfo($"[surface-router] Surface {surfaceId} not yet in registry " +
+                    bool ok = _splash.TryGetSurfaceScreenRect((uint)surfaceId, out var rect,
+                                                              out uint splashHandle, out bool viaUid);
+                    string resolutionTag = viaUid
+                        ? $"DMCT uid={surfaceId} → splash handle=0x{splashHandle:X8}"
+                        : $"splash handle=0x{splashHandle:X8} (direct)";
+                    if (!ok || rect.IsEmpty || rect.Width <= 0 || rect.Height <= 0) {
+                        _logger?.LogInfo($"[surface-router] RUI mode — {resolutionTag} NOT yet in registry " +
                                          $"(or zero-sized) — falling back to full canvas. Will re-snap " +
                                          $"on next SurfaceScreenRectChanged.");
                         SizeToCanvas();
                     } else {
+                        _logger?.LogInfo($"[surface-router] RUI mode — {resolutionTag} resolved to " +
+                                         $"rect=({rect.X:F0},{rect.Y:F0} {rect.Width:F0}x{rect.Height:F0}) " +
+                                         $"— positioning video element");
                         ApplyRect(rect);
                     }
                     EnsureSubscribed();
@@ -109,8 +132,12 @@ namespace SoftSled.Components.AudioVisual {
                 return;
             }
             _currentSurfaceId = -1;
+            _currentPipRect = Rect.Empty;
             if (_subscribed && _splash != null) {
-                _splash.SurfaceScreenRectChanged -= OnSplashSurfaceRectChanged;
+                _splash.SurfaceScreenRectChanged   -= OnSplashSurfaceRectChanged;
+                if (_pipRoutingEnabled) {
+                    _splash.VideoPipCandidateChanged -= OnSplashPipCandidateChanged;
+                }
                 _subscribed = false;
             }
         }
@@ -119,20 +146,112 @@ namespace SoftSled.Components.AudioVisual {
 
         private void EnsureSubscribed() {
             if (_subscribed || _splash == null) return;
-            _splash.SurfaceScreenRectChanged += OnSplashSurfaceRectChanged;
+            _splash.SurfaceScreenRectChanged   += OnSplashSurfaceRectChanged;
+            // PiP routing is a heuristic — gate the subscription so a
+            // user can disable it without the controller still re-
+            // arranging the video element.
+            if (_pipRoutingEnabled) {
+                _splash.VideoPipCandidateChanged += OnSplashPipCandidateChanged;
+            }
             _subscribed = true;
         }
 
-        private void OnSplashSurfaceRectChanged(uint surfaceId, Rect rect) {
-            // We only care about updates for the surface we're currently
-            // bound to. Subscription is global because v1 broadcasts
-            // host-resize to every surface, so we filter here.
-            if (_currentSurfaceId < 0) return;
-            if ((uint)_currentSurfaceId != surfaceId) return;
+        /// <summary>
+        /// Receives PiP destination hints from SplashController. WMC does
+        /// NOT emit a spec-level positioning message for the video plane
+        /// (no <c>VideoPool_Draw</c> in any captured corpus); the
+        /// controller infers the destination heuristically from
+        /// gradient-only Visuals with PiP-shaped geometry that appear
+        /// while a video instance is active. An empty rect means "video
+        /// closed / PiP placeholder destroyed — revert to full canvas".
+        /// </summary>
+        private void OnSplashPipCandidateChanged(uint visualHandle, Rect rect) {
             if (!_dispatcher.CheckAccess()) {
-                _dispatcher.BeginInvoke(new Action(() => ApplyRect(rect)));
+                _dispatcher.BeginInvoke(new Action(() => OnSplashPipCandidateChanged(visualHandle, rect)));
+                return;
+            }
+            // Ignore PiP hints unless we're actively routing a surface —
+            // the AvCtrl handler has set _currentSurfaceId on OpenMedia
+            // and cleared it on CloseMedia, so this gate keeps us from
+            // racing a stale event into a "no current video" state.
+            if (_currentSurfaceId < 0) {
+                return;
+            }
+            if (rect.IsEmpty || rect.Width <= 0 || rect.Height <= 0) {
+                _currentPipRect = Rect.Empty;
+                _logger?.LogInfo($"[surface-router] PiP unlock — reverting video element to full canvas " +
+                                 $"(previous lock vis=0x{visualHandle:X8})");
+                SizeToCanvas();
             } else {
+                _currentPipRect = rect;
+                _logger?.LogInfo($"[surface-router] PiP lock vis=0x{visualHandle:X8} → routing video to " +
+                                 $"rect=({rect.X:F0},{rect.Y:F0} {rect.Width:F0}x{rect.Height:F0})");
                 ApplyRect(rect);
+            }
+        }
+
+        private void OnSplashSurfaceRectChanged(uint surfaceId, Rect rect) {
+            // No per-ID filtering here.
+            //
+            // SplashController.RaiseSurfaceScreenRectChanged broadcasts
+            // splash *object handles* (e.g. 0x06000049), but
+            // _currentSurfaceId stores the DMCT *uid* (e.g. 101 — the
+            // DynamicSurfaceFactory uid that DMCT OpenMedia carries as
+            // its SurfaceID). A direct `_currentSurfaceId == surfaceId`
+            // check would never match because the two are different
+            // numbering spaces. Until v1 needs per-surface broadcasting,
+            // the cheapest correct behaviour is: any rect-changed event
+            // means "host or surface state has shifted, re-fetch the
+            // rect for my current uid through the same path RouteVideoToSurface
+            // uses." TryGetSurfaceScreenRect already knows how to bridge
+            // uid → splash handle → screen rect.
+            if (_currentSurfaceId < 0) return;
+            if (!_dispatcher.CheckAccess()) {
+                _dispatcher.BeginInvoke(new Action(() => ReResolveAndApply()));
+            } else {
+                ReResolveAndApply();
+            }
+        }
+
+        /// <summary>
+        /// Re-resolve the current surfaceId to its screen rect and apply
+        /// it. Used both by the rect-changed event and by external
+        /// "re-check the position" pokes. No-op when no surface is
+        /// currently routed.
+        /// </summary>
+        private void ReResolveAndApply() {
+            if (_currentSurfaceId < 0) return;
+            switch (_mode) {
+                case WMCRenderMode.GDI:
+                    SizeToCanvas();
+                    return;
+                case WMCRenderMode.RUI:
+                    // PiP lock wins over the surface rect: when WMC has
+                    // pinned the video to a small rectangle inside its
+                    // chrome (browsing-while-playing), host-size events
+                    // should keep that pin, not yank the video back to
+                    // fullscreen.
+                    if (!_currentPipRect.IsEmpty && _currentPipRect.Width > 0 && _currentPipRect.Height > 0) {
+                        _logger?.LogDebug($"[surface-router] re-resolve honoured PiP lock → rect=({_currentPipRect.X:F0},{_currentPipRect.Y:F0} {_currentPipRect.Width:F0}x{_currentPipRect.Height:F0})");
+                        ApplyRect(_currentPipRect);
+                        return;
+                    }
+                    if (_splash == null) {
+                        SizeToCanvas();
+                        return;
+                    }
+                    bool ok = _splash.TryGetSurfaceScreenRect((uint)_currentSurfaceId, out var rect,
+                                                              out uint splashHandle, out bool viaUid);
+                    if (ok && !rect.IsEmpty && rect.Width > 0 && rect.Height > 0) {
+                        string tag = viaUid
+                            ? $"uid={_currentSurfaceId} → splash handle=0x{splashHandle:X8}"
+                            : $"splash handle=0x{splashHandle:X8}";
+                        _logger?.LogDebug($"[surface-router] re-resolve {tag} → rect=({rect.X:F0},{rect.Y:F0} {rect.Width:F0}x{rect.Height:F0})");
+                        ApplyRect(rect);
+                    } else {
+                        SizeToCanvas();
+                    }
+                    return;
             }
         }
 
@@ -140,11 +259,15 @@ namespace SoftSled.Components.AudioVisual {
             // Match the existing SizeMediaToCanvasFill semantics in
             // ExtenderSessionControl — element fills the canvas top-
             // left to bottom-right.
-            if (_canvas.ActualWidth <= 0 || _canvas.ActualHeight <= 0) return;
+            if (_canvas.ActualWidth <= 0 || _canvas.ActualHeight <= 0) {
+                _logger?.LogInfo("[surface-router] SizeToCanvas skipped — canvas has zero size (layout not run yet)");
+                return;
+            }
             Canvas.SetLeft(_primary, 0);
             Canvas.SetTop(_primary, 0);
             _primary.Width  = _canvas.ActualWidth;
             _primary.Height = _canvas.ActualHeight;
+            _logger?.LogDebug($"[surface-router] SizeToCanvas → video element at (0,0) {_canvas.ActualWidth:F0}x{_canvas.ActualHeight:F0}");
         }
 
         private void ApplyRect(Rect rect) {
@@ -156,6 +279,7 @@ namespace SoftSled.Components.AudioVisual {
             Canvas.SetTop(_primary, rect.Y);
             _primary.Width  = rect.Width;
             _primary.Height = rect.Height;
+            _logger?.LogDebug($"[surface-router] ApplyRect → video element at ({rect.X:F0},{rect.Y:F0}) {rect.Width:F0}x{rect.Height:F0}");
         }
     }
 }
