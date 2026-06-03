@@ -78,7 +78,14 @@ namespace SoftSled.Components.AudioVisual {
         /// timestamp may not be the reliable presentation clock.</summary>
         public Action<string> DiagLog;
         private int _diagCount;
-        private const int DiagMaxLines = 24;
+        private int _mauSeen;
+        private const int DiagMaxLines = 64;
+        // Log the first 12 MAUs (startup burst) then 1 in every 100 thereafter
+        // (≈ every 4 s of video) so we capture STEADY-STATE timing too — needed
+        // to tell whether Correspondence NTP is an encoder-content clock
+        // (Δhdr/Δntp → 1.0 at steady state, usable as an SR) or just a
+        // transmission wallclock (burst-rate slope, unusable).
+        private bool DiagShouldLog() => _mauSeen <= 12 || (_mauSeen % 100) == 0;
 
         private static uint ReadU32(byte[] b, int o) =>
             (uint)((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]);
@@ -265,8 +272,9 @@ namespace SoftSled.Components.AudioVisual {
                 if (d3Present) { if (currentOffset + 4 <= bufLen) decodeTime = ReadU32(buf, currentOffset); currentOffset += 4; }
                 if (pPresent)  { if (currentOffset + 4 <= bufLen) presTime   = ReadU32(buf, currentOffset); currentOffset += 4; }
                 if (nPresent)  { if (currentOffset + 8 <= bufLen) { npt = ReadU64(buf, currentOffset); hasNpt = true; } currentOffset += 8; }
-                if (DiagLog != null && _diagCount < DiagMaxLines
-                    && (fragType == F_FIRST_FRAGMENT || fragType == F_COMPLETE_MAU)) {
+                if (DiagLog != null && (fragType == F_FIRST_FRAGMENT || fragType == F_COMPLETE_MAU)) {
+                    _mauSeen++;
+                    if (_diagCount < DiagMaxLines && DiagShouldLog()) {
                     _diagCount++;
                     DiagLog($"[wmrpt-video] seq={seqNum} F={fragType} S={(sBit ? 1 : 0)} hdrRtpTs={rtpTs} " +
                             $"sendTime={(sendTime < 0 ? "-" : sendTime.ToString())} " +
@@ -274,6 +282,7 @@ namespace SoftSled.Components.AudioVisual {
                             $"decodeTime={(decodeTime < 0 ? "-" : decodeTime.ToString())} " +
                             $"presTime={(presTime < 0 ? "-" : presTime.ToString())} " +
                             $"npt={(hasNpt ? NtpToSeconds(npt).ToString("F3") + "s" : "-")}");
+                    }
                 }
                 if (r6Present) currentOffset += 4;
                 if (r7Present) currentOffset += 4;

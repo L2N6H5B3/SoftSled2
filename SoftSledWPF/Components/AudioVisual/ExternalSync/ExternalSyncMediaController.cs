@@ -273,6 +273,16 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                     prerollMs: _videoJitterBufferMs, _log);
                 // Slave video presentation to the audio device clock.
                 _pacer.SetMasterClock(() => _renderer?.GetMediaTimeMs() ?? 0L);
+                // Feed the video RTCP BFR W3 the pacer's REAL buffered span so
+                // WMPNss sees the jitter buffer draining and speeds up to refill
+                // — without this, video delivery settles ~3% under real-time and
+                // the buffer slowly starves mid-playback (mirrors the audio fix).
+                try {
+                    var p = _pacer;
+                    _rtsp?.SetVideoBufferOccupancyProvider(() => p?.BufferedMs ?? 0);
+                } catch (Exception ex) {
+                    _log?.LogError($"[ext-sync] SetVideoBufferOccupancyProvider failed: {ex.Message}");
+                }
                 UpdateSyncOffset();
 
                 var d = new LibAvVideoPushDecoder(id, clockHz, _log);

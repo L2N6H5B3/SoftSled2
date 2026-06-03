@@ -62,7 +62,12 @@ namespace SoftSled.Components.AudioVisual {
         /// NTP timelines can be compared for a stable cross-stream A/V offset.</summary>
         public Action<string> DiagLog;
         private int _diagCount;
-        private const int DiagMaxLines = 24;
+        private int _mauSeen;
+        private const int DiagMaxLines = 64;
+        // First 12 MAUs (startup burst) then 1 in every 100 — captures
+        // steady-state timing so Correspondence NTP can be judged as
+        // content-clock vs transmission-clock. See video depacketizer.
+        private bool DiagShouldLog() => _mauSeen <= 12 || (_mauSeen % 100) == 0;
 
         private static uint ReadU32(byte[] b, int o) =>
             (uint)((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]);
@@ -178,15 +183,17 @@ namespace SoftSled.Components.AudioVisual {
                 if (d3Present) { if (currentOffset + 4 <= bufLen) decodeTime = ReadU32(buf, currentOffset); currentOffset += 4; }
                 if (pPresent)  { if (currentOffset + 4 <= bufLen) presTime   = ReadU32(buf, currentOffset); currentOffset += 4; }
                 if (nPresent)  { if (currentOffset + 8 <= bufLen) { npt = ReadU64(buf, currentOffset); hasNpt = true; } currentOffset += 8; }
-                if (DiagLog != null && _diagCount < DiagMaxLines
-                    && (fragType == F_FIRST_FRAGMENT || fragType == F_COMPLETE_MAU)) {
-                    _diagCount++;
-                    DiagLog($"[wmrpt-audio] seq={seqNum} F={fragType} hdrRtpTs={rtpTs} " +
-                            $"sendTime={(sendTime < 0 ? "-" : sendTime.ToString())} " +
-                            $"corr={(hasCorr ? $"ntp={NtpToSeconds(corrNtp):F3}s/rtp={corrRtp}" : "-")} " +
-                            $"decodeTime={(decodeTime < 0 ? "-" : decodeTime.ToString())} " +
-                            $"presTime={(presTime < 0 ? "-" : presTime.ToString())} " +
-                            $"npt={(hasNpt ? NtpToSeconds(npt).ToString("F3") + "s" : "-")}");
+                if (DiagLog != null && (fragType == F_FIRST_FRAGMENT || fragType == F_COMPLETE_MAU)) {
+                    _mauSeen++;
+                    if (_diagCount < DiagMaxLines && DiagShouldLog()) {
+                        _diagCount++;
+                        DiagLog($"[wmrpt-audio] seq={seqNum} F={fragType} hdrRtpTs={rtpTs} " +
+                                $"sendTime={(sendTime < 0 ? "-" : sendTime.ToString())} " +
+                                $"corr={(hasCorr ? $"ntp={NtpToSeconds(corrNtp):F3}s/rtp={corrRtp}" : "-")} " +
+                                $"decodeTime={(decodeTime < 0 ? "-" : decodeTime.ToString())} " +
+                                $"presTime={(presTime < 0 ? "-" : presTime.ToString())} " +
+                                $"npt={(hasNpt ? NtpToSeconds(npt).ToString("F3") + "s" : "-")}");
+                    }
                 }
                 if (r6Present) currentOffset += 4;
                 if (r7Present) currentOffset += 4;

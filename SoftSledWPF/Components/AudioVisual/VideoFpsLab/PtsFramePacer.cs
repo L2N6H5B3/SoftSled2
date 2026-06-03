@@ -120,6 +120,22 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         private long _lastReleasedElapsed;
         private long _diagPrevReleased, _diagPrevDropped, _diagPrevUnderflows;
 
+        /// <summary>Current buffered video duration in ms — the PTS span of the
+        /// queued (decoded, not-yet-presented) frames. This is the honest
+        /// occupancy to report in the video RTCP BFR W3 field: when the server
+        /// under-delivers video the span shrinks, signalling it to speed up
+        /// (mirrors NAudioMasterRenderer.BufferedMs for audio).</summary>
+        public int BufferedMs {
+            get {
+                lock (_gate) {
+                    if (_queue.Count < 2) return 0;
+                    var arr = _queue.ToArray();
+                    long span = arr[arr.Length - 1].PtsMs - arr[0].PtsMs;
+                    return span < 0 ? 0 : (span > 65535 ? 65535 : (int)span);
+                }
+            }
+        }
+
         public long Released   => Interlocked.Read(ref _released);
         public long Underflows => Interlocked.Read(ref _underflows);
         public long Dropped    => Interlocked.Read(ref _dropped);

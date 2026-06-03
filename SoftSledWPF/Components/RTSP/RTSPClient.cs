@@ -168,6 +168,15 @@ namespace SoftSled.Components.RTSP {
             _audioBufferMsProvider = audioBufferMs;
         }
 
+        /// <summary>Same as the audio provider but for the VIDEO BFR W3 — the
+        /// pacer's real buffered-frame span (ms). Without it the video W3 sat
+        /// flat at TD and the server under-delivered video ~3%, slowly draining
+        /// the jitter buffer until it starved (video froze mid-playback).</summary>
+        private Func<int> _videoBufferMsProvider;
+        public void SetVideoBufferOccupancyProvider(Func<int> videoBufferMs) {
+            _videoBufferMsProvider = videoBufferMs;
+        }
+
         WmrptVideoDepacketizer videoDepacketizer = null;
         WmrptAudioDepacketizer audioDepacketizer = null;
         List<Rtsp.Messages.RtspRequestSetup> setup_messages = new List<Rtsp.Messages.RtspRequestSetup>(); // setup messages still to send
@@ -1487,23 +1496,24 @@ namespace SoftSled.Components.RTSP {
         /// <summary>
         /// Compute the W3 buffer-fill value (ms) for the BFR FCI.
         ///
-        /// <para>AUDIO with a wired occupancy provider: report the REAL
-        /// current audio buffer level. The Xbox-360 capture shows the genuine
-        /// client reports its true, dynamically-changing buffer here (audio
-        /// ramps 0→~TD then wiggles just under it, dipping whenever the server
-        /// under-delivers). That dip is the signal WMPNss uses to speed up and
-        /// refill. Our previous flat ramp-then-peg-at-TD never showed a drain,
-        /// so the server settled at ~94% audio delivery and our buffer slowly
-        /// starved. Honest reporting closes that loop.</para>
+        /// <para>With a wired occupancy provider (audio AND video): report the
+        /// REAL current buffer level for that stream. The Xbox-360 capture shows
+        /// the genuine client reports its true, dynamically-changing buffer here
+        /// (it dips whenever the server under-delivers); that dip is the signal
+        /// WMPNss uses to speed up and refill. A flat ramp-then-peg-at-TD never
+        /// shows a drain, so the server settles a few % under real-time and the
+        /// buffer slowly starves — observed on AUDIO (~94%, fixed first) and then
+        /// on VIDEO (~97%, drained the jitter buffer over ~3 min until it froze).
+        /// Honest per-stream reporting closes both loops.</para>
         ///
-        /// <para>VIDEO / fallback (no provider): the synthetic ramp 0 → TD over
-        /// <see cref="BfrRampDurationMs"/> then hold at TD — unchanged, since
-        /// video delivery already runs at full rate.</para>
+        /// <para>Fallback (no provider wired): the synthetic ramp 0 → TD over
+        /// <see cref="BfrRampDurationMs"/> then hold at TD.</para>
         /// </summary>
         private ushort ComputeBfrW3Fill(bool isAudio) {
-            if (isAudio && _audioBufferMsProvider != null) {
+            var provider = isAudio ? _audioBufferMsProvider : _videoBufferMsProvider;
+            if (provider != null) {
                 int ms;
-                try { ms = _audioBufferMsProvider(); } catch { ms = 0; }
+                try { ms = provider(); } catch { ms = 0; }
                 if (ms < 0) ms = 0;
                 if (ms > 65535) ms = 65535;
                 return (ushort)ms;
