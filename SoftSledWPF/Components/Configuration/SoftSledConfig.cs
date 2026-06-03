@@ -156,18 +156,6 @@ namespace SoftSled.Components.Configuration {
         public int SessionWidth  = 1280;
         public int SessionHeight = 720;
 
-        // External-sync mode — Phase 1 of the FFME-bypass audio
-        // path. When true, audio decoding + rendering goes through
-        // a libav + NAudio pipeline owned by
-        // ExternalSyncMediaController instead of FFME. The audio
-        // device's playback position becomes the master clock,
-        // which (in later phases) the video pipeline will chase
-        // via SpeedRatio nudges. Phase 1 only covers MP3-only
-        // audio sessions; other content still uses the FFME path
-        // and this flag has no effect there. Default OFF —
-        // experimental.
-        public bool UseExternalSyncMode = false;
-
         // Heuristic PiP routing: when active video is playing, the
         // splash controller sniffs for gradient-only ~16:9 Visuals in
         // the bottom-left of the screen and routes the video element
@@ -223,6 +211,14 @@ namespace SoftSled.Components.Configuration {
         // Phase 1: stored only, not yet applied. The Phase 2 sync
         // controller will consume this in its drift-correction loop.
         public int AudioSyncOffsetMs = 0;
+
+        // Video jitter-buffer depth (ms) for the libav + D3DImage player.
+        // Larger values buffer more decoded video to absorb bursty RTSP
+        // delivery (the wire delivers in ~160 ms bursts around I-frames),
+        // smoothing judder at the cost of more start-up latency. Feeds
+        // PtsFramePacer's pre-roll / max-buffer. Default 250 ms; clamped
+        // 0–4000 ms in the UI. Takes effect on the next playback.
+        public int VideoJitterBufferMs = 250;
 
     }
 }

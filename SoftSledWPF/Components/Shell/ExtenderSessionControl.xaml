@@ -4,7 +4,6 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:splash="clr-namespace:SoftSled.Components.Splash"
-             xmlns:ffme="clr-namespace:Unosquare.FFME;assembly=ffme.win"
              mc:Ignorable="d"
              Focusable="True"
              Background="Black"
@@ -31,18 +30,14 @@
                    Fill="Transparent"/>
 
         <Canvas x:Name="MediaCanvas" ClipToBounds="True">
-            <ffme:MediaElement x:Name="Media"
-                       Canvas.Left="0" Canvas.Top="0"
-                       Background="Black"
-                       LoadedBehavior="Play"
-                       UnloadedBehavior="Manual"
-                       Visibility="Collapsed"/>
-            <ffme:MediaElement x:Name="MediaAudio"
-                       Canvas.Left="-100" Canvas.Top="-100"
-                       Width="1" Height="1"
-                       LoadedBehavior="Play"
-                       UnloadedBehavior="Manual"
-                       Visibility="Visible"/>
+            <!-- Video plane: an Image whose Source is the D3DImage from the
+                 GPU presenter (libav decode → D3D9Ex surface). The RDP layer
+                 (rdpDisplay) composites over this with per-pixel alpha, same
+                 as it did over the old FFME element. -->
+            <Image x:Name="VideoImage"
+                   Canvas.Left="0" Canvas.Top="0"
+                   Stretch="Fill"
+                   Visibility="Collapsed"/>
         </Canvas>
 
         <Image x:Name="rdpDisplay"

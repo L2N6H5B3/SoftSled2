@@ -185,7 +185,7 @@ External-sync mode plugs into RTSPClient via three additions:
 | Key | Type | Default | Effect |
 |---|---|---|---|
 | `UseExternalSyncMode` | bool | `false` | Selects `ExternalSyncMediaController` instead of `FfmeMediaController` at session start. |
-| `AudioSyncOffsetMs` | int | `0` | User-tunable offset, clamped to ±250 ms. Subtracted from `drift` so positive values shift the perceived audio time earlier → controller targets video at a later position → user sees video lag audio at the speakers by `offset` ms. Matches AVR "Audio Delay" convention. Adjuster lives in Settings → Audio. |
+| `AudioSyncOffsetMs` | int | `0` | User-tunable A/V trim, clamped to ±500 ms. **Current pacer semantics (post-FFME-removal):** added to the cross-stream offset (`offset = rtpInfoOffsetMs + AudioSyncOffsetMs`), and the pacer releases a video frame when `framePts-pts0 ≤ master + offset`, so a **larger (more positive) value releases video EARLIER → reduces video-lags-audio**. (The old "positive ⇒ video lags more" note described the removed FFME SpeedRatio path and was inverted for the pacer.) Adjustable live in-session via **Ctrl+] / Ctrl+[** (20 ms steps; ] = video earlier), which persists back here, or in Settings → Audio. |
 
 ## Supported wire codecs
 

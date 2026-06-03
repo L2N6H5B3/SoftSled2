@@ -73,13 +73,12 @@ namespace SoftSledWPF.Components.Shell {
         private SoftSled.Components.AudioVisual.WmcFastpathOverlayRegionDecoder _overlayDecoder;
         private SoftSledNative.FastpathCallback _fastpathDispatcher;
         private SoftSled.Components.AudioVisual.WmcFastpathOverlayRegionDecoder.OverlayRegion _lastOverlay;
-        private SoftSled.Components.AudioVisual.FfmeMediaController _ffmeController;
-        // Phase 1 external-sync controller — alternative to FFME for
-        // audio-only MP3 sessions. Constructed when
-        // SoftSledConfig.UseExternalSyncMode is set; null otherwise.
+        // Sole playback controller: audio decoded via libav + rendered through
+        // NAudio (the master clock); video decoded via libav and presented on a
+        // GPU surface (D3DImage), paced to the audio clock. _videoPresenter owns
+        // the D3D9Ex device + D3DImage; it's bound to VideoImage.Source.
         private SoftSled.Components.AudioVisual.ExternalSync.ExternalSyncMediaController _extSyncController;
-
-        private System.Threading.Tasks.TaskCompletionSource<bool> _videoOpenComplete;
+        private SoftSled.Components.AudioVisual.VideoFpsLab.D3DImagePresenter _videoPresenter;
 
         private System.IO.StreamWriter _ffmeLogWriter;
         private System.Threading.Timer _ffmeLogFlushTimer;
@@ -470,33 +469,34 @@ namespace SoftSledWPF.Components.Shell {
             SplashHandler = new VirtualChannelSplashHandler(m_logger);
             SplashHandler.VirtualChannelSend += On_VirtualChannelSend;
 
-            // Playback controller selection. Phase 1 of the external-
-            // sync plan: when SoftSledConfig.UseExternalSyncMode is
-            // set, ExternalSyncMediaController takes over (audio-only
-            // for now — owns its own libav decoder + NAudio renderer,
-            // bypasses FFME entirely for audio). Anything that needs
-            // video still uses FFME via the controller swap below.
-            // Phase 2/3 will move video into the same controller with
-            // FFME used as a video-only decoder driven by NAudio's
-            // master clock.
-            if (cfg.UseExternalSyncMode) {
-                _extSyncController = new SoftSled.Components.AudioVisual.ExternalSync
-                    .ExternalSyncMediaController(_avLogger, cfg.AudioSyncOffsetMs);
-                AvCtrlHandler.MediaController = _extSyncController;
-                // Phase 2: hand the FFME MediaElement to the
-                // external-sync controller so it can chase NAudio's
-                // master clock via SpeedRatio nudges when video is
-                // present. The controller subscribes to MediaOpened
-                // / MediaClosed itself; until video opens it just
-                // sits idle.
-                _extSyncController.AttachVideoMediaElement(Media);
-                _avLogger?.LogInfo($"[controller] external-sync mode active " +
-                                   $"(audio: libav+NAudio; video: FFME with SpeedRatio nudges; " +
-                                   $"audioSyncOffset={cfg.AudioSyncOffsetMs}ms)");
-            } else {
-                _ffmeController = new SoftSled.Components.AudioVisual.FfmeMediaController(Media, _avLogger);
-                AvCtrlHandler.MediaController = _ffmeController;
+            // Playback controller: audio is decoded via libav and rendered
+            // through NAudio (the master clock); video is decoded via libav and
+            // presented on a GPU surface (D3DImage), paced to the audio clock.
+            // The GPU presenter needs a window handle, so it's created in
+            // OnLoaded and attached then (see AttachVideoPresenterWhenReady).
+            _extSyncController = new SoftSled.Components.AudioVisual.ExternalSync
+                .ExternalSyncMediaController(_avLogger, cfg.AudioSyncOffsetMs, cfg.VideoJitterBufferMs);
+            AvCtrlHandler.MediaController = _extSyncController;
+
+            // Create the GPU video presenter (D3D9Ex device + D3DImage) and
+            // bind it to the VideoImage plane. Needs a window handle, which is
+            // available now (Start runs after the page is shown).
+            try {
+                var win = System.Windows.Window.GetWindow(this);
+                IntPtr hwnd = win != null
+                    ? new System.Windows.Interop.WindowInteropHelper(win).Handle
+                    : IntPtr.Zero;
+                _videoPresenter = new SoftSled.Components.AudioVisual.VideoFpsLab
+                    .D3DImagePresenter(Dispatcher, hwnd, _avLogger);
+                VideoImage.Source = _videoPresenter.Image;
+                _extSyncController.AttachVideoPresenter(_videoPresenter);
+            } catch (Exception ex) {
+                _avLogger?.LogError($"[video] D3DImage presenter init failed: {ex.Message}");
             }
+
+            _avLogger?.LogInfo($"[controller] playback controller active " +
+                               $"(audio: libav+NAudio master; video: libav + D3DImage, audio-paced; " +
+                               $"audioSyncOffset={cfg.AudioSyncOffsetMs}ms)");
 
             // Read the splash-audio toggle here — config is also read again
             // later in this method (line ~524) for the mouse + pairing fields,
@@ -543,66 +543,21 @@ namespace SoftSledWPF.Components.Shell {
             // it false-positives at their resolution.
             var routerCfg = SoftSledConfigManager.ReadConfig();
             _surfaceRouter = new SoftSled.Components.AudioVisual.SurfaceRouter(
-                renderMode, MediaCanvas, Media, _splashController, m_logger,
+                renderMode, MediaCanvas, VideoImage, _splashController, m_logger,
                 pipRoutingEnabled: routerCfg.EnableSplashPipRouting);
             AvCtrlHandler.VideoSurfaceRequested += sid => _surfaceRouter.RouteVideoToSurface(sid);
             AvCtrlHandler.VideoPipelineClosed += () => _surfaceRouter.ReleaseSurface();
 
-            _videoOpenComplete = new System.Threading.Tasks.TaskCompletionSource<bool>(
-                System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
-
-            AvCtrlHandler.VideoPipelineReady += stream =>
-                Dispatcher.BeginInvoke(new Action(async () => {
-                    try {
-                        bool hasVideo =
-                            (stream as SoftSled.Components.AudioVisual.AsfFfmeInputStream)?.HasVideo
-                            ?? true;
-                        if (hasVideo) {
-                            SizeMediaToCanvasFill();
-                            Media.Visibility = Visibility.Visible;
-                        } else {
-                            Media.Visibility = Visibility.Collapsed;
-                        }
-                        var openSw = System.Diagnostics.Stopwatch.StartNew();
-                        await Media.Open(stream);
-                        openSw.Stop();
-                        _avLogger?.LogInfo($"[ffme] Media.Open succeeded in {openSw.ElapsedMilliseconds}ms " +
-                                           $"({(hasVideo ? "video+audio" : "audio-only")})");
-                    } catch (Exception ex) {
-                        _avLogger?.LogError($"[ffme] Media.Open failed: {ex.Message}");
-                    } finally {
-                        _videoOpenComplete?.TrySetResult(true);
-                    }
-                }));
-
-            AvCtrlHandler.AudioPipelineReady += stream =>
-                Dispatcher.BeginInvoke(new Action(async () => {
-                    try {
-                        if (_videoOpenComplete != null) {
-                            var tcs = _videoOpenComplete.Task;
-                            var done = await System.Threading.Tasks.Task.WhenAny(
-                                tcs, System.Threading.Tasks.Task.Delay(2000));
-                            if (done != tcs) {
-                                _avLogger?.LogInfo("[ffme] audio open: video TCS timed out, opening anyway");
-                            }
-                        }
-                        await MediaAudio.Open(stream);
-                        _avLogger?.LogInfo("[ffme] MediaAudio.Open succeeded (PCM audio pipeline)");
-                    } catch (Exception ex) {
-                        _avLogger?.LogError($"[ffme] MediaAudio.Open failed: {ex.Message}");
-                    }
-                }));
-
+            // Video now flows through the controller's libav decoder +
+            // D3DImage presenter (via RTSPClient.SetExternalVideoConsumer), so
+            // there is no FFME element to open/close here. Make the video plane
+            // visible + sized; the D3DImage shows nothing until frames arrive.
+            Dispatcher.BeginInvoke(new Action(() => {
+                SizeMediaToCanvasFill();
+                VideoImage.Visibility = Visibility.Visible;
+            }));
             AvCtrlHandler.VideoPipelineClosed += () =>
-                Dispatcher.BeginInvoke(new Action(async () => {
-                    try { await Media.Close(); } catch (Exception ex) { _avLogger?.LogError($"[ffme] Media.Close failed: {ex.Message}"); }
-                    try { await MediaAudio.Close(); } catch (Exception ex) { _avLogger?.LogError($"[ffme] MediaAudio.Close failed: {ex.Message}"); }
-                    Media.Visibility = Visibility.Collapsed;
-                    _lastOverlay = null;
-                    _videoOpenComplete?.TrySetResult(false);
-                    _videoOpenComplete = new System.Threading.Tasks.TaskCompletionSource<bool>(
-                        System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
-                }));
+                Dispatcher.BeginInvoke(new Action(() => { _lastOverlay = null; }));
 
             McxSessHandler.StatusChanged += McxSessHandler_StatusChanged;
 
@@ -648,10 +603,13 @@ namespace SoftSledWPF.Components.Shell {
             try { _audioPlayer?.Dispose(); } catch { }
             try { _rawDumper?.Dispose(); } catch { }
             if (AvCtrlHandler != null) AvCtrlHandler.MediaController = null;
-            try { _ffmeController?.Dispose(); } catch { }
-            _ffmeController = null;
             try { _extSyncController?.Dispose(); } catch { }
             _extSyncController = null;
+            // Dispose the GPU presenter after the controller (which stops
+            // feeding it frames). Owned here, not by the controller.
+            try { VideoImage.Source = null; } catch { }
+            try { _videoPresenter?.Dispose(); } catch { }
+            _videoPresenter = null;
             if (_overlayDecoder != null) {
                 _overlayDecoder.OverlayRegionChanged -= OnOverlayRegionChanged;
                 _overlayDecoder.ZoomModeChanged -= OnZoomModeChanged;
@@ -759,152 +717,19 @@ namespace SoftSledWPF.Components.Shell {
             if (_ffmeInitialised) return;
             _ffmeInitialised = true;
 
-            string ffmpegDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\Tools\\ffmpeg\\x64";
-            // FFmpegDirectory is process-wide and must be set BEFORE the
-            // first MediaElement loads; safe to set repeatedly to the same
-            // value, FFME ignores the second set.
-            Unosquare.FFME.Library.FFmpegDirectory = ffmpegDir;
-
-            // Force-load the FFmpeg native DLLs eagerly on a background
-            // thread. Without this, FFME does the load lazily inside
-            // the first Media.Open() — that's ~30 MB of DLLs
-            // (avcodec-58, avformat-58, avutil-56, swscale-5,
-            // swresample-3, postproc-55) plus their internal table
-            // initialisation, observed at 200-500 ms on first call.
-            // Doing it here on the thread pool overlaps with the
-            // FreeRDP handshake (which takes seconds), so by the time
-            // WMC sends OpenMedia → first Start, FFME's Open call
-            // skips the lib-load entirely. LoadFFmpegAsync returns
-            // false if already loaded, so a session reset is a free
-            // no-op.
-            System.Threading.Tasks.Task.Run(() => {
-                try {
-                    var sw = System.Diagnostics.Stopwatch.StartNew();
-                    bool loaded = Unosquare.FFME.Library.LoadFFmpegAsync()
-                                   .GetAwaiter().GetResult();
-                    sw.Stop();
-                    _avLogger?.LogInfo($"[ffme] preload completed in {sw.ElapsedMilliseconds}ms " +
-                                       $"(loaded={loaded}, version={Unosquare.FFME.Library.FFmpegVersionInfo})");
-                } catch (Exception ex) {
-                    _avLogger?.LogError($"[ffme] preload failed: {ex.Message}");
-                }
-            });
-
+            // Point FFmpeg.AutoGen at the bundled native DLLs. This used to be
+            // FFME's job (Library.FFmpegDirectory + LoadFFmpeg). With FFME
+            // removed, the libav decoders (audio + video) resolve the DLLs via
+            // ffmpeg.RootPath, which must be set process-wide before the first
+            // ffmpeg call. Safe to set repeatedly.
             try {
-                string ffmeLogPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
-                                                            "softsled-ffme.log");
-                _ffmeLogWriter = new System.IO.StreamWriter(
-                    new System.IO.FileStream(ffmeLogPath, System.IO.FileMode.Create,
-                                             System.IO.FileAccess.Write, System.IO.FileShare.Read),
-                    System.Text.Encoding.UTF8) { AutoFlush = false };
-                _ffmeLogWriter.WriteLine($"# FFME internal log, started {DateTime.Now:HH:mm:ss.fff}");
-                _ffmeLogWriter.WriteLine($"# FFmpegDirectory={ffmpegDir} " +
-                                         $"(exists={System.IO.Directory.Exists(ffmpegDir)})");
-                _ffmeLogWriter.Flush();
-
-                _ffmeLogFlushTimer = new System.Threading.Timer(_ => {
-                    try {
-                        lock (_ffmeLogGate) { _ffmeLogWriter?.Flush(); }
-                    } catch { }
-                }, null, 2000, 2000);
-
-                Media.MessageLogged += (s, e) => {
-                    var mt = e.MessageType;
-                    if (mt == Unosquare.FFME.Common.MediaLogMessageType.Trace ||
-                        mt == Unosquare.FFME.Common.MediaLogMessageType.Debug) return;
-                    try {
-                        lock (_ffmeLogGate) {
-                            _ffmeLogWriter.WriteLine($"{DateTime.Now:HH:mm:ss.fff} " +
-                                                     $"[FFME/{mt}] {e.AspectName}: {e.Message}");
-                        }
-                    } catch { }
-                };
-                Unosquare.FFME.MediaElement.FFmpegMessageLogged += (s, e) => {
-                    var mt = e.MessageType;
-                    if (mt == Unosquare.FFME.Common.MediaLogMessageType.Trace ||
-                        mt == Unosquare.FFME.Common.MediaLogMessageType.Debug ||
-                        mt == Unosquare.FFME.Common.MediaLogMessageType.Info) return;
-                    try {
-                        lock (_ffmeLogGate) {
-                            _ffmeLogWriter.WriteLine($"{DateTime.Now:HH:mm:ss.fff} " +
-                                                     $"[libav/{mt}] {e.AspectName}: {e.Message}");
-                        }
-                    } catch { }
-                };
-                Media.MediaFailed += (s, e) => {
-                    string ex = e.ErrorException?.ToString() ?? "(no exception)";
-                    try {
-                        lock (_ffmeLogGate) {
-                            _ffmeLogWriter.WriteLine($"{DateTime.Now:HH:mm:ss.fff} " +
-                                                     $"[MEDIA_FAILED] {ex}");
-                        }
-                    } catch { }
-                    _avLogger?.LogError($"[ffme] MediaFailed: {e.ErrorException?.Message ?? "(no message)"}");
-                };
-                Media.MediaInitializing += (s, e) => {
-                    try {
-                        lock (_ffmeLogGate) {
-                            _ffmeLogWriter.WriteLine($"{DateTime.Now:HH:mm:ss.fff} " +
-                                                     "[MEDIA_INITIALIZING]");
-                        }
-                    } catch { }
-                };
-                Media.MediaOpening += (s, e) => {
-                    try {
-                        lock (_ffmeLogGate) {
-                            string streams = string.Join(",", e.Info.Streams.Keys);
-                            _ffmeLogWriter.WriteLine($"{DateTime.Now:HH:mm:ss.fff} " +
-                                                     $"[MEDIA_OPENING] format={e.Info.Format} " +
-                                                     $"duration={e.Info.Duration} streams=[{streams}]");
-                        }
-                    } catch { }
-                    // FFME's per-stream clock policy. Two regimes:
-                    //
-                    //   * IsTimeSyncDisabled=false (preferred — set
-                    //     here): FFME's master clock locks to audio
-                    //     and aligns video to it for tight lip-sync
-                    //     at 1×. The downside is that when the wire
-                    //     stops delivering audio (server-side trick
-                    //     play), the audio buffer drains and the
-                    //     renderer enters SYNC-BUFFER — video freezes.
-                    //     AudioSilenceInjector (armed in
-                    //     FfmeMediaController.AttachRtspClient) solves
-                    //     that by emitting synthetic audio MAUs so the
-                    //     buffer never drains.
-                    //
-                    //   * IsTimeSyncDisabled=true (fallback): FFME
-                    //     runs each stream on its own clock. Trick-
-                    //     play freezes go away even without the
-                    //     injector, but lip-sync at 1× breaks because
-                    //     the per-stream first-MAU offset (~1.5 s
-                    //     from the server's prior-IDR padding)
-                    //     becomes visible as permanent skew.
-                    //
-                    // Default to sync-on; the silence injector keeps
-                    // the buffer fed.
-                    try { e.Options.IsTimeSyncDisabled = false; } catch { }
-                };
-                MediaAudio.MediaOpening += (s, e) => {
-                    // Audio-only sessions can't suffer the trick-play
-                    // freeze (no video to wait on); leaving sync on
-                    // here keeps behaviour symmetric with the main
-                    // element so position reporting / seek behave the
-                    // same in both modes.
-                    try { e.Options.IsTimeSyncDisabled = false; } catch { }
-                };
-                Media.MediaOpened += (s, e) => {
-                    try {
-                        lock (_ffmeLogGate) {
-                            _ffmeLogWriter.WriteLine($"{DateTime.Now:HH:mm:ss.fff} " +
-                                                     "[MEDIA_OPENED]");
-                        }
-                    } catch { }
-                    _avLogger?.LogInfo("[ffme] MediaOpened");
-                };
-
-                Unosquare.FFME.Library.FFmpegLogLevel = 32;
+                string ffmpegDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
+                                   + "\\Tools\\ffmpeg\\x64";
+                FFmpeg.AutoGen.ffmpeg.RootPath = ffmpegDir;
+                _avLogger?.LogInfo($"[ffmpeg] RootPath set to {ffmpegDir} " +
+                                   $"(exists={System.IO.Directory.Exists(ffmpegDir)})");
             } catch (Exception ex) {
-                _avLogger?.LogError($"[ffme] log capture init failed: {ex.Message}");
+                _avLogger?.LogError($"[ffmpeg] RootPath init failed: {ex.Message}");
             }
         }
 
@@ -952,8 +777,8 @@ namespace SoftSledWPF.Components.Shell {
                     default:
                         stretch = System.Windows.Media.Stretch.Uniform; break;
                 }
-                Media.Stretch = stretch;
-                _avLogger?.LogInfo($"[zoom] WMC mode {mode} → Media.Stretch={stretch}");
+                VideoImage.Stretch = stretch;
+                _avLogger?.LogInfo($"[zoom] WMC mode {mode} → VideoImage.Stretch={stretch}");
             }));
         }
 
@@ -988,10 +813,10 @@ namespace SoftSledWPF.Components.Shell {
             double wpfW = region.Width * scale;
             double wpfH = region.Height * scale;
 
-            Canvas.SetLeft(Media, wpfX);
-            Canvas.SetTop(Media, wpfY);
-            Media.Width = wpfW;
-            Media.Height = wpfH;
+            Canvas.SetLeft(VideoImage, wpfX);
+            Canvas.SetTop(VideoImage, wpfY);
+            VideoImage.Width = wpfW;
+            VideoImage.Height = wpfH;
 
             // Promoted from Debug to Info (under _avLogger) so the user
             // can see — at a glance, without enabling raw fastpath log —
@@ -1005,10 +830,10 @@ namespace SoftSledWPF.Components.Shell {
 
         private void SizeMediaToCanvasFill() {
             if (MediaCanvas == null) return;
-            Canvas.SetLeft(Media, 0);
-            Canvas.SetTop(Media, 0);
-            Media.Width = double.IsNaN(MediaCanvas.ActualWidth) ? 0 : MediaCanvas.ActualWidth;
-            Media.Height = double.IsNaN(MediaCanvas.ActualHeight) ? 0 : MediaCanvas.ActualHeight;
+            Canvas.SetLeft(VideoImage, 0);
+            Canvas.SetTop(VideoImage, 0);
+            VideoImage.Width = double.IsNaN(MediaCanvas.ActualWidth) ? 0 : MediaCanvas.ActualWidth;
+            VideoImage.Height = double.IsNaN(MediaCanvas.ActualHeight) ? 0 : MediaCanvas.ActualHeight;
         }
 
         private void FreeRdpClient_FrameReady(object sender, EventArgs e) {
@@ -1210,6 +1035,26 @@ namespace SoftSledWPF.Components.Shell {
             if (loggerTextBox == null) return;
             bool visible = loggerTextBox.Visibility == Visibility.Visible;
             SetLoggerVisible(!visible);
+        }
+
+        /// <summary>Live A/V sync nudge (from a session hotkey). Positive delta
+        /// advances video to reduce video-lags-audio; negative delays it. Applies
+        /// to the running pacer immediately and persists the new trim to config so
+        /// it carries to the next session. No-op if no controller is active.</summary>
+        public void NudgeAvSync(int deltaMs) {
+            var ctrl = _extSyncController;
+            if (ctrl == null) return;
+            int trim = ctrl.NudgeAudioSyncTrim(deltaMs);
+            // Persist so the dialled-in value survives reconnect.
+            try {
+                var cfg = SoftSledConfigManager.ReadConfig();
+                if (cfg != null) { cfg.AudioSyncOffsetMs = trim; SoftSledConfigManager.WriteConfig(cfg); }
+            } catch (Exception ex) {
+                m_logger?.LogError($"[av-sync] persist trim failed: {ex.Message}");
+            }
+            // Surface the value on the logger overlay so it can be tuned by eye.
+            m_logger?.LogInfo($"[av-sync] trim = {(trim >= 0 ? "+" : "")}{trim} ms " +
+                              $"(video {(trim >= 0 ? "earlier" : "later")})");
         }
 
         private void FreeRdpClient_DataReceived(object sender, DataReceived e) {

@@ -42,17 +42,17 @@ namespace SoftSled.Components.AudioVisual {
     internal sealed class WmcFastpathOverlayRegionDecoder {
 
         private const byte McxUpdateCode = 0x0D;
-        private const int  MinMessageLength = 24;   // smallest valid wrapper
-        private const int  HeaderOverheadBytes = 24; // up through and including message_type
+        private const int MinMessageLength = 24;   // smallest valid wrapper
+        private const int HeaderOverheadBytes = 24; // up through and including message_type
 
         // Message type constants — public for testability / debug logging.
-        public const uint MsgPingHeartbeat       = 1;
-        public const uint MsgPongHeartbeat       = 2;
-        public const uint MsgVideoRegion         = 3;
-        public const uint MsgZoomMode            = 4;
-        public const uint MsgAudioTrailer        = 5;
-        public const uint MsgAudioPayload        = 6;
-        public const uint MsgStreamInit          = 7;
+        public const uint MsgPingHeartbeat = 1;
+        public const uint MsgPongHeartbeat = 2;
+        public const uint MsgVideoRegion = 3;
+        public const uint MsgZoomMode = 4;
+        public const uint MsgAudioTrailer = 5;
+        public const uint MsgAudioPayload = 6;
+        public const uint MsgStreamInit = 7;
 
         /// <summary>Video destination rectangle in RDP source coords.</summary>
         public sealed class OverlayRegion {
@@ -71,19 +71,19 @@ namespace SoftSled.Components.AudioVisual {
         public enum WmcZoomMode {
             /// <summary>Zoom 1 — preserve source aspect; letterbox/pillarbox
             /// bars appear as needed. Maps to WPF <c>Stretch.Uniform</c>.</summary>
-            Normal                  = 0,
-            /// <summary>Zoom 2 — stretch horizontally to remove pillarbox
-            /// (blank bars on the SIDES). Aspect ratio distorted.</summary>
-            StretchSides            = 1,
-            /// <summary>Zoom 3 — stretch / zoom-in to remove letterbox bars
+            Normal = 0,
+            /// <summary>Zoom 2 — stretch / zoom-in to remove letterbox bars
             /// (blank bars on TOP and BOTTOM). Preserves aspect; crops
             /// content that overflows the destination rectangle.</summary>
-            StretchTopBottom        = 2,
+            StretchTopBottom = 1,
+            /// <summary>Zoom 3 — stretch horizontally to remove pillarbox
+            /// (blank bars on the SIDES). Aspect ratio distorted.</summary>
+            StretchSides = 2,
             /// <summary>Zoom 4 — non-linear / "dynamic" stretch: the centre
             /// of the picture keeps its aspect, edges are progressively
             /// stretched. WPF can't natively reproduce this; the host maps
             /// it to a close approximation (currently <c>Fill</c>).</summary>
-            Dynamic                 = 3,
+            Dynamic = 3,
         }
 
         private readonly Logger _log;
@@ -235,10 +235,10 @@ namespace SoftSled.Components.AudioVisual {
             // user-defined zoom level) doesn't silently get mapped to mode 0.
             WmcZoomMode mode;
             switch (raw) {
-                case 0: mode = WmcZoomMode.Normal;           break;
-                case 1: mode = WmcZoomMode.StretchSides;     break;
+                case 0: mode = WmcZoomMode.Normal; break;
+                case 1: mode = WmcZoomMode.StretchSides; break;
                 case 2: mode = WmcZoomMode.StretchTopBottom; break;
-                case 3: mode = WmcZoomMode.Dynamic;          break;
+                case 3: mode = WmcZoomMode.Dynamic; break;
                 default:
                     _log?.LogError($"[fp-overlay] type=4 unknown zoom value {raw}");
                     return;

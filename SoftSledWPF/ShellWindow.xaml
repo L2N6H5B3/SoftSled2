@@ -6,7 +6,7 @@
         xmlns:local="clr-namespace:SoftSledWPF"
         xmlns:shell="clr-namespace:SoftSledWPF.Components.Shell"
         mc:Ignorable="d"
-        Title="SoftSled"
+        Title="SoftSled Windows Media Center Extender"
         Icon="/wmc.ico"
         Width="1280"
         Height="720"

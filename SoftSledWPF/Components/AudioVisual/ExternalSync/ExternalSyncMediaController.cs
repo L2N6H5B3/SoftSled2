@@ -1,48 +1,26 @@
 using FFmpeg.AutoGen;
 using SoftSled.Components.AudioVisual;
+using SoftSled.Components.AudioVisual.VideoFpsLab;
 using SoftSled.Components.Diagnostics;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Threading;
-using Unosquare.FFME;
 
 namespace SoftSled.Components.AudioVisual.ExternalSync {
 
     /// <summary>
-    /// <see cref="IMediaController"/> implementation that owns its own
-    /// audio decoder (<see cref="LibAvAudioDecoder"/>) + renderer
-    /// (<see cref="NAudioMasterRenderer"/>) rather than going through
-    /// FFME's audio path. The audio render clock becomes the
-    /// authoritative "Position"; FFME continues to decode + render
-    /// video, but the controller chases NAudio's master clock via
-    /// per-tick <see cref="MediaElement.SpeedRatio"/> nudges (the
-    /// sync controller, Phase 2).
+    /// Sole playback controller. Audio is decoded with libav and rendered
+    /// through <see cref="NAudioMasterRenderer"/>, whose device playback
+    /// position is the master clock. Video is decoded with libav
+    /// (<see cref="LibAvVideoPushDecoder"/>) and presented on a GPU surface
+    /// (<see cref="D3DImagePresenter"/>); a <see cref="PtsFramePacer"/> slaves
+    /// video presentation to the audio master clock for lip-sync. FFME is no
+    /// longer involved.
     ///
-    /// <para><b>Phase 1 scope:</b> audio-only, MP3-only (no video,
-    /// no sync controller).</para>
-    /// <para><b>Phase 2 scope:</b> adds MP2 support (recorded-TV
-    /// VND.MS.WM-MPA), video via FFME (attached through
-    /// <see cref="AttachVideoMediaElement"/>), and the drift-
-    /// correction sync loop. Video stream is fed raw MPEG-VS bytes
-    /// through the existing <c>TrySetupMpvVideoProducer</c> path —
-    /// no muxer, no audio in the FFME input.</para>
-    ///
-    /// <para>Sync loop:
-    /// <list type="bullet">
-    ///   <item>Tick every 250 ms on a thread-pool timer; marshal to
-    ///   the FFME dispatcher to read <c>Media.Position</c> + write
-    ///   <c>Media.SpeedRatio</c>.</item>
-    ///   <item>Drift = audioMasterMs - videoPositionMs (after
-    ///   applying user's manual <c>AudioSyncOffsetMs</c>).</item>
-    ///   <item>Deadband ±50 ms: no nudge, keep SpeedRatio at 1.0.</item>
-    ///   <item>Proportional: SpeedRatio = clamp(1 + drift/2000, 0.95, 1.05).
-    ///   Aims to close 1 s of drift in ~2 s of wall-time.</item>
-    ///   <item>Catastrophic (>2 s): log loudly, leave the deadband
-    ///   open so the proportional control nudges with full ±5%
-    ///   until back inside ±50 ms. We do NOT seek the FFME element
-    ///   (live RTSP — seek is a no-op anyway).</item>
-    /// </list></para>
+    /// <para>The session owns the <see cref="D3DImagePresenter"/> (it needs the
+    /// window handle) and hands it to the controller via
+    /// <see cref="AttachVideoPresenter"/>. RTSP media is routed in through the
+    /// RTSPClient's external audio + video consumers.</para>
     /// </summary>
     internal sealed class ExternalSyncMediaController : IMediaController, IDisposable {
 
@@ -50,95 +28,78 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private LibAvAudioDecoder _decoder;
         private NAudioMasterRenderer _renderer;
 
-        // Snapshot of the manual audio-sync offset from
-        // SoftSledConfig at construction time. Captured once so the
-        // controller stays stable for the session even if the user
-        // re-opens the config page mid-session.
-        // Phase 2 USES this: the sync loop computes drift as
-        // (audioRenderTime - offsetMs) - videoPosition, so positive
-        // offset shifts the apparent audio time earlier from the
-        // sync engine's perspective — making video lag the speaker
-        // output by the offset, compensating for downstream display
-        // latency (HDMI / AVR).
+        // Manual audio-sync trim (ms) from config — added to the wire A/V
+        // offset so the user can nudge lip-sync for downstream HDMI/AVR delay.
         public int AudioSyncOffsetMs { get; }
 
-        // Pending Play state. WMC may call PlayAsync() before the
-        // renderer is constructed (first decoded frame hasn't fired
-        // OnFormatReady yet). Capture the intent and apply once
-        // the renderer exists.
-        private bool _playRequested = true;       // default: play on attach
-        private bool _isOpen;
+        // Video jitter-buffer depth (ms) from config — feeds the pacer's
+        // pre-roll / max-buffer to absorb bursty RTSP delivery.
+        private readonly int _videoJitterBufferMs;
 
-        // RTSP wiring.
+        private bool _playRequested = true;
+        private bool _isOpen;
+        private volatile bool _disposed;
+
         private SoftSled.Components.RTSP.RTSPClient _rtsp;
         private long _lastBandwidthBps = -1;
         private bool _lastOptimisedPreroll;
         private double _lastRequestedRate = 1.0;
 
-        // Readiness TCS — completes when the renderer is alive
-        // (i.e. the decoder has emitted at least one frame and we
-        // know the output format). Lets AvCtrlHandler defer the
-        // first Start ack against the same WaitUntilOpenAsync hook
-        // as the FFME path.
+        // Video pipeline (libav + D3DImage, audio-slaved). The presenter is
+        // created and owned by the session; the decoder + pacer are owned here.
+        private D3DImagePresenter _presenter;
+        private LibAvVideoPushDecoder _videoDecoder;
+        private PtsFramePacer _pacer;
+        private readonly object _videoGate = new object();
+
+        // First audio + video MAU wire PTS (ms). Their difference is the wire
+        // A/V offset the pacer needs. Each is converted from the stream's RTP
+        // timestamp using that stream's RTP clock (90 kHz for wm-MPA/MPV,
+        // 1 kHz for x-wmf-pf) — getting the clock wrong scales the offset and
+        // mis-aligns video (the x-wmf-pf 1 kHz case was lagging because both
+        // were divided by 90 as if 90 kHz).
+        private long _firstAudioMauWirePtsMs = -1;
+        private long _firstVideoMauWirePtsMs = -1;
+        private int _audioClockHz = 90000;
+        private int _videoClockHz = 90000;
+
+        // Raw first-MAU RTP timestamps (per stream) for the RTCP-SR cross-stream
+        // offset, plus a latch so we stop recomputing once both SRs have
+        // anchored and the offset is finalised.
+        private long _firstAudioMauRtpRaw = -1;
+        private long _firstVideoMauRtpRaw = -1;
+        private bool _syncFinalized;
+        // No genuine A/V startup skew exceeds a few seconds; beyond this the
+        // RTP-Info cross-stream offset is treated as bogus (Live TV npt=now).
+        private const int MaxPlausibleOffsetMs = 5000;
+        private readonly System.Diagnostics.Stopwatch _srWaitClock = System.Diagnostics.Stopwatch.StartNew();
+        private long _lastSrWaitLogMs = -100000;
+
         private TaskCompletionSource<bool> _openTcs =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // Phase 2: video sync state.
-        private MediaElement _videoMedia;
-        private Dispatcher _videoDispatcher;
-        private Timer _syncTimer;
-        private volatile bool _videoMediaOpen;
-        private long _lastLoggedDriftMs;
-        private long _syncLogIntervalTicks;
-        private System.Diagnostics.Stopwatch _syncLogClock;
+        public ExternalSyncMediaController(Logger log) : this(log, 0, 250) { }
 
-        // Sync baselines. Captured on the first tick where BOTH
-        // audio and video report valid (non-zero) times.
-        // Phase 2.5: also captures wireOffset so the controller
-        // targets the server's intended sync (per wire-side RTP
-        // timestamps) rather than just holding whatever skew the
-        // streams happened to have at startup.
-        //
-        //   wireOffset = audioFirstWirePtsMs - videoFirstWirePtsMs
-        //
-        // A typical recorded-TV stream has video PTS earlier than
-        // audio PTS (server sends prior IDR before the play
-        // position, ~1.5s typical), so wireOffset is positive.
-        // Drift formula:
-        //   drift = (audioNow - audioBaseline)
-        //         - (videoNow - videoBaseline)
-        //         + wireOffset
-        //         - AudioSyncOffsetMs
-        // Positive drift = audio ahead of intended → speed up video.
-        private long _audioBaselineMs = -1;
-        private long _videoBaselineMs = -1;
-        private long _firstAudioMauWirePtsMs = -1;
-        private long _wireOffsetMs;
+        public ExternalSyncMediaController(Logger log, int audioSyncOffsetMs)
+            : this(log, audioSyncOffsetMs, 250) { }
 
-        // SpeedRatio-honour diagnostic. We record each tick's video
-        // elapsed; the next tick computes (videoNowElapsed - prev) /
-        // wallDelta and compares to the rate we last requested. If
-        // FFME is honouring SpeedRatio on raw mpegvideo streams the
-        // ratio should track; if not, this surfaces it. (Note: the
-        // existing _lastRequestedRate field tracks the user-facing
-        // RATE from AvCtrl Start payloads — different concept; this
-        // one tracks the sync-controller's nudges.)
-        private long _prevVideoMsForDiag = -1;
-        private long _prevTickWallMs = -1;
-        private double _lastNudgedRate = 1.0;
-
-        public ExternalSyncMediaController(Logger log)
-            : this(log, audioSyncOffsetMs: 0) { }
-
-        public ExternalSyncMediaController(Logger log, int audioSyncOffsetMs) {
+        public ExternalSyncMediaController(Logger log, int audioSyncOffsetMs, int videoJitterBufferMs) {
             _log = log;
             AudioSyncOffsetMs = audioSyncOffsetMs;
-            _log?.LogInfo($"[ext-sync] controller constructed " +
-                          $"(audioSyncOffset={audioSyncOffsetMs}ms)");
+            _liveTrimMs = audioSyncOffsetMs;   // live-nudgeable starting point
+            _videoJitterBufferMs = videoJitterBufferMs > 0 ? videoJitterBufferMs : 250;
+            _log?.LogInfo($"[ext-sync] controller constructed (audioSyncOffset={audioSyncOffsetMs}ms, " +
+                          $"videoJitterBuffer={_videoJitterBufferMs}ms)");
+        }
+
+        /// <summary>Bind the session-owned GPU presenter. Must be called before
+        /// video starts (the session does this right after construction).</summary>
+        public void AttachVideoPresenter(D3DImagePresenter presenter) {
+            _presenter = presenter;
         }
 
         // ============================================================
-        //  RTSPClient hookup — receives raw audio MAUs
+        //  RTSPClient hookup
         // ============================================================
 
         public void AttachRtspClient(SoftSled.Components.RTSP.RTSPClient client) {
@@ -148,6 +109,17 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 _rtsp.PtsError          -= OnRtspPtsError;
                 _rtsp.UnrecoverableSkew -= OnRtspUnrecoverableSkew;
                 try { _rtsp.SetExternalAudioConsumer(null, null); } catch { }
+                try { _rtsp.SetExternalVideoConsumer(null, null); } catch { }
+                // The controller is session-scoped and outlives individual
+                // media (WMC reuses it across OpenMedia/CloseMedia, creating a
+                // fresh RTSPClient each time). Tear the decode pipeline down on
+                // every detach so the NEXT media rebuilds decoders for its own
+                // codec. Without this, switching e.g. H.264/PCM → MPEG-2/MP2
+                // left the old H.264 + PCM decoders in place (the codec-commit
+                // handlers bail when a decoder already exists) → the H.264
+                // decoder chokes on MPEG-2 ("Invalid data") = no video, and the
+                // PCM decoder renders MP2 bytes as raw samples = static.
+                ResetPipelineForNewMedia();
             }
             _rtsp = client;
             if (_rtsp != null) {
@@ -155,58 +127,44 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 _rtsp.PtsError          += OnRtspPtsError;
                 _rtsp.UnrecoverableSkew += OnRtspUnrecoverableSkew;
                 try {
-                    _rtsp.SetExternalAudioConsumer(
-                        codecCommit: OnAudioCodecCommitted,
-                        mauArrived:  OnAudioMau);
+                    _rtsp.SetExternalAudioConsumer(OnAudioCodecCommitted, OnAudioMau);
                 } catch (Exception ex) {
                     _log?.LogError($"[ext-sync] SetExternalAudioConsumer threw: {ex.Message}");
+                }
+                try {
+                    _rtsp.SetExternalVideoConsumer(OnVideoCodecCommitted, OnVideoMau);
+                } catch (Exception ex) {
+                    _log?.LogError($"[ext-sync] SetExternalVideoConsumer threw: {ex.Message}");
                 }
             }
         }
 
-        /// <summary>Called by RTSPClient on the first audio packet
-        /// of a stream, once the SDP codec is known.</summary>
+        // ============================================================
+        //  Audio
+        // ============================================================
+
         private void OnAudioCodecCommitted(ExternalAudioFormat fmt) {
-            if (_decoder != null) return;     // already committed
+            if (_decoder != null) return;
             if (fmt == null) {
                 _log?.LogError("[ext-sync] OnAudioCodecCommitted called with null fmt");
                 return;
             }
             AVCodecID codecId;
             string wc = (fmt.WireCodec ?? "").ToUpperInvariant();
+            // x-wmf-pf audio uses a 1 kHz RTP wire clock; wm-MPA / AC-3 use
+            // 90 kHz. This must match the divisor used in OnAudioMau so the
+            // wire A/V offset is computed in real milliseconds.
+            _audioClockHz = (wc == "X-WMF-PF") ? 1000 : 90000;
             switch (wc) {
                 case "MPA":
                 case "VND.MS.WM-MPA":
-                    // MPEG-1/2 audio. Layer 3 = MP3, Layer 1/2 = MP2
-                    // (libav's MP2 decoder handles both layers).
-                    // Default to MP3 when fmtp doesn't tell us
-                    // (plain .mp3 source case from a WMC music
-                    // library will always advertise layer=3).
-                    if (fmt.MpegLayer == 1 || fmt.MpegLayer == 2) {
-                        codecId = AVCodecID.AV_CODEC_ID_MP2;
-                    } else {
-                        codecId = AVCodecID.AV_CODEC_ID_MP3;
-                    }
+                    codecId = (fmt.MpegLayer == 1 || fmt.MpegLayer == 2)
+                        ? AVCodecID.AV_CODEC_ID_MP2 : AVCodecID.AV_CODEC_ID_MP3;
                     break;
                 case "VND.MS.WM-AC3":
-                    // Dolby Digital. libav's AC3 decoder handles all
-                    // common channel layouts (2.0 / 5.1 / 7.1);
-                    // swr_convert will downmix to stereo on the way
-                    // to the canonical NAudio format. WMC's
-                    // recorded-TV path commonly uses this for HD
-                    // content (NTSC_XAC3 profile etc.).
                     codecId = AVCodecID.AV_CODEC_ID_AC3;
                     break;
                 case "X-WMF-PF":
-                    // Raw PCM (Windows Media Format Payload Frame).
-                    // The SDP fmtp tells us bit-depth + endianness:
-                    //   bitspersample=16, codec=pcm_s16le (typical)
-                    //   bitspersample=24 → s24le
-                    //   bitspersample=32 → s32le
-                    // 8-bit is unsigned per WAVEFORMATEX convention.
-                    // BE variants are rare on WMC servers (Intel
-                    // byte order is the norm) but we honour the
-                    // hint if it's present.
                     switch (fmt.BitsPerSampleHint) {
                         case 8:  codecId = AVCodecID.AV_CODEC_ID_PCM_U8; break;
                         case 16: codecId = fmt.PcmBigEndian
@@ -219,12 +177,6 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                                           ? AVCodecID.AV_CODEC_ID_PCM_S32BE
                                           : AVCodecID.AV_CODEC_ID_PCM_S32LE; break;
                         default:
-                            // Default to s16le — the safest assumption
-                            // for X-WMF-PF audio when fmtp didn't
-                            // include bitspersample. If wrong, the
-                            // decoder will produce noise rather than
-                            // silence — visibly wrong but recoverable
-                            // (the user notices, we can refine).
                             codecId = AVCodecID.AV_CODEC_ID_PCM_S16LE;
                             _log?.LogError($"[ext-sync] X-WMF-PF audio has no bitspersample hint " +
                                            $"({fmt}); defaulting to PCM_S16LE");
@@ -233,15 +185,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                     break;
                 default:
                     _log?.LogError($"[ext-sync] unsupported wire codec '{fmt.WireCodec}' — " +
-                                   $"audio will not play. Add a case in OnAudioCodecCommitted " +
-                                   $"to extend coverage.");
+                                   $"audio will not play.");
                     return;
             }
             try {
-                // PCM decoders need sample_rate + channels set on the
-                // codec context BEFORE avcodec_open2 — there's no
-                // bitstream header to read them from. Other codecs
-                // happily auto-detect from the first frame.
                 int hintRate = 0, hintChannels = 0;
                 bool isPcm = wc == "X-WMF-PF";
                 if (isPcm) {
@@ -260,108 +207,45 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             }
         }
 
-        /// <summary>Called by RTSPClient for every audio MAU.</summary>
         private void OnAudioMau(byte[] data, uint rtpTs) {
             if (_decoder == null) return;
-            // MPA / VND.MS.WM-MPA: RTP clock is 90 kHz per the
-            // rtpmap. Convert to ms for consistent PTS arithmetic
-            // downstream. (The decoded frame's libav-side PTS is
-            // ignored; we honour the wire-side timestamp.)
-            long ptsMs = rtpTs / 90L;
-            // Phase 2.5: capture the first audio MAU's wire-side PTS
-            // for use by the sync controller's wireOffset calc.
-            // Volatile-ish via Interlocked since this runs on the
-            // depacketizer thread while the sync tick reads it on
-            // the dispatcher thread.
+            long ptsMs = (long)rtpTs * 1000L / _audioClockHz;
             if (Interlocked.CompareExchange(ref _firstAudioMauWirePtsMs, ptsMs, -1L) == -1L) {
-                _log?.LogDebug($"[ext-sync-anchor] first audio MAU rtpTs={rtpTs} ({ptsMs}ms)");
+                Interlocked.Exchange(ref _firstAudioMauRtpRaw, rtpTs);
+                _log?.LogDebug($"[ext-sync-anchor] first audio MAU rtpTs={rtpTs} ({ptsMs}ms, clk={_audioClockHz})");
+                UpdateSyncOffset();
             }
             _decoder.SubmitPacket(data, ptsMs);
         }
 
         private void OnDecoderFormatReady() {
             try {
-                // Phase 2.6: when a video element is attached we
-                // expect to perform A/V sync. Start the renderer
-                // HELD — decoded PCM accumulates in a software
-                // queue, NAudio doesn't start playing yet. We
-                // release on the video's MediaOpened event with the
-                // appropriate skip to align audio's first audible
-                // sample with video's first visible frame. No video
-                // attached → start unheld (Phase 1 behaviour for
-                // audio-only sessions).
-                bool startHeld = _videoMedia != null;
+                // No video element to hold for — audio plays immediately and
+                // video slaves to its clock.
                 _renderer = new NAudioMasterRenderer(
                     LibAvAudioDecoder.OutSampleRate,
                     LibAvAudioDecoder.OutChannels,
                     LibAvAudioDecoder.OutBitsPerSample,
                     _log,
-                    startHeld);
+                    startHeld: false);
+                // Feed the RTCP BFR W3 field the renderer's REAL audio buffer
+                // occupancy so a drain (server under-delivery) is visible to
+                // WMPNss and it speeds up to refill — see ComputeBfrW3Fill.
+                try {
+                    var r = _renderer;
+                    _rtsp?.SetAudioBufferOccupancyProvider(() => r?.BufferedMs ?? 0);
+                } catch (Exception ex) {
+                    _log?.LogError($"[ext-sync] SetAudioBufferOccupancyProvider failed: {ex.Message}");
+                }
                 _isOpen = true;
-                _log?.LogInfo($"[ext-sync] renderer ready (startHeld={startHeld}), signalling open");
+                _log?.LogInfo("[ext-sync] renderer ready, signalling open");
                 if (_playRequested) _renderer.Play();
                 try { _openTcs.TrySetResult(true); } catch { }
                 try { BufferingEnded?.Invoke(); } catch { }
-
-                // If video already opened before the renderer was
-                // ready, apply the deferred release now.
-                if (startHeld && _videoMediaOpen) {
-                    ApplyHoldRelease();
-                }
-                // Audio-only fallback: even with no video attached
-                // we shouldn't sit held forever — covers the case
-                // where video was supposed to come but never did.
-                // 3 s is enough for FFME open + the AvCtrl first-
-                // Start ack flow to settle.
-                if (startHeld) {
-                    System.Threading.Tasks.Task.Delay(3000).ContinueWith(_ => {
-                        try {
-                            if (!_disposed && _renderer != null && _renderer.IsHeld) {
-                                _log?.LogInfo("[ext-sync] hold-release watchdog: 3s elapsed without " +
-                                              "video MediaOpened, releasing with skipMs=0");
-                                _renderer.ReleaseHold(0);
-                            }
-                        } catch { }
-                    });
-                }
             } catch (Exception ex) {
                 _log?.LogError($"[ext-sync] renderer init failed: {ex.Message}");
                 try { MediaFailed?.Invoke(ex); } catch { }
             }
-        }
-
-        /// <summary>
-        /// Compute the audio-vs-video pre-roll skip from the
-        /// captured first-MAU wire PTSes and release the renderer's
-        /// hold. Safe to call when the renderer isn't held (no-op
-        /// in <see cref="NAudioMasterRenderer.ReleaseHold"/>).
-        ///
-        /// <para>Positive skipMs (video PTS > audio PTS, today's
-        /// recorded-TV case) drops the first skipMs of buffered
-        /// audio so audio's first audible sample aligns with
-        /// video's first visible frame.</para>
-        ///
-        /// <para>Negative or zero (audio PTS >= video PTS) → can't
-        /// skip backwards, release with skipMs=0; the sync
-        /// controller closes any residual drift via SpeedRatio.</para>
-        /// </summary>
-        private void ApplyHoldRelease() {
-            if (_renderer == null) return;
-            long aWire = Interlocked.Read(ref _firstAudioMauWirePtsMs);
-            long vWire = _rtsp?.FirstVideoMauWirePtsMs ?? -1L;
-            int skipMs = 0;
-            if (aWire >= 0 && vWire >= 0) {
-                long delta = vWire - aWire;   // positive = audio is N ms ahead in stream-time
-                if (delta > 0 && delta < 30000) skipMs = (int)delta;
-                _log?.LogInfo($"[ext-sync] computing pre-roll skip: " +
-                              $"audWirePts={aWire}ms vidWirePts={vWire}ms → skipMs={skipMs} " +
-                              $"({(delta < 0 ? "audio behind video — no skip possible" : (delta == 0 ? "perfectly aligned" : "audio ahead — skip"))})");
-            } else {
-                _log?.LogInfo($"[ext-sync] computing pre-roll skip: wire PTS not available " +
-                              $"(aWire={aWire}, vWire={vWire}), releasing with skipMs=0");
-            }
-            try { _renderer.ReleaseHold(skipMs); }
-            catch (Exception ex) { _log?.LogError($"[ext-sync] ReleaseHold threw: {ex.Message}"); }
         }
 
         private void OnDecodedPcm(byte[] pcm, int len, long ptsMs) {
@@ -369,286 +253,141 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         }
 
         // ============================================================
-        //  Phase 2: Video sync controller
+        //  Video
         // ============================================================
 
-        /// <summary>
-        /// Attach the FFME MediaElement that's rendering the
-        /// video-only stream. The controller subscribes to its
-        /// open/close events and starts the sync timer that nudges
-        /// SpeedRatio to chase NAudio's master clock.
-        /// Pass <c>null</c> to detach (e.g. on Dispose).
-        /// </summary>
-        public void AttachVideoMediaElement(MediaElement media) {
-            if (ReferenceEquals(_videoMedia, media)) return;
-            if (_videoMedia != null) {
-                _videoMedia.MediaOpened -= OnVideoMediaOpened;
-                _videoMedia.MediaClosed -= OnVideoMediaClosed;
-                _videoMedia.MediaFailed -= OnVideoMediaFailed;
-                StopSyncTimer();
-            }
-            _videoMedia = media;
-            _videoDispatcher = media?.Dispatcher;
-            if (_videoMedia != null) {
-                _videoMedia.MediaOpened += OnVideoMediaOpened;
-                _videoMedia.MediaClosed += OnVideoMediaClosed;
-                _videoMedia.MediaFailed += OnVideoMediaFailed;
-                _log?.LogInfo("[ext-sync] video MediaElement attached; sync controller armed");
-            }
-        }
-
-        private void OnVideoMediaOpened(object sender, EventArgs e) {
-            _videoMediaOpen = true;
-            _syncLogClock = System.Diagnostics.Stopwatch.StartNew();
-            _syncLogIntervalTicks = 0;
-            // Re-arm baselines so the first tick captures fresh
-            // values (in case the controller is being re-used across
-            // a CloseMedia → OpenMedia cycle).
-            _audioBaselineMs = -1;
-            _videoBaselineMs = -1;
-            _wireOffsetMs = 0;
-            _prevVideoMsForDiag = -1;
-            _prevTickWallMs = -1;
-            _syncInDeadband = true;
-            _lastNudgedRate = 1.0;
-            // Phase 2.6: release the audio hold (if active) with the
-            // computed pre-roll skip so audio's first audible sample
-            // aligns with video's first frame. Safe no-op when the
-            // renderer was started unheld or has already been
-            // released.
-            ApplyHoldRelease();
-            StartSyncTimer();
-            _log?.LogInfo("[ext-sync] video MediaOpened; sync timer started, baselines re-armed");
-        }
-
-        private void OnVideoMediaClosed(object sender, EventArgs e) {
-            _videoMediaOpen = false;
-            StopSyncTimer();
-            // Restore neutral playback rate so a subsequent re-open
-            // doesn't inherit a nudged value.
-            if (_videoMedia != null && _videoDispatcher != null) {
-                try {
-                    _videoDispatcher.BeginInvoke(new Action(() => {
-                        try { if (_videoMedia != null) _videoMedia.SpeedRatio = 1.0; }
-                        catch { }
-                    }));
-                } catch { }
-            }
-            _log?.LogInfo("[ext-sync] video MediaClosed; sync timer stopped");
-        }
-
-        private void OnVideoMediaFailed(object sender, Unosquare.FFME.Common.MediaFailedEventArgs e) {
-            _log?.LogError($"[ext-sync] video MediaFailed: {e.ErrorException?.Message ?? "(no message)"}");
-            try { MediaFailed?.Invoke(e.ErrorException ?? new Exception("video MediaFailed")); } catch { }
-        }
-
-        // ---- Sync loop ----
-
-        // 250 ms tick: fast enough to keep drift under control, slow
-        // enough that SpeedRatio updates don't thrash. Each tick the
-        // loop reads audio + video clocks and writes at most one new
-        // SpeedRatio value.
-        private const int SyncTickPeriodMs = 250;
-        // Deadband hysteresis. When already inside the deadband, we
-        // only EXIT it once drift crosses SyncDeadbandExitMs.
-        // Conversely from outside, we only ENTER the deadband once
-        // drift drops below SyncDeadbandEnterMs. Both well under
-        // human lip-sync perception threshold (~75-100 ms). The
-        // hysteresis prevents the controller from oscillating
-        // between "neutral" and "edge-of-nudge" when drift sits
-        // close to one threshold.
-        private const int SyncDeadbandEnterMs = 35;
-        private const int SyncDeadbandExitMs  = 75;
-        // Drift over which we apply max speed nudge. Phase 2.5:
-        // tightened from 2000ms to 1000ms — 1s of drift = full
-        // ±5% nudge, closes the gap in ~1 wall-second instead of 2.
-        // Faster but still well under perceptible video-rate-change
-        // territory.
-        private const int SyncRecoveryTargetMs = 1000;
-        private const double SyncMaxSpeedDelta = 0.05;
-        // Catastrophic threshold — log loudly but keep nudging.
-        private const int SyncCatastrophicMs = 2000;
-        // Track whether we're currently in the deadband (for hysteresis).
-        private bool _syncInDeadband = true;
-
-        private void StartSyncTimer() {
-            if (_syncTimer != null) return;
-            _syncTimer = new Timer(OnSyncTick, null, SyncTickPeriodMs, SyncTickPeriodMs);
-        }
-
-        private void StopSyncTimer() {
-            try { _syncTimer?.Dispose(); } catch { }
-            _syncTimer = null;
-        }
-
-        private int _syncTickPending;
-        private void OnSyncTick(object state) {
-            // Re-entrancy guard — if the previous tick is still
-            // queued on the dispatcher, skip this one. The dispatcher
-            // tick is short (one read + at most one write) so this
-            // only triggers if the UI thread is genuinely stalled.
-            if (Interlocked.Exchange(ref _syncTickPending, 1) != 0) return;
-            var dispatcher = _videoDispatcher;
-            if (dispatcher == null) {
-                Interlocked.Exchange(ref _syncTickPending, 0);
-                return;
-            }
-            try {
-                dispatcher.BeginInvoke(new Action(DoSyncTick), DispatcherPriority.Background);
-            } catch {
-                Interlocked.Exchange(ref _syncTickPending, 0);
-            }
-        }
-
-        private void DoSyncTick() {
-            try {
-                if (!_videoMediaOpen || _videoMedia == null || _renderer == null) return;
-
-                long audioMs = _renderer.GetMediaTimeMs();
-                long videoMs;
-                try { videoMs = (long)_videoMedia.Position.TotalMilliseconds; }
-                catch { return; }
-
-                // Wait for both clocks to start advancing. NAudio
-                // GetMediaTimeMs returns 0 before first sample drains
-                // through the device; FFME.Position returns 0 before
-                // first frame presents.
-                if (audioMs <= 0 || videoMs <= 0) return;
-
-                long nowWallMs = _syncLogClock.ElapsedMilliseconds;
-
-                // First valid tick — capture baselines AND the
-                // wire-PTS offset. The wireOffset represents the
-                // server's intended sync: e.g. if the server sends
-                // a prior IDR 1.5 s before the play position, the
-                // first video MAU's PTS is 1.5 s earlier than the
-                // first audio MAU's PTS — meaning at any given wall
-                // moment, audio is "1.5 s ahead" of video in pure
-                // elapsed terms but actually IN-SYNC per the
-                // server's PTS truth. Adding wireOffset to the drift
-                // formula corrects for this.
-                if (_audioBaselineMs < 0) {
-                    _audioBaselineMs = audioMs;
-                    _videoBaselineMs = videoMs;
-
-                    // wireOffset = audioFirstWirePts - videoFirstWirePts
-                    // Read both from authoritative sources (controller's
-                    // own audio capture + RTSPClient's video capture).
-                    long aWire = Interlocked.Read(ref _firstAudioMauWirePtsMs);
-                    long vWire = _rtsp?.FirstVideoMauWirePtsMs ?? -1L;
-                    if (aWire >= 0 && vWire >= 0) {
-                        _wireOffsetMs = aWire - vWire;
-                        _log?.LogInfo($"[ext-sync] sync baselines captured: " +
-                                      $"aud={audioMs}ms vid={videoMs}ms " +
-                                      $"(initial elapsed offset {audioMs - videoMs:+#;-#;0}ms) " +
-                                      $"wireOffset={_wireOffsetMs:+#;-#;0}ms " +
-                                      $"(audWirePts={aWire}ms vidWirePts={vWire}ms)");
-                    } else {
-                        _wireOffsetMs = 0;
-                        _log?.LogInfo($"[ext-sync] sync baselines captured: " +
-                                      $"aud={audioMs}ms vid={videoMs}ms — wire PTS not " +
-                                      $"yet available (aWire={aWire}, vWire={vWire}), " +
-                                      $"using elapsed-only sync (initial skew will be " +
-                                      $"held as-is; user can fine-tune via AudioSyncOffsetMs)");
-                    }
-                    _prevTickWallMs = nowWallMs;
-                    _prevVideoMsForDiag = videoMs;
+        private void OnVideoCodecCommitted(string wireCodec) {
+            lock (_videoGate) {
+                if (_videoDecoder != null) return;
+                if (_presenter == null) {
+                    _log?.LogError("[ext-sync] video committed but no presenter attached — " +
+                                   "video will not render.");
                     return;
                 }
+                AVCodecID id = MapWireCodec(wireCodec);
+                int clockHz = MapClockHz(wireCodec);
+                _videoClockHz = clockHz;
 
-                long audioElapsed = audioMs - _audioBaselineMs;
-                long videoElapsed = videoMs - _videoBaselineMs;
+                _pacer = new PtsFramePacer(
+                    (ptr, stride, w, h) => _presenter?.SubmitFrame(ptr, stride, w, h),
+                    prerollMs: _videoJitterBufferMs, _log);
+                // Slave video presentation to the audio device clock.
+                _pacer.SetMasterClock(() => _renderer?.GetMediaTimeMs() ?? 0L);
+                UpdateSyncOffset();
 
-                // Drift: how far has audio gone relative to video
-                // (in elapsed terms), corrected for wire-side intended
-                // sync (+wireOffset) and the user's manual delay
-                // (-AudioSyncOffsetMs). Zero = perfectly in sync.
-                //
-                // Sign of wireOffset matters: when video PTS starts
-                // earlier than audio PTS, wireOffset is positive
-                // (audWire - vidWire = positive). Adding it to the
-                // formula means: for the SAME real-time moment,
-                // audio's "elapsed" naturally lags video's "elapsed"
-                // by wireOffset ms (because video had a head-start
-                // in wire-time). Drift = 0 means that natural
-                // relationship holds. Drift > 0 means audio has
-                // pulled ahead beyond that — video needs to speed
-                // up. Drift < 0 means video has pulled ahead.
-                long drift = audioElapsed - videoElapsed + _wireOffsetMs - AudioSyncOffsetMs;
-                bool catastrophic = System.Math.Abs(drift) > SyncCatastrophicMs;
-
-                // Deadband hysteresis: stay in / out of the deadband
-                // based on which side of the relevant threshold we
-                // cross. Prevents oscillation when drift hovers near
-                // a single threshold.
-                bool wasInDeadband = _syncInDeadband;
-                if (_syncInDeadband) {
-                    if (System.Math.Abs(drift) > SyncDeadbandExitMs) _syncInDeadband = false;
-                } else {
-                    if (System.Math.Abs(drift) < SyncDeadbandEnterMs) _syncInDeadband = true;
+                var d = new LibAvVideoPushDecoder(id, clockHz, _log);
+                d.OnFrame += (ptr, stride, w, h, ptsMs) => _pacer?.Submit(ptr, stride, w, h, ptsMs);
+                try {
+                    d.Start();
+                    _videoDecoder = d;
+                    _log?.LogInfo($"[ext-sync] video decoder started: wireCodec={wireCodec} " +
+                                  $"→ {id} clockHz={clockHz}");
+                } catch (Exception ex) {
+                    _log?.LogError($"[ext-sync] video decoder start failed: {ex.Message}");
+                    try { _pacer?.Dispose(); } catch { }
+                    _pacer = null;
                 }
+            }
+        }
 
-                double newRate;
-                if (_syncInDeadband) {
-                    newRate = 1.0;
-                } else {
-                    double frac = (double)drift / SyncRecoveryTargetMs;
-                    if (frac >  SyncMaxSpeedDelta) frac =  SyncMaxSpeedDelta;
-                    if (frac < -SyncMaxSpeedDelta) frac = -SyncMaxSpeedDelta;
-                    newRate = 1.0 + frac;
-                }
+        private void OnVideoMau(byte[] data, uint rtpTs) {
+            long ptsMs = (long)rtpTs * 1000L / _videoClockHz;
+            if (Interlocked.CompareExchange(ref _firstVideoMauWirePtsMs, ptsMs, -1L) == -1L) {
+                Interlocked.Exchange(ref _firstVideoMauRtpRaw, rtpTs);
+                _log?.LogDebug($"[ext-sync-anchor] first video MAU rtpTs={rtpTs} ({ptsMs}ms, clk={_videoClockHz})");
+            }
+            // Retry the SR-based offset until both streams' Sender Reports have
+            // anchored (they arrive a little after the first MAUs). Cheap once
+            // finalised. Runs on the depacketizer thread.
+            if (!_syncFinalized) UpdateSyncOffset();
+            _videoDecoder?.SubmitPacket(data, rtpTs);
+        }
 
-                // SpeedRatio-honour diagnostic. Compare actual video
-                // advance over wall time to the rate we previously
-                // requested. If FFME honours SpeedRatio on raw
-                // elementary streams these should track; if FFME
-                // ignores it, actualRate will hover near 1.0
-                // regardless of what we set.
-                double actualRate = double.NaN;
-                if (_prevVideoMsForDiag >= 0 && _prevTickWallMs >= 0) {
-                    long dVid = videoMs - _prevVideoMsForDiag;
-                    long dWall = nowWallMs - _prevTickWallMs;
-                    if (dWall > 0) actualRate = (double)dVid / dWall;
+        // A/V offset via the RTCP Sender Report NTP↔RTP mapping — the canonical
+        // cross-stream sync. Each stream's SR ties its RTP clock to absolute
+        // NTP wall time, so we can compute the true wall-time gap between the
+        // first audio sample (at the play point) and the first video frame
+        // (delivered earlier as prior-IDR padding) = how much video to skip.
+        // This is epoch-free and server-semantics-free, unlike the earlier
+        // first-MAU-PTS-difference (independent epochs → x-wmf-pf raced ahead)
+        // and RTP-Info-rtptime (WMPNss reports the first-packet ts, not the
+        // play point → no padding skipped → video lagged). Retried per video
+        // MAU until both SRs anchor (a few seconds in), then latched.
+        private void UpdateSyncOffset() {
+            long aRaw = Interlocked.Read(ref _firstAudioMauRtpRaw);
+            long vRaw = Interlocked.Read(ref _firstVideoMauRtpRaw);
+            if (aRaw < 0 || vRaw < 0) return;
+            // WMPNss doesn't send RTCP Sender Reports, so the cross-stream
+            // offset comes from the PLAY response's RTP-Info (each stream's
+            // play-point RTP timestamp) — epoch-free and available immediately.
+            if (_rtsp != null && _rtsp.TryGetRtpInfoAvOffsetMs((uint)aRaw, (uint)vRaw, out long offsetMs)) {
+                // Sanity gate: no real A/V startup skew exceeds a few seconds.
+                // A larger value means the RTP-Info / first-MAU relationship
+                // didn't follow the prior-IDR-padding model — e.g. Live TV
+                // (npt=now), where the audio RTP-Info play point can sit tens
+                // of seconds from the first delivered audio MAU and inflates
+                // the offset. In that case the streams' first MAUs actually
+                // arrive together (the live edge), so 0 is the right answer.
+                if (Math.Abs(offsetMs) > MaxPlausibleOffsetMs) {
+                    _log?.LogInfo($"[ext-sync] RTP-Info offset {offsetMs}ms implausible (>{MaxPlausibleOffsetMs}ms) " +
+                                  $"— falling back to 0 (streams assumed to start together, e.g. Live TV)");
+                    offsetMs = 0;
                 }
-                _prevVideoMsForDiag = videoMs;
-                _prevTickWallMs = nowWallMs;
+                Interlocked.Exchange(ref _baseOffsetMs, offsetMs);
+                long offset = offsetMs + Interlocked.Read(ref _liveTrimMs);
+                _pacer?.SetSyncOffsetMs(offset);
+                _syncFinalized = true;
+                _log?.LogInfo($"[ext-sync] A/V offset = {offsetMs}ms + trim {Interlocked.Read(ref _liveTrimMs)}ms " +
+                              $"→ {offset}ms (audioRtp={aRaw} videoRtp={vRaw})");
+            } else {
+                long now = _srWaitClock.ElapsedMilliseconds;
+                if (now - _lastSrWaitLogMs >= 2000) {
+                    _lastSrWaitLogMs = now;
+                    _log?.LogInfo($"[ext-sync] waiting for RTP-Info (aRtp={aRaw} vRtp={vRaw})");
+                }
+            }
+        }
 
-                // Apply only if different from current (avoid
-                // pointless DependencyProperty writes that re-trigger
-                // FFME's internal change handlers).
-                double currentRate;
-                try { currentRate = _videoMedia.SpeedRatio; }
-                catch { currentRate = 1.0; }
-                if (System.Math.Abs(currentRate - newRate) > 0.001) {
-                    try {
-                        _videoMedia.SpeedRatio = newRate;
-                        _lastNudgedRate = newRate;
-                    } catch (Exception ex) {
-                        _log?.LogError($"[ext-sync] SpeedRatio={newRate:F3} failed: {ex.Message}");
-                    }
-                }
+        // Live A/V trim: the computed cross-stream RTP-Info offset
+        // (_baseOffsetMs) aligns the streams' content time, but a fixed
+        // residual remains from physical pipeline latency (video present
+        // chain vs audio device output) that software can't measure — only
+        // the eye can. _liveTrimMs is added on top and can be nudged during
+        // playback so the user can dial out that residual in real time.
+        // Initialised from config's AudioSyncOffsetMs in the ctor.
+        private long _baseOffsetMs;
+        private long _liveTrimMs;
 
-                // Log throttling: one line per ~2 seconds of wall
-                // time, OR immediately when we transition to /
-                // from catastrophic drift OR cross the deadband
-                // boundary (state change is interesting).
-                bool transitionCatastrophic =
-                    System.Math.Abs(_lastLoggedDriftMs) <= SyncCatastrophicMs && catastrophic;
-                bool deadbandTransition = wasInDeadband != _syncInDeadband;
-                if (nowWallMs - _syncLogIntervalTicks >= 2000 ||
-                    transitionCatastrophic || deadbandTransition) {
-                    _syncLogIntervalTicks = nowWallMs;
-                    _lastLoggedDriftMs = drift;
-                    string actualStr = double.IsNaN(actualRate) ? "n/a" : actualRate.ToString("F3");
-                    _log?.LogInfo($"[ext-sync] sync: audE={audioElapsed}ms vidE={videoElapsed}ms " +
-                                  $"drift={drift:+#;-#;0}ms req={newRate:F3} actual={actualStr}" +
-                                  (_syncInDeadband ? " DEAD" : "") +
-                                  (catastrophic ? " CATASTROPHIC" : ""));
-                }
-            } catch (Exception ex) {
-                _log?.LogError($"[ext-sync] DoSyncTick threw: {ex.Message}");
-            } finally {
-                Interlocked.Exchange(ref _syncTickPending, 0);
+        /// <summary>Current user A/V trim in ms (positive = video earlier /
+        /// less lag). Persist this back to config so it survives the session.</summary>
+        public int CurrentAudioSyncTrimMs => (int)Interlocked.Read(ref _liveTrimMs);
+
+        /// <summary>Adjust the A/V sync trim live and re-apply it to the pacer
+        /// immediately. Positive deltas advance video (reduce video-lags-audio);
+        /// negative delay it. Returns the new total trim (ms).</summary>
+        public int NudgeAudioSyncTrim(int deltaMs) {
+            long trim = Interlocked.Add(ref _liveTrimMs, deltaMs);
+            long offset = Interlocked.Read(ref _baseOffsetMs) + trim;
+            _pacer?.SetSyncOffsetMs(offset);
+            _log?.LogInfo($"[ext-sync] A/V trim nudged {(deltaMs >= 0 ? "+" : "")}{deltaMs}ms " +
+                          $"→ trim {trim}ms (base {Interlocked.Read(ref _baseOffsetMs)}ms → offset {offset}ms)");
+            return (int)trim;
+        }
+
+        private static AVCodecID MapWireCodec(string wireCodec) {
+            switch ((wireCodec ?? "").ToUpperInvariant()) {
+                case "VND.MS.WM-MPV": return AVCodecID.AV_CODEC_ID_MPEG2VIDEO;
+                case "H264":
+                case "X-WMF-PF":      return AVCodecID.AV_CODEC_ID_H264;
+                default:              return AVCodecID.AV_CODEC_ID_H264;
+            }
+        }
+
+        private static int MapClockHz(string wireCodec) {
+            switch ((wireCodec ?? "").ToUpperInvariant()) {
+                case "VND.MS.WM-MPV": return 90000;
+                case "X-WMF-PF":      return 1000;
+                default:              return 90000;
             }
         }
 
@@ -677,169 +416,48 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
 
         public Task PlayAsync() {
             _playRequested = true;
-            _renderer?.Play();
-            // Also drive FFME play if a video element is attached.
-            if (_videoMedia != null && _videoDispatcher != null) {
-                try {
-                    _videoDispatcher.BeginInvoke(new Action(async () => {
-                        try { await _videoMedia.Play(); }
-                        catch (Exception ex) { _log?.LogError($"[ext-sync] video Play failed: {ex.Message}"); }
-                    }));
-                } catch { }
-            }
+            _renderer?.Play();   // video resumes automatically as the clock advances
             return Task.CompletedTask;
         }
 
         public Task PauseAsync() {
             _playRequested = false;
-            _renderer?.Pause();
-            if (_videoMedia != null && _videoDispatcher != null) {
-                try {
-                    _videoDispatcher.BeginInvoke(new Action(async () => {
-                        try { await _videoMedia.Pause(); }
-                        catch (Exception ex) { _log?.LogError($"[ext-sync] video Pause failed: {ex.Message}"); }
-                    }));
-                } catch { }
-            }
+            _renderer?.Pause();  // master clock stalls → video holds on its last frame
             return Task.CompletedTask;
         }
 
         public Task SeekAsync(TimeSpan position) {
             try { _rtsp?.Play(startMs: (long)position.TotalMilliseconds, rate: _lastRequestedRate); }
-            catch (Exception ex) {
-                _log?.LogError($"[ext-sync] RTSP seek failed: {ex.Message}");
-            }
+            catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP seek failed: {ex.Message}"); }
+            // Both streams jump — re-anchor the pacer so it re-aligns video to
+            // the audio clock at the new position (the wire offset is unchanged
+            // because the server re-sends prior-IDR padding on each PLAY).
+            _pacer?.Reanchor();
             return Task.CompletedTask;
         }
 
         public Task SetRateAsync(double rate) {
             _lastRequestedRate = rate;
-            bool isNormalRate = System.Math.Abs(rate - 1.0) < 0.0001;
-
-            // External-sync trick play. For ANY non-1.0 rate WMPNss does
-            // server-side trick play (drops audio entirely, sends video
-            // with PTS spacing × rate). The sync controller's SpeedRatio
-            // nudging (which assumes 1.0 = nominal) steps aside, and
-            // FFME's SpeedRatio is set to the requested rate so the video
-            // element renders the fast-PTS frames at matching wall speed.
-            //
-            // <para>Visual presentation is best-effort and limited by FFME:
-            // high forward rates above ~4× exceed FFME's sustainable
-            // presentation pipeline (frames pile up in decode queue), and
-            // any reverse rate's backward-PTS frames are silently dropped
-            // by FFME's video element. The wire-side server trick play
-            // and progress-bar tracking are unaffected — the user can
-            // still navigate via the timeline indicator even when the
-            // image isn't updating. Capping SpeedRatio at
-            // <see cref="MaxFfmeSpeedRatio"/> (in ApplySpeedRatioToFfme)
-            // keeps FFME stable on the forward path; documented limitation
-            // for high rates and all RW.</para>
-            if (!isNormalRate) {
-                StopSyncTimer();
-                ApplySpeedRatioToFfme(rate, reason: $"trick play {rate:F2}×");
-            } else {
-                // Returning to 1.0×. Restore SpeedRatio first so the
-                // sync timer's first tick reads a stable rate, then
-                // restart the timer with fresh baselines (the prior
-                // baselines are stale — video PTS jumped during trick
-                // play, so audio-vs-video drift won't be comparable
-                // with pre-trick baselines).
-                ApplySpeedRatioToFfme(1.0, reason: "return-to-1×");
-                _audioBaselineMs = -1;
-                _videoBaselineMs = -1;
-                _wireOffsetMs = 0;
-                _prevVideoMsForDiag = -1;
-                _prevTickWallMs = -1;
-                _syncInDeadband = true;
-                _lastNudgedRate = 1.0;
-                if (_videoMediaOpen) StartSyncTimer();
-            }
-
+            bool normal = Math.Abs(rate - 1.0) < 0.0001;
+            // Non-1x = server-side trick play: audio drops, so the master clock
+            // stalls. Switch the pacer to free-run so the (fast-PTS) video keeps
+            // updating; return to audio-slaved at 1x.
+            _pacer?.SetFreeRun(!normal);
+            if (normal) _pacer?.Reanchor();
             try { _rtsp?.SetRate(rate); }
-            catch (Exception ex) {
-                _log?.LogError($"[ext-sync] RTSP SetRate({rate}) failed: {ex.Message}");
-            }
+            catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP SetRate({rate}) failed: {ex.Message}"); }
             return Task.CompletedTask;
         }
 
-        /// <summary>Apply a SpeedRatio to the attached FFME video
-        /// element, dispatcher-marshalled. Safe to call when no video
-        /// element is attached (no-op).
-        ///
-        /// <para>FFME's <c>SpeedRatio</c> is positive-only — negative
-        /// values either throw or silently leave the element in an
-        /// unrecoverable state (May 2026 test: setting
-        /// SpeedRatio=-10 during RW broke the element such that
-        /// subsequent return-to-1× couldn't resume playback). We pass
-        /// the absolute value here. The wire-side direction is
-        /// already handled by RTSP PLAY-with-Scale=-N which tells
-        /// WMPNss to deliver reverse-PTS frames; FFME then plays
-        /// those frames at <c>|rate|</c> wall speed and the user
-        /// sees rewound content at the requested speed.</para>
-        ///
-        /// <para>Speed is also clamped to <see cref="MaxFfmeSpeedRatio"/>
-        /// — above ~4× FFME's internal presentation pipeline can't
-        /// sustain the rate and frames pile up in the decode queue
-        /// until rate-change releases them, producing the "image
-        /// frozen during FF then blazes through to current position
-        /// on Play" symptom (May 2026 test: SpeedRatio=10 and =100
-        /// both exhibited this). Wire-side server-driven rate still
-        /// goes out at the requested value, so trick play continues
-        /// to traverse media at the user's requested rate; only the
-        /// visual update is capped. Users see "stuttery N×" video
-        /// playback for any requested rate above the cap, which is
-        /// still informative for navigation.</para></summary>
-        private void ApplySpeedRatioToFfme(double rate, string reason) {
-            if (_videoMedia == null || _videoDispatcher == null) return;
-            double ffmeRate = System.Math.Abs(rate);
-            // Floor: FFME refuses SpeedRatio < ~0.1 in practice; cap at
-            // a safe minimum even though our trick-play ladder never
-            // emits values that small.
-            if (ffmeRate < 0.1) ffmeRate = 0.1;
-            // Ceiling: FFME's video presentation can't sustain very
-            // high SpeedRatio values without backing up the decoder
-            // queue. Cap visually while still letting the wire-side
-            // server trick play run at the user's requested rate.
-            if (ffmeRate > MaxFfmeSpeedRatio) ffmeRate = MaxFfmeSpeedRatio;
-            try {
-                _videoDispatcher.BeginInvoke(new Action(() => {
-                    try {
-                        if (_videoMedia != null) {
-                            _videoMedia.SpeedRatio = ffmeRate;
-                            _log?.LogInfo($"[ext-sync] FFME SpeedRatio = {ffmeRate:F2} " +
-                                          $"(requested={rate:F2}, {reason})");
-                        }
-                    } catch (Exception ex) {
-                        _log?.LogError($"[ext-sync] SpeedRatio={ffmeRate:F2} apply failed: {ex.Message}");
-                    }
-                }));
-            } catch (Exception ex) {
-                _log?.LogError($"[ext-sync] dispatcher.BeginInvoke threw: {ex.Message}");
-            }
-        }
-
-        // Practical max FFME SpeedRatio. Above 4×, the visual update
-        // stalls because FFME can't sustain the presentation rate (see
-        // ApplySpeedRatioToFfme doc). Pick 4.0 — keeps the visual
-        // movement obvious enough to navigate while staying well under
-        // the failure threshold. Wire-side server trick play (Scale: N)
-        // is unaffected; the server still walks the timeline at the
-        // requested rate regardless of what FFME displays.
-        private const double MaxFfmeSpeedRatio = 4.0;
-
         public void SetAvailableBandwidth(long bitsPerSecond) {
             try { _rtsp?.SetBufferInfo(bitsPerSecond, _lastOptimisedPreroll); }
-            catch (Exception ex) {
-                _log?.LogError($"[ext-sync] SetBufferInfo (bandwidth) failed: {ex.Message}");
-            }
+            catch (Exception ex) { _log?.LogError($"[ext-sync] SetBufferInfo (bandwidth) failed: {ex.Message}"); }
             _lastBandwidthBps = bitsPerSecond;
         }
 
         public void SetOptimisedPreroll(bool optimised) {
             try { _rtsp?.SetBufferInfo(_lastBandwidthBps, optimised); }
-            catch (Exception ex) {
-                _log?.LogError($"[ext-sync] SetBufferInfo (preroll) failed: {ex.Message}");
-            }
+            catch (Exception ex) { _log?.LogError($"[ext-sync] SetBufferInfo (preroll) failed: {ex.Message}"); }
             _lastOptimisedPreroll = optimised;
         }
 
@@ -862,22 +480,46 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         //  Teardown
         // ============================================================
 
-        // Set once on Dispose so the hold-release watchdog (scheduled
-        // via Task.Delay in OnDecoderFormatReady) can skip safely if
-        // the session ended before its 3 s timer fired.
-        private volatile bool _disposed;
-
-        public void Dispose() {
-            _disposed = true;
-            AttachRtspClient(null);
-            AttachVideoMediaElement(null);
-            StopSyncTimer();
+        /// <summary>Tear down the per-media decode pipeline (video decoder +
+        /// pacer, audio decoder + renderer) and reset the sync-anchor state so
+        /// the next media starts clean and rebuilds decoders for ITS codec.
+        /// Preserves session-scoped state: the presenter (session-owned) and
+        /// the user's live A/V trim (<see cref="_liveTrimMs"/>). Idempotent.</summary>
+        private void ResetPipelineForNewMedia() {
+            lock (_videoGate) {
+                try { _videoDecoder?.Complete(); } catch { }
+                try { _videoDecoder?.Dispose(); } catch { }
+                _videoDecoder = null;
+                try { _pacer?.Dispose(); } catch { }
+                _pacer = null;
+            }
             try { _decoder?.Complete(); } catch { }
             try { _decoder?.Dispose(); } catch { }
             _decoder = null;
             try { _renderer?.Dispose(); } catch { }
             _renderer = null;
+
+            // Reset sync anchors / per-media clocks so the new stream's first
+            // MAUs re-anchor and the offset is recomputed from scratch.
             _isOpen = false;
+            _syncFinalized = false;
+            _audioClockHz = 90000;
+            _videoClockHz = 90000;
+            Interlocked.Exchange(ref _firstAudioMauRtpRaw, -1L);
+            Interlocked.Exchange(ref _firstVideoMauRtpRaw, -1L);
+            Interlocked.Exchange(ref _firstVideoMauWirePtsMs, -1L);
+            Interlocked.Exchange(ref _baseOffsetMs, 0L);
+            // Fresh open gate so the next media's OpenAsync waits for the new
+            // renderer rather than returning the previous media's result.
+            if (!_disposed) _openTcs = new TaskCompletionSource<bool>();
+            _log?.LogInfo("[ext-sync] pipeline reset for new media");
+        }
+
+        public void Dispose() {
+            _disposed = true;
+            AttachRtspClient(null);   // detaches + resets the pipeline
+            ResetPipelineForNewMedia();
+            // _presenter is owned by the session; it disposes it.
             _log?.LogInfo("[ext-sync] controller disposed");
         }
     }

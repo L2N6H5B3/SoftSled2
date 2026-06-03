@@ -130,10 +130,6 @@
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Enable Overscan Margin"
                               Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkExternalSync"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Use external-sync audio (experimental — MP3 only)"
-                              Click="OnConfigChanged"/>
 
                     <!-- Resolution picker. The button shows the current
                          selection; clicking opens the ResolutionOverlay
@@ -327,6 +323,45 @@
                                Margin="10,4,0,0"
                                FontSize="12"
                                Text="Log path changes take effect on the NEXT app launch."/>
+
+                    <!-- Video jitter buffer (libav + D3DImage player). -->
+                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
+                               Text="Video jitter buffer"
+                               Foreground="{StaticResource WmcTextBrush}"
+                               Margin="0,32,0,4"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="0,0,0,16"
+                               TextWrapping="Wrap"
+                               Text="How much video the player buffers to absorb bursty RTSP delivery (frames arrive in ~160 ms bursts around I-frames). Larger values smooth out judder at the cost of more start-up latency. Default 250 ms. Takes effect on the next playback."/>
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Left"
+                                Margin="10,0,0,0">
+                        <Button x:Name="BtnJitterMinus"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="-250ms"
+                                MinWidth="100"
+                                Click="BtnJitterMinus_Click"/>
+                        <TextBlock x:Name="JitterBufferValueText"
+                                   Style="{StaticResource WmcSubtitleStyle}"
+                                   Foreground="{StaticResource WmcTextBrush}"
+                                   VerticalAlignment="Center"
+                                   Width="160"
+                                   TextAlignment="Center"
+                                   Text="250 ms"/>
+                        <Button x:Name="BtnJitterPlus"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="+250ms"
+                                MinWidth="100"
+                                Click="BtnJitterPlus_Click"/>
+                    </StackPanel>
+                    <Button x:Name="BtnJitterReset"
+                            Style="{StaticResource WmcButtonStyle}"
+                            Content="Reset to 250 ms"
+                            HorizontalAlignment="Left"
+                            MinWidth="240"
+                            Margin="10,16,0,0"
+                            Click="BtnJitterReset_Click"/>
 
                     <!-- =================================================
                          Advanced diagnostics — these surface env-var

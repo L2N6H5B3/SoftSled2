@@ -289,13 +289,23 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         public long GetMediaTimeMs() {
             if (_disposed || !_baseSet) return 0;
             try {
-                // GetPosition: bytes actually played by the device
-                // (cumulative since device.Play). Sub-millisecond
-                // precision.
+                long abps = _format.AverageBytesPerSecond;
+                if (abps <= 0) return 0;
+                // GetPosition: bytes the device has played (cumulative since
+                // device.Play). With DiscardOnBufferOverflow=false + ReadFully
+                // the provider pads SILENCE when the buffer underruns, so the
+                // device position keeps advancing through that silence — but no
+                // real audio content has been heard. Cap the clock at the real
+                // audio actually written (_bytesWritten) so it only advances
+                // with genuine content. Without this, when the server delivers
+                // audio slowly (e.g. the start-up buffering ramp, ~20% of
+                // real-time), the clock races through silence and the
+                // video pacer slaved to it runs seconds ahead of the audio.
                 long bytesPlayed = _device.GetPosition();
                 if (bytesPlayed < 0) bytesPlayed = 0;
-                double sec = bytesPlayed / (double)_format.AverageBytesPerSecond;
-                return (long)(sec * 1000.0);
+                long written = Interlocked.Read(ref _bytesWritten);
+                long realBytes = Math.Min(bytesPlayed, written);
+                return realBytes * 1000L / abps;
             } catch {
                 return 0;
             }
@@ -322,6 +332,22 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             get {
                 if (_disposed) return 0;
                 try { return _provider.BufferedBytes; } catch { return 0; }
+            }
+        }
+
+        /// <summary>Real current audio buffer occupancy in milliseconds —
+        /// the data queued in the BufferedWaveProvider that the device has
+        /// not yet played. This is the honest telemetry the RTCP BFR W3 field
+        /// should carry (the Xbox reports its true buffer level here, which
+        /// dips when the server under-delivers and so closes the server's
+        /// refill loop; a constant value pegged at TD does not).</summary>
+        public int BufferedMs {
+            get {
+                if (_disposed) return 0;
+                long abps = _format.AverageBytesPerSecond;
+                if (abps <= 0) return 0;
+                try { return (int)(_provider.BufferedBytes * 1000L / abps); }
+                catch { return 0; }
             }
         }
 

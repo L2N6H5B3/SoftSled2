@@ -112,7 +112,6 @@ namespace SoftSledWPF.Components.Shell {
                 Chk2DAnimations.IsChecked      = _config.Enable2DAnimations;
                 ChkIntenseAnimations.IsChecked = _config.EnableIntenseAnimations;
                 ChkOverscan.IsChecked          = _config.EnableOverscanMargin;
-                ChkExternalSync.IsChecked      = _config.UseExternalSyncMode;
                 ChkHdContent.IsChecked         = _config.EnableHdContent;
                 ChkUiSounds.IsChecked          = _config.EnableUiSounds;
                 ChkPopups.IsChecked            = _config.EnablePopups;
@@ -144,6 +143,7 @@ namespace SoftSledWPF.Components.Shell {
                                                   ?? "(default: %LocalAppData%/SoftSled/Dumps)";
                 RefreshResolutionButton();
                 RefreshAudioSyncDisplay();
+                RefreshJitterBufferDisplay();
                 UpdateAnimationDependencies();
 
                 PairingStatusText.Text = _config.IsPaired
@@ -246,7 +246,6 @@ namespace SoftSledWPF.Components.Shell {
             _config.Enable2DAnimations      = Chk2DAnimations.IsChecked == true;
             _config.EnableIntenseAnimations = ChkIntenseAnimations.IsChecked == true;
             _config.EnableOverscanMargin    = ChkOverscan.IsChecked == true;
-            _config.UseExternalSyncMode     = ChkExternalSync.IsChecked == true;
             _config.EnableHdContent         = ChkHdContent.IsChecked == true;
             _config.EnableUiSounds          = ChkUiSounds.IsChecked == true;
             _config.EnablePopups            = ChkPopups.IsChecked == true;
@@ -347,7 +346,10 @@ namespace SoftSledWPF.Components.Shell {
         /// anything beyond that is a pipeline problem, not an
         /// offsettable display lag.
         /// </summary>
-        private const int AudioSyncOffsetClampMs = 250;
+        // Widened from 250 → 500: the live in-session nudge (Ctrl+]/[) writes
+        // its dialled-in trim back here, and the residual pipeline lag can sit
+        // a little above the old ±250 "AVR latency" bound on some setups.
+        private const int AudioSyncOffsetClampMs = 500;
 
         private void RefreshAudioSyncDisplay() {
             if (_config == null) { AudioSyncValueText.Text = "0 ms"; return; }
@@ -387,6 +389,41 @@ namespace SoftSledWPF.Components.Shell {
         private void BtnAudioSyncReset_Click(object sender, RoutedEventArgs e) {
             if (_config == null) return;
             AdjustAudioSyncOffset(-_config.AudioSyncOffsetMs);
+        }
+
+        // ----- Video jitter buffer (libav + D3DImage player) -----
+
+        private const int JitterBufferDefaultMs = 250;
+        private const int JitterBufferMaxMs = 4000;
+        private const int JitterBufferStepMs = 250;
+
+        private void RefreshJitterBufferDisplay() {
+            int ms = _config?.VideoJitterBufferMs ?? JitterBufferDefaultMs;
+            JitterBufferValueText.Text = $"{ms} ms";
+        }
+
+        private void AdjustJitterBuffer(int deltaMs) {
+            if (_suppressWrite || _config == null) return;
+            int next = _config.VideoJitterBufferMs + deltaMs;
+            if (next < 0) next = 0;
+            if (next > JitterBufferMaxMs) next = JitterBufferMaxMs;
+            if (next == _config.VideoJitterBufferMs) return;
+            _config.VideoJitterBufferMs = next;
+            try { SoftSledConfigManager.WriteConfig(_config); }
+            catch (Exception ex) {
+                MessageBox.Show("Failed to save video jitter buffer: " + ex.Message);
+                return;
+            }
+            RefreshJitterBufferDisplay();
+            ConfigChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void BtnJitterMinus_Click(object sender, RoutedEventArgs e) => AdjustJitterBuffer(-JitterBufferStepMs);
+        private void BtnJitterPlus_Click (object sender, RoutedEventArgs e) => AdjustJitterBuffer(+JitterBufferStepMs);
+
+        private void BtnJitterReset_Click(object sender, RoutedEventArgs e) {
+            if (_config == null) return;
+            AdjustJitterBuffer(JitterBufferDefaultMs - _config.VideoJitterBufferMs);
         }
 
         /// <summary>

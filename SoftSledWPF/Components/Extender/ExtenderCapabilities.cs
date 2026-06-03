@@ -135,7 +135,7 @@ namespace SoftSled.Components.Extender {
             Capabilities.Add(new DeviceCapability("SOU", "Is UI sound supported?", "UI", config.EnableUiSounds));
             Capabilities.Add(new DeviceCapability("TBA", "Is a Toolbar allowed?", "UI", config.EnableToolbar));
             Capabilities.Add(new DeviceCapability("TBP", "Is Toolbar persistent?", "UI", false));
-            Capabilities.Add(new DeviceCapability("TVS", "Is a TV skin used?", "UI", true));
+            Capabilities.Add(new DeviceCapability("TVS", "Is a TV skin used?", "UI", false));
 
 
             #endregion ########################################################

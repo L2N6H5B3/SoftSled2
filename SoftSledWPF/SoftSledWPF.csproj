@@ -126,9 +126,6 @@
     <Reference Include="BouncyCastle.Crypto, Version=1.9.0.0, Culture=neutral, PublicKeyToken=0e99375e54769942, processorArchitecture=MSIL">
       <HintPath>..\packages\Portable.BouncyCastle.1.9.0\lib\net40\BouncyCastle.Crypto.dll</HintPath>
     </Reference>
-    <Reference Include="ffme.win, Version=4.4.350.0, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>..\packages\FFME.Windows.4.4.350\lib\net461\ffme.win.dll</HintPath>
-    </Reference>
     <Reference Include="FFmpeg.AutoGen, Version=4.4.0.0, Culture=neutral, PublicKeyToken=9b7632533a381715, processorArchitecture=MSIL">
       <HintPath>..\packages\FFmpeg.AutoGen.4.4.0\lib\net45\FFmpeg.AutoGen.dll</HintPath>
     </Reference>
@@ -137,6 +134,15 @@
     </Reference>
     <Reference Include="NAudio">
       <HintPath>..\packages\NAudio.1.8.5\lib\net35\NAudio.dll</HintPath>
+    </Reference>
+    <Reference Include="SharpDX">
+      <HintPath>..\packages\SharpDX.4.2.0\lib\net45\SharpDX.dll</HintPath>
+    </Reference>
+    <Reference Include="SharpDX.Direct3D9">
+      <HintPath>..\packages\SharpDX.Direct3D9.4.2.0\lib\net45\SharpDX.Direct3D9.dll</HintPath>
+    </Reference>
+    <Reference Include="SharpDX.Mathematics">
+      <HintPath>..\packages\SharpDX.Mathematics.4.2.0\lib\net45\SharpDX.Mathematics.dll</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Data" />
@@ -196,13 +202,19 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
+    <Page Include="Components\AudioVisual\VideoFpsLab\VideoFpsLabWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
     <Compile Include="App.xaml.cs">
       <DependentUpon>App.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Components\AudioVisual\AsfFfmeInputStream.cs" />
-    <Compile Include="Components\AudioVisual\AsfStreamProducer.cs" />
-    <Compile Include="Components\AudioVisual\AudioSilenceInjector.cs" />
+    <Compile Include="Components\AudioVisual\VideoFpsLab\LibAvVideoDecoder.cs" />
+    <Compile Include="Components\AudioVisual\VideoFpsLab\LibAvVideoPushDecoder.cs" />
+    <Compile Include="Components\AudioVisual\VideoFpsLab\LiveVideoTap.cs" />
+    <Compile Include="Components\AudioVisual\VideoFpsLab\PtsFramePacer.cs" />
+    <Compile Include="Components\AudioVisual\VideoFpsLab\D3DImagePresenter.cs" />
     <Compile Include="Components\AudioVisual\ExternalSync\ExternalAudioFormat.cs" />
     <Compile Include="Components\AudioVisual\ExternalSync\LibAvAudioDecoder.cs" />
     <Compile Include="Components\AudioVisual\ExternalSync\NAudioMasterRenderer.cs" />
@@ -211,7 +223,6 @@
     <Compile Include="Components\AudioVisual\FormatStructures\VIDEOINFOHEADER.cs" />
     <Compile Include="Components\AudioVisual\FormatStructures\VIDEOINFOHEADER2.cs" />
     <Compile Include="Components\AudioVisual\FormatStructures\WAVEFORMATEX.cs" />
-    <Compile Include="Components\AudioVisual\MsWmsRtspClient.cs" />
     <Compile Include="Components\AudioVisual\WindowsSystemAudio.cs" />
     <Compile Include="Components\AudioVisual\WmrptAudioDepacketizer.cs" />
     <Compile Include="Components\AudioVisual\WmrptAudioDepacketizerAsync.cs" />
@@ -220,14 +231,9 @@
     <Compile Include="Components\AudioVisual\WmcFastpathRawDumper.cs" />
     <Compile Include="Components\AudioVisual\WmcFastpathOverlayRegionDecoder.cs" />
     <Compile Include="Components\AudioVisual\IMediaController.cs" />
-    <Compile Include="Components\AudioVisual\FfmeMediaController.cs" />
     <Compile Include="Components\AudioVisual\PtsErrorInfo.cs" />
     <Compile Include="Components\AudioVisual\SkewInfo.cs" />
     <Compile Include="Components\AudioVisual\SurfaceRouter.cs" />
-    <Compile Include="Components\AudioVisual\WmrptPcmNAudioSink.cs" />
-    <Compile Include="Components\AudioVisual\Mp3OverRtpAudioSink.cs" />
-    <Compile Include="Components\AudioVisual\MpegPsMuxer.cs" />
-    <Compile Include="Components\AudioVisual\MpegTsMuxer.cs" />
     <Compile Include="Components\AudioVisual\WmrptVideoDepacketizer.cs" />
     <Compile Include="Components\AudioVisual\WmrptVideoDepacketizerAsync.cs" />
     <Compile Include="Components\Communication\DSLRCommunication.cs" />
@@ -331,6 +337,10 @@
     </Compile>
     <Compile Include="Components\Shell\ExtenderSessionControl.xaml.cs">
       <DependentUpon>ExtenderSessionControl.xaml</DependentUpon>
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="Components\AudioVisual\VideoFpsLab\VideoFpsLabWindow.xaml.cs">
+      <DependentUpon>VideoFpsLabWindow.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
   </ItemGroup>

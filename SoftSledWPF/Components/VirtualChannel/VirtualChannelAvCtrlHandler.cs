@@ -15,23 +15,6 @@ namespace SoftSled.Components.VirtualChannel {
         public event EventHandler<VirtualChannelSendArgs> VirtualChannelSend;
 
         /// <summary>
-        /// Fired (off the VC thread, on whichever thread RTSPClient is on)
-        /// when the MPEG-ES video pipeline has been constructed and is ready
-        /// to be opened by FFME. The MainWindow subscribes and dispatches the
-        /// Media.Open call to the WPF thread.
-        /// </summary>
-        public event Action<Unosquare.FFME.Common.IMediaInputStream> VideoPipelineReady;
-
-        /// <summary>
-        /// Fired when an audio-only FFME pipeline is ready (currently the
-        /// X-WMF-PF raw-PCM path). The MainWindow opens a *second* FFME
-        /// MediaElement on this stream so audio + video render in parallel
-        /// — same FFME backend for both, NAudio reserved for the WMC UI
-        /// fast-path audio.
-        /// </summary>
-        public event Action<Unosquare.FFME.Common.IMediaInputStream> AudioPipelineReady;
-
-        /// <summary>
         /// Fired when CloseMedia / Stop tears down the RTSP session — the
         /// host should close the FFME element so the producer (which has
         /// just been Completed by RTSPClient) can drain cleanly.
@@ -48,13 +31,11 @@ namespace SoftSled.Components.VirtualChannel {
         public event Action<int /*surfaceId*/> VideoSurfaceRequested;
 
         /// <summary>
-        /// Optional bridge to the actual playback engine (FFME wrapped in
-        /// <see cref="FfmeMediaController"/>). When set, GetPosition /
-        /// GetDuration / Play / Pause / Stop all defer to this controller
-        /// for their data and side-effects instead of the legacy stopwatch
-        /// estimate. Stays null on audio-only RFC-2250 MP3 sessions (no
-        /// video pipeline → no FFME → stopwatch fallback path retained
-        /// unchanged).
+        /// Optional bridge to the actual playback engine
+        /// (<see cref="ExternalSync.ExternalSyncMediaController"/>). When
+        /// set, GetPosition / GetDuration / Play / Pause / Stop all defer
+        /// to this controller for their data and side-effects instead of
+        /// the legacy stopwatch estimate.
         ///
         /// Setting this property also subscribes our event handlers so
         /// FFME's BufferingEnded / MediaEnded / MediaFailed are translated
@@ -375,21 +356,6 @@ namespace SoftSled.Components.VirtualChannel {
                         Debug.WriteLine(DMCTOpenMediaURL);
 
                         rtspClient = new RTSPClient();
-                        // Forward the wm-MPV video pipeline event to the host
-                        // (MainWindow) so FFME can open the input stream once
-                        // SDP processing identifies an MPEG-ES video PT.
-                        rtspClient.VideoPipelineReady += stream => {
-                            try { VideoPipelineReady?.Invoke(stream); }
-                            catch (Exception ex) {
-                                m_logger?.LogError($"AVCTRL: VideoPipelineReady handler threw: {ex.Message}");
-                            }
-                        };
-                        rtspClient.AudioPipelineReady += stream => {
-                            try { AudioPipelineReady?.Invoke(stream); }
-                            catch (Exception ex) {
-                                m_logger?.LogError($"AVCTRL: AudioPipelineReady handler threw: {ex.Message}");
-                            }
-                        };
 
                         // Bind the new RTSP session to the controller so
                         // SeekAsync / SetRateAsync / SetAvailableBandwidth
@@ -1032,7 +998,7 @@ namespace SoftSled.Components.VirtualChannel {
                                 // Initialise GetDWORDProperty Response
                                 byte[] trickModeResponse = DSLRCommunication.GetDWORDPropertyResponse(
                                     dispatchRequestHandleArray,
-                                    0
+                                    1
                                 );
                                 // Encapsulate the Response (Doesn't seem to work without this?)
                                 byte[] encapsulatedTrickModeResponse = DSLRCommunication.Encapsulate(trickModeResponse);

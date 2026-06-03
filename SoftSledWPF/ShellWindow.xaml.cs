@@ -106,6 +106,21 @@ namespace SoftSledWPF {
                 return;
             }
 
+            // F12 opens the Video FPS Lab (libav decode + D3DImage GPU present
+            // benchmark). Dev tool — not part of the normal session flow.
+            if (e.Key == Key.F12) {
+                try {
+                    var lab = new SoftSled.Components.AudioVisual.VideoFpsLab.VideoFpsLabWindow {
+                        Owner = this
+                    };
+                    lab.Show();
+                } catch (Exception ex) {
+                    System.Diagnostics.Debug.WriteLine("[shell] FPS lab open failed: " + ex.Message);
+                }
+                e.Handled = true;
+                return;
+            }
+
             // While the live session is active, forward the key into RDP
             // BEFORE any WPF control sees it. ESC explicitly bypasses this
             // path so it acts as a "leave session" gesture; without that,
@@ -123,6 +138,18 @@ namespace SoftSledWPF {
                 if (e.Key == Key.L &&
                     (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control) {
                     session.ToggleLogger();
+                    e.Handled = true;
+                    return;
+                }
+
+                // Ctrl+] / Ctrl+[ : live A/V sync nudge (20 ms steps). ']'
+                // advances video (fixes video-lags-audio), '[' delays it.
+                // Intercepted before ForwardKey so the brackets don't reach
+                // WMC. The new trim is applied to the running pacer at once
+                // and persisted to config. Watch lip-sync and nudge to taste.
+                if ((Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control &&
+                    (e.Key == Key.OemCloseBrackets || e.Key == Key.OemOpenBrackets)) {
+                    session.NudgeAvSync(e.Key == Key.OemCloseBrackets ? +20 : -20);
                     e.Handled = true;
                     return;
                 }

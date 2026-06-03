@@ -1,0 +1,62 @@
+<Window x:Class="SoftSled.Components.AudioVisual.VideoFpsLab.VideoFpsLabWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SoftSled — Video FPS Lab"
+        Width="1280" Height="760"
+        Background="#101014"
+        WindowStartupLocation="CenterScreen">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Video plane: the D3DImage is assigned to PreviewImage.Source in
+             code-behind once the presenter is constructed. -->
+        <Grid Grid.Row="0" Background="Black">
+            <Image x:Name="PreviewImage"
+                   Stretch="Uniform"
+                   RenderOptions.BitmapScalingMode="Fant"/>
+
+            <!-- FPS HUD overlay (top-left). -->
+            <Border HorizontalAlignment="Left" VerticalAlignment="Top"
+                    Background="#A0000000" CornerRadius="4"
+                    Margin="12" Padding="12,8">
+                <TextBlock x:Name="HudText"
+                           Foreground="#FF39FF6A"
+                           FontFamily="Consolas"
+                           FontSize="16"
+                           Text="idle"/>
+            </Border>
+        </Grid>
+
+        <!-- Controls. -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal"
+                    Background="#181820" >
+            <Button x:Name="BtnOpenFile" Content="Open file (libav decode + D3DImage)"
+                    Margin="10,8" Padding="12,6" Click="BtnOpenFile_Click"/>
+            <Button x:Name="BtnSynthetic" Content="Synthetic 1080p (present-only)"
+                    Margin="0,8" Padding="12,6" Click="BtnSynthetic_Click"/>
+            <Button x:Name="BtnLive" Content="Tap live RTSP (unpaced)"
+                    Margin="10,8" Padding="12,6" Click="BtnLive_Click"/>
+            <Button x:Name="BtnLivePaced" Content="Tap live RTSP (PTS-paced)"
+                    Margin="0,8" Padding="12,6" Click="BtnLivePaced_Click"/>
+            <TextBlock Text="pre-roll:" VerticalAlignment="Center"
+                       Foreground="#FFB0B0B8" Margin="10,0,4,0" FontFamily="Segoe UI" FontSize="13"/>
+            <ComboBox x:Name="CboPreroll" VerticalAlignment="Center" Width="90"
+                      SelectedIndex="0">
+                <ComboBoxItem Tag="250">250 ms</ComboBoxItem>
+                <ComboBoxItem Tag="500">500 ms</ComboBoxItem>
+                <ComboBoxItem Tag="1000">1000 ms</ComboBoxItem>
+                <ComboBoxItem Tag="2000">2000 ms</ComboBoxItem>
+                <ComboBoxItem Tag="4000">4000 ms</ComboBoxItem>
+            </ComboBox>
+            <Button x:Name="BtnStop" Content="Stop"
+                    Margin="10,8" Padding="12,6" Click="BtnStop_Click"/>
+            <TextBlock x:Name="StatusText" VerticalAlignment="Center"
+                       Foreground="#FFB0B0B8" Margin="14,0"
+                       FontFamily="Segoe UI" FontSize="13"
+                       Text="Open a media file to benchmark, or run the synthetic present-only test."/>
+        </StackPanel>
+    </Grid>
+</Window>
