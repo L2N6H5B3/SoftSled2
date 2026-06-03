@@ -180,6 +180,13 @@ namespace SoftSled.Components.RTSP {
         public RTSPClient() {
             videoDepacketizer = new WmrptVideoDepacketizer();
             audioDepacketizer = new WmrptAudioDepacketizer();
+            // Dump the WMRTP per-MAU timing fields (header ts vs Send Time vs
+            // Correspondence NTP↔RTP vs Decode/Presentation/NPT) for the first
+            // few MAUs to the always-on diag log, so we can see which timeline
+            // THIS server populates for x-wmf-pf (the RTP header timestamp may
+            // not be the reliable presentation clock).
+            videoDepacketizer.DiagLog = msg => RtcpDiagLog(msg);
+            audioDepacketizer.DiagLog = msg => RtcpDiagLog(msg);
 
             videoDepacketizer.NalUnitReady += async (s, eventData) => {
                 // Discard encrypted MAUs — DRM is not supported.
@@ -1180,14 +1187,37 @@ namespace SoftSled.Components.RTSP {
         /// client_port+1 — what the server expects as the RTCP feedback
         /// source.
         /// </summary>
-        // Diagnostic log for the RTCP send loop. Written to %TEMP%\softsled-rtcp-debug.log
-        // so we have ground-truth visibility into whether the timer fires, what
-        // the guards see, whether sends succeed, etc. — independent of Debug.WriteLine.
+        // Resolve the directory for RTSP diagnostic logs: an "rtsp" subfolder
+        // under the configured main log directory (SoftSledConfig.LogFileDirectory,
+        // default %LocalAppData%/SoftSled/Logs) so they sit alongside the
+        // session logs instead of in %TEMP%. Falls back to %TEMP% if config
+        // resolution or directory creation fails, so diagnostics are never lost.
+        private static string ResolveRtspDiagDir() {
+            try {
+                string dir = null;
+                try { dir = SoftSled.Components.Configuration.SoftSledConfigManager.ReadConfig()?.LogFileDirectory; }
+                catch { }
+                if (string.IsNullOrWhiteSpace(dir)) {
+                    dir = System.IO.Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "SoftSled", "Logs");
+                }
+                dir = System.IO.Path.Combine(dir, "rtsp");
+                System.IO.Directory.CreateDirectory(dir);
+                return dir;
+            } catch {
+                return System.IO.Path.GetTempPath();
+            }
+        }
+
+        // Diagnostic log for the RTCP send loop + WMRTP timing dumps. Written to
+        // <configured-log-dir>/rtsp/softsled-rtcp-debug.log so we have ground-truth
+        // visibility into the timer/guards/sends — independent of Debug.WriteLine.
         private System.IO.StreamWriter _rtcpDiagLog;
         private void RtcpDiagInit() {
             if (_rtcpDiagLog != null) return;
             try {
-                string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                string path = System.IO.Path.Combine(ResolveRtspDiagDir(),
                                                      "softsled-rtcp-debug.log");
                 _rtcpDiagLog = new System.IO.StreamWriter(
                     new System.IO.FileStream(path, System.IO.FileMode.Create,
@@ -1696,15 +1726,15 @@ namespace SoftSled.Components.RTSP {
 
         // Diagnostic log for the wire-commit / FinalizePipelineSetup /
         // TrySetupMpegPsPipeline chain — written unconditionally to
-        // %TEMP%\softsled-commit-debug.log. Helps diagnose "RTP arriving
-        // but FFME never opens" bugs by tracing exactly which branch
-        // the pipeline-setup state machine takes.
+        // <configured-log-dir>/rtsp/softsled-commit-debug.log. Helps diagnose
+        // "RTP arriving but pipeline never commits" bugs by tracing exactly
+        // which branch the pipeline-setup state machine takes.
         private System.IO.StreamWriter _commitDiagLog;
         private void CommitDiagLog(string line) {
             try {
                 if (_commitDiagLog == null) {
                     string path = System.IO.Path.Combine(
-                        System.IO.Path.GetTempPath(),
+                        ResolveRtspDiagDir(),
                         "softsled-commit-debug.log");
                     _commitDiagLog = new System.IO.StreamWriter(
                         new System.IO.FileStream(path,
@@ -1967,11 +1997,11 @@ namespace SoftSled.Components.RTSP {
                 //                   + " SSRC=" + rtp_ssrc
                 //                   + " Size=" + e.Message.Data.Length);
 
-                Debug.WriteLine("RTP Data"
-                                       + " PT=" + rtp_payload_type
-                                       + " Seq=" + rtp_sequence_number
-                                       + " Timestamp=" + rtp_timestamp
-                                       + " SSRC=" + rtp_ssrc);
+                //Debug.WriteLine("RTP Data"
+                //                       + " PT=" + rtp_payload_type
+                //                       + " Seq=" + rtp_sequence_number
+                //                       + " Timestamp=" + rtp_timestamp
+                //                       + " SSRC=" + rtp_ssrc);
 
                 // RFC 3550 §5.1: when the P bit is set, the LAST byte of the packet contains the
                 // padding count (including the count byte itself), and those bytes are NOT payload.
@@ -2267,11 +2297,11 @@ namespace SoftSled.Components.RTSP {
                 //                   + " SSRC=" + rtp_ssrc
                 //                   + " Size=" + e.Message.Data.Length);
 
-                Debug.WriteLine("RTP Data"
-                                       + " PT=" + rtp_payload_type
-                                       + " Seq=" + rtp_sequence_number
-                                       + " Timestamp=" + rtp_timestamp
-                                       + " SSRC=" + rtp_ssrc);
+                //Debug.WriteLine("RTP Data"
+                //                       + " PT=" + rtp_payload_type
+                //                       + " Seq=" + rtp_sequence_number
+                //                       + " Timestamp=" + rtp_timestamp
+                //                       + " SSRC=" + rtp_ssrc);
 
                 // RFC 3550 §5.1: when the P bit is set, the LAST byte of the packet contains the
                 // padding count (including the count byte itself), and those bytes are NOT payload.

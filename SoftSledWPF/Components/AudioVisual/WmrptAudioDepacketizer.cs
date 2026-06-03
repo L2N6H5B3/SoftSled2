@@ -57,6 +57,20 @@ namespace SoftSled.Components.AudioVisual {
 
         public event EventHandler<EventData> AudioDataReady;
 
+        /// <summary>Diagnostic sink — see WmrptVideoDepacketizer.DiagLog. Logs
+        /// the first few MAUs' timing fields so audio and video Correspondence
+        /// NTP timelines can be compared for a stable cross-stream A/V offset.</summary>
+        public Action<string> DiagLog;
+        private int _diagCount;
+        private const int DiagMaxLines = 24;
+
+        private static uint ReadU32(byte[] b, int o) =>
+            (uint)((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]);
+        private static ulong ReadU64(byte[] b, int o) =>
+            ((ulong)ReadU32(b, o) << 32) | ReadU32(b, o + 4);
+        private static double NtpToSeconds(ulong ntp) =>
+            (ntp >> 32) + (ntp & 0xFFFFFFFF) / 4294967296.0;
+
         public void ProcessWmrptPayload(byte[] rtpPayload, int rtpPayloadLength,
                                          uint rtpSsrc, ushort rtpSequenceNumber,
                                          uint rtpTimestamp, bool rtpMarker) {
@@ -86,8 +100,19 @@ namespace SoftSled.Components.AudioVisual {
             bool r2Present  = (bitField1 & BF1_R2)  != 0;
             bool r3Present  = (bitField1 & BF1_R3)  != 0;
             bool b2pPresent = (bitField1 & BF1_B2P) != 0;
-            if (stPresent) currentOffset += 4;
-            if (cpPresent) currentOffset += 12;
+            long  sendTime = -1; bool hasCorr = false; ulong corrNtp = 0; uint corrRtp = 0;
+            if (stPresent) {
+                if (currentOffset + 4 <= rtpPayloadLength) sendTime = ReadU32(rtpPayload, currentOffset);
+                currentOffset += 4;
+            }
+            if (cpPresent) {
+                if (currentOffset + 12 <= rtpPayloadLength) {
+                    corrNtp = ReadU64(rtpPayload, currentOffset);
+                    corrRtp = ReadU32(rtpPayload, currentOffset + 8);
+                    hasCorr = true;
+                }
+                currentOffset += 12;
+            }
             if (r1Present) currentOffset += 4;
             if (r2Present) currentOffset += 4;
             if (r3Present) currentOffset += 4;
@@ -101,6 +126,7 @@ namespace SoftSled.Components.AudioVisual {
             while (currentOffset < rtpPayloadLength) {
                 bool ok = ProcessOnePayload(rtpPayload, rtpPayloadLength, ref currentOffset,
                                              stream, rtpSsrc, rtpSequenceNumber, rtpTimestamp,
+                                             sendTime, hasCorr, corrNtp, corrRtp,
                                              out bool emittedMau);
                 if (!ok) return;
                 if (emittedMau) sawAnyTerminator = true;
@@ -112,6 +138,7 @@ namespace SoftSled.Components.AudioVisual {
 
         private bool ProcessOnePayload(byte[] buf, int bufLen, ref int currentOffset,
                                         StreamState stream, uint ssrc, ushort seqNum, uint rtpTs,
+                                        long sendTime, bool hasCorr, ulong corrNtp, uint corrRtp,
                                         out bool emittedMau) {
             emittedMau = false;
 
@@ -147,9 +174,20 @@ namespace SoftSled.Components.AudioVisual {
                 bool r8Present = (bitField3 & BF3_R8) != 0;
                 bool r9Present = (bitField3 & BF3_R9) != 0;
                 bool xPresent  = (bitField3 & BF3_X)  != 0;
-                if (d3Present) currentOffset += 4;
-                if (pPresent)  currentOffset += 4;
-                if (nPresent)  currentOffset += 8;
+                long decodeTime = -1, presTime = -1; ulong npt = 0; bool hasNpt = false;
+                if (d3Present) { if (currentOffset + 4 <= bufLen) decodeTime = ReadU32(buf, currentOffset); currentOffset += 4; }
+                if (pPresent)  { if (currentOffset + 4 <= bufLen) presTime   = ReadU32(buf, currentOffset); currentOffset += 4; }
+                if (nPresent)  { if (currentOffset + 8 <= bufLen) { npt = ReadU64(buf, currentOffset); hasNpt = true; } currentOffset += 8; }
+                if (DiagLog != null && _diagCount < DiagMaxLines
+                    && (fragType == F_FIRST_FRAGMENT || fragType == F_COMPLETE_MAU)) {
+                    _diagCount++;
+                    DiagLog($"[wmrpt-audio] seq={seqNum} F={fragType} hdrRtpTs={rtpTs} " +
+                            $"sendTime={(sendTime < 0 ? "-" : sendTime.ToString())} " +
+                            $"corr={(hasCorr ? $"ntp={NtpToSeconds(corrNtp):F3}s/rtp={corrRtp}" : "-")} " +
+                            $"decodeTime={(decodeTime < 0 ? "-" : decodeTime.ToString())} " +
+                            $"presTime={(presTime < 0 ? "-" : presTime.ToString())} " +
+                            $"npt={(hasNpt ? NtpToSeconds(npt).ToString("F3") + "s" : "-")}");
+                }
                 if (r6Present) currentOffset += 4;
                 if (r7Present) currentOffset += 4;
                 if (r8Present) currentOffset += 4;
