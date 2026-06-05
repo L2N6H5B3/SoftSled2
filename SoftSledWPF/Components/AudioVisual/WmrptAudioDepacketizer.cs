@@ -61,6 +61,10 @@ namespace SoftSled.Components.AudioVisual {
         /// the first few MAUs' timing fields so audio and video Correspondence
         /// NTP timelines can be compared for a stable cross-stream A/V offset.</summary>
         public Action<string> DiagLog;
+        /// <summary>Per-MAU timing sample for the Correspondence-offset
+        /// cross-check: (NTP seconds, header RTP timestamp raw). See
+        /// WmrptVideoDepacketizer.TimingSample.</summary>
+        public Action<double, long> TimingSample;
         private int _diagCount;
         private int _mauSeen;
         private const int DiagMaxLines = 64;
@@ -183,6 +187,10 @@ namespace SoftSled.Components.AudioVisual {
                 if (d3Present) { if (currentOffset + 4 <= bufLen) decodeTime = ReadU32(buf, currentOffset); currentOffset += 4; }
                 if (pPresent)  { if (currentOffset + 4 <= bufLen) presTime   = ReadU32(buf, currentOffset); currentOffset += 4; }
                 if (nPresent)  { if (currentOffset + 8 <= bufLen) { npt = ReadU64(buf, currentOffset); hasNpt = true; } currentOffset += 8; }
+                if (hasCorr && TimingSample != null
+                    && (fragType == F_FIRST_FRAGMENT || fragType == F_COMPLETE_MAU)) {
+                    try { TimingSample(NtpToSeconds(corrNtp), rtpTs); } catch { }
+                }
                 if (DiagLog != null && (fragType == F_FIRST_FRAGMENT || fragType == F_COMPLETE_MAU)) {
                     _mauSeen++;
                     if (_diagCount < DiagMaxLines && DiagShouldLog()) {

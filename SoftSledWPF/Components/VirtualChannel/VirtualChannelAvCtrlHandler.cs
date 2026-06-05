@@ -174,7 +174,21 @@ namespace SoftSled.Components.VirtualChannel {
         // ack immediately. Reset in OpenMedia / CloseMedia so a fresh
         // session goes through the deferral path again.
         private bool _firstStartSeen;
-        private const int FirstStartAckTimeoutMs = 5000;
+        // Shortened 5000→1000→250ms. The deferral waits for IsOpen and only hits
+        // this timeout when IsOpen never comes — which for a fresh play it does
+        // (when streaming starts), so the timeout effectively only governs the
+        // RESUME case: there IsOpen can't happen until we have the resume
+        // position, but WMC won't send the position Start until it gets this ack.
+        // The position Start MUST arrive BEFORE the RTSP auto-PLAY (which fires
+        // right after the last SETUP, ~+0.66s) so it folds into ONE clean PLAY at
+        // the resume point; otherwise the resume becomes a double-PLAY (auto
+        // npt=0 + mid-session seek) that WMPNss refuses to stream audio after
+        // (observed: static video, no audio). At 1000ms the ack still released
+        // ~0.3s AFTER the auto-PLAY → double-PLAY. 250ms releases the ack well
+        // before the auto-PLAY. Tradeoff: a fresh play is acked ~early (before
+        // IsOpen) — benign: GetPosition returns the sane start position, and the
+        // audio pre-roll holds playback for the first ~1s anyway.
+        private const int FirstStartAckTimeoutMs = 250;
 
         // MS-DMCT sentinel: when the WMC Start request sets Start Time to
         // this value, it means "I don't know — resume from the current
@@ -464,6 +478,21 @@ namespace SoftSled.Components.VirtualChannel {
                         bool isExplicitSeek =
                             (StartPayloadStartTime != StartTimeSentinelResume) &&
                             (StartPayloadStartTime > 0);
+
+                        // Capture where we ACTUALLY are BEFORE overwriting
+                        // _playbackStartPositionMs below. The seek-vs-heartbeat
+                        // delta check needs the real current position; if it
+                        // reads _playbackStartPositionMs after we've stored the
+                        // requested StartTime into it, it compares StartTime to
+                        // itself (delta≈0) and EVERY real seek (progress-bar
+                        // scrub) is mistaken for a position heartbeat and
+                        // dropped. (Observed: dragging the scrubber never sought.)
+                        long currentPlaybackMs = _playbackStartPositionMs;
+                        try {
+                            if (_mediaController != null && _mediaController.IsOpen)
+                                currentPlaybackMs += (long)_mediaController.Position.TotalMilliseconds;
+                        } catch { /* controller not ready — use cached base */ }
+
                         _playbackStartPositionMs =
                             (StartPayloadStartTime == StartTimeSentinelResume)
                                 ? 0L : StartPayloadStartTime;
@@ -519,14 +548,9 @@ namespace SoftSled.Components.VirtualChannel {
                         // Outside that window it's a real jump (chapter
                         // skip, scrub).
                         if (isExplicitSeek) {
-                            // Same formula GetPosition uses on the way
-                            // out — absolute media-timeline ms.
-                            long currentMs = _playbackStartPositionMs;
-                            try {
-                                if (_mediaController != null && _mediaController.IsOpen) {
-                                    currentMs += (long)_mediaController.Position.TotalMilliseconds;
-                                }
-                            } catch { /* controller not ready — treat as the cached offset */ }
+                            // Use the position captured BEFORE _playbackStartPositionMs
+                            // was overwritten with this StartTime (see above).
+                            long currentMs = currentPlaybackMs;
                             long delta = System.Math.Abs(StartPayloadStartTime - currentMs);
                             if (delta <= 2000) {
                                 m_logger?.LogInfo(
@@ -588,10 +612,23 @@ namespace SoftSled.Components.VirtualChannel {
                             m_logger?.LogError($"AVCTRL: MediaController.PlayAsync failed: {ex.Message}");
                         }
 
+                        // Granted Rate (MS-DMCT §2.2.1.3.2): the play-rate the
+                        // extender granted, in the SAME encoding as the request
+                        // (an IEEE-754 float bit-pattern, NOT a literal int — see
+                        // DecodePlayRate). We honour whatever WMC asked (forwarded
+                        // via Scale/Speed), so echo the granted rate as the float
+                        // bits of the decoded/clamped value: 1.0x → 0x3F800000.
+                        // (Previously we sent the literal int 1 = 0x00000001,
+                        // which as a float is ~1.4e-45 ≈ 0 — telling WMC "granted
+                        // rate ≈ 0". Tolerated at 1x but wrong, and likely why
+                        // trick-play rate grants read oddly to WMC.)
+                        int grantedRateBits = BitConverter.ToInt32(
+                            BitConverter.GetBytes((float)rate), 0);
+
                         // Initialise Start Response
                         byte[] response = DSLRCommunication.StartResponse(
                             dispatchRequestHandleArray,
-                            1
+                            grantedRateBits
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = DSLRCommunication.Encapsulate(response);
@@ -995,7 +1032,11 @@ namespace SoftSled.Components.VirtualChannel {
                                 VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedVolumeResponse));
                                 break;
                             case "WmvTrickModesSupported":
-                                // Initialise GetDWORDProperty Response
+                                // Tested advertising =1 (2026-06-04) to try to make the server
+                                // populate the WMRTP NPT field (would be a clean cross-stream
+                                // sync anchor) — NO EFFECT: npt stayed 0.000, no Presentation/
+                                // Decode Time appeared. The flag doesn't gate those fields on
+                                // WMPNss/McxDMS. Reverted to 0.
                                 byte[] trickModeResponse = DSLRCommunication.GetDWORDPropertyResponse(
                                     dispatchRequestHandleArray,
                                     0

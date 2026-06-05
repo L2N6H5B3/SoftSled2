@@ -19,7 +19,6 @@ namespace SoftSled.Components.RTSP {
 
         private string AcceptHeader = "Accept: application/sdp";
         private string LanguageHeader = "Accept-Language: en-us, *;q=0.1";
-        //describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
         private string SupportedHeader = "Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile";
 
 
@@ -53,9 +52,7 @@ namespace SoftSled.Components.RTSP {
         string hostname = "";                                   // RTSP Server hostname or IP address
         int port = 0;                                           // RTSP Server TCP Port number
         string session = "";                                    // RTSP Session
-        uint ssrc = 12345;
-        // Per-stream client SSRCs for RTCP reporter/sender fields. Xbox uses
-        // distinct SSRCs per stream (audio=0xC252C62D, video=0x6043AC81).
+        // Per-stream client SSRCs for RTCP reporter/sender fields.
         // Random per-session, but stable for the life of the session.
         private readonly uint _audioReporterSsrc = (uint)(0xC2520000u | ((uint)Guid.NewGuid().GetHashCode() & 0xFFFFu));
         private readonly uint _videoReporterSsrc = (uint)(0x60430000u | ((uint)Guid.NewGuid().GetHashCode() & 0xFFFFu));
@@ -196,6 +193,9 @@ namespace SoftSled.Components.RTSP {
             // not be the reliable presentation clock).
             videoDepacketizer.DiagLog = msg => RtcpDiagLog(msg);
             audioDepacketizer.DiagLog = msg => RtcpDiagLog(msg);
+            // Correspondence-offset cross-check (logged only; does NOT drive sync).
+            videoDepacketizer.TimingSample = (ntpSec, hdrRaw) => FeedCorrSample(true, ntpSec, hdrRaw);
+            audioDepacketizer.TimingSample = (ntpSec, hdrRaw) => FeedCorrSample(false, ntpSec, hdrRaw);
 
             videoDepacketizer.NalUnitReady += async (s, eventData) => {
                 // Discard encrypted MAUs — DRM is not supported.
@@ -360,6 +360,15 @@ namespace SoftSled.Components.RTSP {
         // RTP-Info header (-1 = not seen). Each is its OWN stream's RTP clock.
         private long _audioRtpInfoRtptime = -1L;
         private long _videoRtpInfoRtptime = -1L;
+
+        // Incremented every time a PLAY response's RTP-Info is parsed (initial
+        // PLAY + every seek / trick-play PLAY). Lets the controller tell post-
+        // seek MAUs from pre-seek in-flight MAUs: after a seek it waits for this
+        // to advance before re-anchoring, so it doesn't latch the offset onto a
+        // stale pre-seek MAU using the old RTP-Info (which left A/V out of sync
+        // after a scrub).
+        private long _rtpInfoGeneration;
+        public long RtpInfoGeneration => System.Threading.Interlocked.Read(ref _rtpInfoGeneration);
 
         /// <summary>
         /// Cross-stream A/V offset (ms) from the PLAY response's RTP-Info,
@@ -1219,6 +1228,128 @@ namespace SoftSled.Components.RTSP {
             }
         }
 
+        // ---- Correspondence-offset cross-check (LOGGED ONLY — does not change
+        // sync). Per stream, accumulate a steady-state (post-warmup) least-squares
+        // fit of header-RTP-ts (ms) vs the Correspondence NTP wallclock, then
+        // evaluate both streams at a common NTP to derive the cross-stream A/V
+        // offset and log it beside the RTP-Info offset. If, over several sessions,
+        // this is consistently more stable/accurate than RTP-Info, it becomes a
+        // candidate to drive sync. The header ts is converted to ms via the
+        // per-stream clock (x-wmf-pf=1 kHz so ts is already ms). Reset per media
+        // (RTSPClient is recreated per OpenMedia). ----
+        private readonly object _corrLock = new object();
+        private const double CorrWarmupSec = 15.0;       // skip preroll burst + buffer-refill transient
+        private double _corrFirstNtpV = -1, _corrFirstNtpA = -1;
+        private long   _corrFirstHdrV = -1, _corrFirstHdrA = -1;
+        private double _vN, _vSx, _vSy, _vSxx, _vSxy;     // video least-squares sums (steady-state)
+        private double _aN, _aSx, _aSy, _aSxx, _aSxy;     // audio sums
+        private double _corrLastLogNtp = -1;
+        // Convergence tracking → fires CorrespondenceOffsetReady once the estimate
+        // settles, so the controller can slew the live offset to it (auto sync,
+        // no per-file trim). Stable = consecutive estimates within tolerance.
+        private double _corrLastEstimate = double.NaN;
+        private int    _corrStableCount;
+        private double _corrFiredOffset = double.NaN;
+        // Tightened (2026-06-04): the estimate DRIFTS as the per-stream hdr/ntp
+        // slopes settle (observed +1265→-1458ms over one session), so a loose gate
+        // could fire on a still-ramping value. Require many consecutive estimates
+        // within a tight band so only a genuinely-settled value applies — which
+        // also means it stays out of the way when RTP-Info is already correct and
+        // only steps in as a safety net if it stabilises on a clearly different value.
+        private const double CorrStableTolMs   = 40;    // estimates within this = "stable"
+        private const int    CorrStableNeeded  = 4;     // this many stable in a row → fire
+        private const double CorrRefireDeltaMs = 200;   // re-fire if it later shifts more than this
+        private const double CorrMaxPlausibleMs = 8000; // ignore implausible values
+        /// <summary>Fires (once converged) with the Correspondence-derived
+        /// cross-stream A/V offset in ms. Logged-cross-check value promoted to a
+        /// live driver: the controller slews the pacer to it.</summary>
+        public event Action<long> CorrespondenceOffsetReady;
+
+        /// <summary>Clear the Correspondence-offset estimator's accumulated fit.
+        /// Called on seek: the seek changes both streams' timeline, so pre-seek
+        /// (ntp,hdr) samples would pollute the running least-squares fit.</summary>
+        public void ResetCorrespondenceEstimator() {
+            lock (_corrLock) {
+                _corrFirstNtpV = _corrFirstNtpA = -1;
+                _corrFirstHdrV = _corrFirstHdrA = -1;
+                _vN = _vSx = _vSy = _vSxx = _vSxy = 0;
+                _aN = _aSx = _aSy = _aSxx = _aSxy = 0;
+                _corrLastLogNtp = -1;
+                _corrLastEstimate = double.NaN;
+                _corrStableCount = 0;
+                _corrFiredOffset = double.NaN;
+            }
+        }
+
+        private void FeedCorrSample(bool isVideo, double ntpSec, long hdrRaw) {
+            // Convert header ts to ms via the per-stream clock (1 kHz → already ms).
+            long clk = isVideo ? (_videoClockHz > 0 ? (long)_videoClockHz : 1000L)
+                               : (_audioClockHz > 0 ? (long)_audioClockHz : 1000L);
+            long hdrMs = hdrRaw * 1000L / clk;
+            lock (_corrLock) {
+                if (isVideo) {
+                    if (_corrFirstNtpV < 0) { _corrFirstNtpV = ntpSec; _corrFirstHdrV = hdrMs; }
+                    if (ntpSec - _corrFirstNtpV < CorrWarmupSec) return;
+                    _vN++; _vSx += ntpSec; _vSy += hdrMs; _vSxx += ntpSec * ntpSec; _vSxy += ntpSec * hdrMs;
+                } else {
+                    if (_corrFirstNtpA < 0) { _corrFirstNtpA = ntpSec; _corrFirstHdrA = hdrMs; }
+                    if (ntpSec - _corrFirstNtpA < CorrWarmupSec) return;
+                    _aN++; _aSx += ntpSec; _aSy += hdrMs; _aSxx += ntpSec * ntpSec; _aSxy += ntpSec * hdrMs;
+                }
+                if (_vN >= 10 && _aN >= 10 && (_corrLastLogNtp < 0 || ntpSec - _corrLastLogNtp >= 5.0)
+                    && CorrFit(_vN, _vSx, _vSy, _vSxx, _vSxy, out double vSlope, out double vInt)
+                    && CorrFit(_aN, _aSx, _aSy, _aSxx, _aSxy, out double aSlope, out double aInt)) {
+                    _corrLastLogNtp = ntpSec;
+                    double cv = vSlope * ntpSec + vInt;
+                    double ca = aSlope * ntpSec + aInt;
+                    double cvMinusCa = cv - ca;
+                    double firstHdrDiff = _corrFirstHdrV - _corrFirstHdrA;
+                    double corrOffset = cvMinusCa - firstHdrDiff;
+                    string rtpInfo = "n/a";
+                    if (_corrFirstHdrA >= 0 && _corrFirstHdrV >= 0
+                        && TryGetRtpInfoAvOffsetMs((uint)_corrFirstHdrA, (uint)_corrFirstHdrV, out long rtpOff))
+                        rtpInfo = $"{rtpOff}ms (Δcorr-rtpinfo={Math.Round(corrOffset - rtpOff)}ms)";
+                    RtcpDiagLog($"corr-offset-estimate: vSlope={vSlope:F4} aSlope={aSlope:F4} " +
+                                $"(Cv-Ca)={cvMinusCa:F0}ms firstHdrDiff={firstHdrDiff:F0}ms " +
+                                $"→ corrOffset={corrOffset:F0}ms; RTP-Info={rtpInfo} " +
+                                $"(vN={_vN:F0} aN={_aN:F0})");
+
+                    // Convergence → promote to a live offset (controller slews to it).
+                    if (Math.Abs(corrOffset) <= CorrMaxPlausibleMs) {
+                        if (!double.IsNaN(_corrLastEstimate)
+                            && Math.Abs(corrOffset - _corrLastEstimate) <= CorrStableTolMs)
+                            _corrStableCount++;
+                        else
+                            _corrStableCount = 0;
+                        _corrLastEstimate = corrOffset;
+
+                        bool firstFire = double.IsNaN(_corrFiredOffset);
+                        bool shifted   = !firstFire && Math.Abs(corrOffset - _corrFiredOffset) > CorrRefireDeltaMs;
+                        if (_corrStableCount >= CorrStableNeeded && (firstFire || shifted)) {
+                            _corrFiredOffset = corrOffset;
+                            long val = (long)Math.Round(corrOffset);
+                            RtcpDiagLog($"corr-offset CONVERGED → {val}ms (firing to controller)");
+                            var h = CorrespondenceOffsetReady;
+                            if (h != null) { try { h(val); } catch { } }
+                        }
+                    } else {
+                        _corrStableCount = 0;
+                        _corrLastEstimate = corrOffset;
+                    }
+                }
+            }
+        }
+
+        private static bool CorrFit(double n, double sx, double sy, double sxx, double sxy,
+                                    out double slope, out double intercept) {
+            slope = 0; intercept = 0;
+            double denom = n * sxx - sx * sx;
+            if (Math.Abs(denom) < 1e-9) return false;
+            slope = (n * sxy - sx * sy) / denom;
+            intercept = (sy - slope * sx) / n;
+            return true;
+        }
+
         // Diagnostic log for the RTCP send loop + WMRTP timing dumps. Written to
         // <configured-log-dir>/rtsp/softsled-rtcp-debug.log so we have ground-truth
         // visibility into the timer/guards/sends — independent of Debug.WriteLine.
@@ -1615,6 +1746,10 @@ namespace SoftSled.Components.RTSP {
                     RtcpDiagLog($"rtp-info UNKNOWN-URL entry='{trimmed}'");
                 }
             }
+            // New RTP-Info parsed (initial or post-seek) → bump generation so
+            // the controller knows the post-seek play-point timestamps are now
+            // available and it can safely re-anchor.
+            System.Threading.Interlocked.Increment(ref _rtpInfoGeneration);
         }
 
         /// <summary>

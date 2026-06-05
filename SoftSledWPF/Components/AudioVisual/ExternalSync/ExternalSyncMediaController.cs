@@ -38,7 +38,22 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
 
         private bool _playRequested = true;
         private bool _isOpen;
+        private bool _paused;   // true between PauseAsync and the next PlayAsync (server RTSP-paused)
         private volatile bool _disposed;
+
+        // Smoothed master clock. The raw audio-position clock (min bytes
+        // played/written) JUMPS when delivery is bursty (live TV swings ~57-164%
+        // of real-time), and the slaved video pacer whipsaws to track it →
+        // "video starting and stopping". SmoothedMasterMs advances at wall-clock
+        // real-time, never past the raw available-content position (so a genuine
+        // underrun still stalls it) and never backwards, with a bounded catch-up
+        // — turning the jumpy raw clock into a steady one. No-op for smooth
+        // (recorded-TV) delivery where raw already tracks real-time.
+        private readonly object _smoothLock = new object();
+        private readonly System.Diagnostics.Stopwatch _smoothWall = System.Diagnostics.Stopwatch.StartNew();
+        private double _smoothMasterMs = -1;
+        private long _smoothLastWallMs;
+        private const int MaxClockLagMs = 1000;
 
         private SoftSled.Components.RTSP.RTSPClient _rtsp;
         private long _lastBandwidthBps = -1;
@@ -69,6 +84,14 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private long _firstAudioMauRtpRaw = -1;
         private long _firstVideoMauRtpRaw = -1;
         private bool _syncFinalized;
+        // After a seek, gate (re-)anchoring until the post-seek RTP-Info arrives.
+        // _anchorMinRtpInfoGen = the RTSPClient.RtpInfoGeneration we must reach
+        // before a MAU may anchor (0 = no gate, e.g. initial play). Without this,
+        // a pre-seek in-flight MAU re-anchors ~9ms after the seek using the OLD
+        // RTP-Info → wrong offset → A/V out of sync after a scrub.
+        private long _anchorMinRtpInfoGen;
+        private int  _seekGateTick;
+        private const int SeekGateTimeoutMs = 3000; // fallback if RTP-Info never advances
         // No genuine A/V startup skew exceeds a few seconds; beyond this the
         // RTP-Info cross-stream offset is treated as bogus (Live TV npt=now).
         private const int MaxPlausibleOffsetMs = 5000;
@@ -108,6 +131,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 _rtsp.Disconnected      -= OnRtspDisconnected;
                 _rtsp.PtsError          -= OnRtspPtsError;
                 _rtsp.UnrecoverableSkew -= OnRtspUnrecoverableSkew;
+                _rtsp.CorrespondenceOffsetReady -= OnCorrespondenceOffset;
                 try { _rtsp.SetExternalAudioConsumer(null, null); } catch { }
                 try { _rtsp.SetExternalVideoConsumer(null, null); } catch { }
                 // The controller is session-scoped and outlives individual
@@ -126,6 +150,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 _rtsp.Disconnected      += OnRtspDisconnected;
                 _rtsp.PtsError          += OnRtspPtsError;
                 _rtsp.UnrecoverableSkew += OnRtspUnrecoverableSkew;
+                _rtsp.CorrespondenceOffsetReady += OnCorrespondenceOffset;
                 try {
                     _rtsp.SetExternalAudioConsumer(OnAudioCodecCommitted, OnAudioMau);
                 } catch (Exception ex) {
@@ -207,8 +232,22 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             }
         }
 
+        /// <summary>True once it's safe to anchor on incoming MAUs. After a seek
+        /// this stays false until the post-seek RTP-Info has been parsed (so we
+        /// discard pre-seek in-flight MAUs), with a timeout fallback so we never
+        /// stall forever if the server doesn't re-send RTP-Info.</summary>
+        private bool AnchorGateOpen() {
+            long min = Interlocked.Read(ref _anchorMinRtpInfoGen);
+            if (min <= 0) return true;                                  // no seek gate (initial play)
+            if ((_rtsp?.RtpInfoGeneration ?? long.MaxValue) >= min) return true; // post-seek RTP-Info arrived
+            if (unchecked(Environment.TickCount - _seekGateTick) > SeekGateTimeoutMs) return true; // fallback
+            return false;
+        }
+
         private void OnAudioMau(byte[] data, uint rtpTs) {
             if (_decoder == null) return;
+            // Discard pre-seek in-flight MAUs until the post-seek RTP-Info lands.
+            if (Interlocked.Read(ref _firstAudioMauRtpRaw) < 0 && !AnchorGateOpen()) return;
             long ptsMs = (long)rtpTs * 1000L / _audioClockHz;
             if (Interlocked.CompareExchange(ref _firstAudioMauWirePtsMs, ptsMs, -1L) == -1L) {
                 Interlocked.Exchange(ref _firstAudioMauRtpRaw, rtpTs);
@@ -220,14 +259,20 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
 
         private void OnDecoderFormatReady() {
             try {
-                // No video element to hold for — audio plays immediately and
-                // video slaves to its clock.
+                // Start HELD so the renderer pre-rolls ~1s of audio before
+                // playing — the device then starts with a cushion instead of
+                // stuttering through the bursty first second of delivery (the
+                // startup stutter the user reported on recorded TV / live).
+                // The renderer auto-releases at its pre-roll target (or a
+                // timeout). Video naturally pre-rolls too: it's slaved to the
+                // audio master clock, which stays 0 while audio is held, so the
+                // pacer just accumulates frames and releases when audio starts.
                 _renderer = new NAudioMasterRenderer(
                     LibAvAudioDecoder.OutSampleRate,
                     LibAvAudioDecoder.OutChannels,
                     LibAvAudioDecoder.OutBitsPerSample,
                     _log,
-                    startHeld: false);
+                    startHeld: true);
                 // Feed the RTCP BFR W3 field the renderer's REAL audio buffer
                 // occupancy so a drain (server under-delivery) is visible to
                 // WMPNss and it speeds up to refill — see ComputeBfrW3Fill.
@@ -252,6 +297,36 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             _renderer?.WritePcm(pcm, len, ptsMs);
         }
 
+        /// <summary>Rate-limited view of the audio master clock for video pacing.
+        /// Advances at wall-clock real-time but is clamped to the raw
+        /// available-content position (so a real underrun stalls it) and is
+        /// monotonic. This removes the jump/stutter the raw clock shows under
+        /// bursty delivery (which the slaved pacer would otherwise turn into
+        /// visible video start/stop), while staying a no-op when raw is already
+        /// smooth. Reset (resync to raw) on seek/pause via ResetMasterSmoothing.</summary>
+        private long SmoothedMasterMs() {
+            long raw = _renderer?.GetMediaTimeMs() ?? 0L;
+            lock (_smoothLock) {
+                long wallNow = _smoothWall.ElapsedMilliseconds;
+                if (_smoothMasterMs < 0) {
+                    _smoothMasterMs = raw; _smoothLastWallMs = wallNow; return raw;
+                }
+                long dt = wallNow - _smoothLastWallMs;
+                if (dt < 0) dt = 0;
+                _smoothLastWallMs = wallNow;
+                double adv = _smoothMasterMs + dt;     // advance at real-time
+                if (adv > raw) adv = raw;              // never past available content (stall on underrun)
+                if (raw - adv > MaxClockLagMs) adv = raw - MaxClockLagMs; // bound catch-up lag
+                if (adv < _smoothMasterMs) adv = _smoothMasterMs;         // monotonic
+                _smoothMasterMs = adv;
+                return (long)adv;
+            }
+        }
+
+        private void ResetMasterSmoothing() {
+            lock (_smoothLock) { _smoothMasterMs = -1; }
+        }
+
         // ============================================================
         //  Video
         // ============================================================
@@ -272,7 +347,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                     (ptr, stride, w, h) => _presenter?.SubmitFrame(ptr, stride, w, h),
                     prerollMs: _videoJitterBufferMs, _log);
                 // Slave video presentation to the audio device clock.
-                _pacer.SetMasterClock(() => _renderer?.GetMediaTimeMs() ?? 0L);
+                _pacer.SetMasterClock(SmoothedMasterMs);
                 // Feed the video RTCP BFR W3 the pacer's REAL buffered span so
                 // WMPNss sees the jitter buffer draining and speeds up to refill
                 // — without this, video delivery settles ~3% under real-time and
@@ -301,6 +376,8 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         }
 
         private void OnVideoMau(byte[] data, uint rtpTs) {
+            // Discard pre-seek in-flight MAUs until the post-seek RTP-Info lands.
+            if (Interlocked.Read(ref _firstVideoMauRtpRaw) < 0 && !AnchorGateOpen()) return;
             long ptsMs = (long)rtpTs * 1000L / _videoClockHz;
             if (Interlocked.CompareExchange(ref _firstVideoMauWirePtsMs, ptsMs, -1L) == -1L) {
                 Interlocked.Exchange(ref _firstVideoMauRtpRaw, rtpTs);
@@ -372,6 +449,21 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// less lag). Persist this back to config so it survives the session.</summary>
         public int CurrentAudioSyncTrimMs => (int)Interlocked.Read(ref _liveTrimMs);
 
+        /// <summary>The Correspondence-offset estimator converged on a stable
+        /// cross-stream offset. Promote it to the live base offset (replacing the
+        /// preroll-distorted RTP-Info value) and SLEW the pacer to it so video
+        /// eases into correct sync — automatically, per file, no user trim needed.
+        /// The trim remains a fixed residual (pipeline latency) on top.</summary>
+        private void OnCorrespondenceOffset(long corrOffsetMs) {
+            Interlocked.Exchange(ref _baseOffsetMs, corrOffsetMs);
+            long trim = Interlocked.Read(ref _liveTrimMs);
+            long offset = corrOffsetMs + trim;
+            _pacer?.SlewSyncOffsetMs(offset);
+            _syncFinalized = true;
+            _log?.LogInfo($"[ext-sync] auto-offset (Correspondence) = {corrOffsetMs}ms + trim {trim}ms " +
+                          $"→ slewing pacer to {offset}ms (was RTP-Info-based)");
+        }
+
         /// <summary>Adjust the A/V sync trim live and re-apply it to the pacer
         /// immediately. Positive deltas advance video (reduce video-lags-audio);
         /// negative delay it. Returns the new total trim (ms).</summary>
@@ -427,35 +519,118 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         public Task PlayAsync() {
             _playRequested = true;
             _renderer?.Play();   // video resumes automatically as the clock advances
+            // Resume the RTSP SERVER if we paused it. PauseAsync sends an RTSP
+            // PAUSE (stopping RTP); without a matching PLAY here the server stays
+            // stopped and playback freezes once the buffered audio drains (the
+            // renderer-only resume can't conjure new data). Gated on _paused so
+            // this does NOT fire a redundant PLAY on the open/normal Starts
+            // (WMC calls PlayAsync on every Start) — that would re-introduce the
+            // double-PLAY. RTSPClient.Pause() armed _resumeNextPlay so this PLAY
+            // bypasses wire-idempotency. -1 startMs = resume from the pause point
+            // (no Range) — same timeline, so NO re-baseline needed.
+            if (_paused) {
+                _paused = false;
+                ResetMasterSmoothing();   // re-sync the smoothed clock after the pause gap
+                try { _rtsp?.Play(-1L, _lastRequestedRate); }
+                catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP resume PLAY failed: {ex.Message}"); }
+                _log?.LogInfo("[ext-sync] resume from pause — RTSP PLAY");
+            }
             return Task.CompletedTask;
         }
 
         public Task PauseAsync() {
             _playRequested = false;
+            _paused = true;
             _renderer?.Pause();  // master clock stalls → video holds on its last frame
+            // Also PAUSE the RTSP server so it stops sending RTP — otherwise it
+            // keeps streaming into a non-draining buffer, the honest BFR W3 goes
+            // full, and the server throttles/stops on its own (messy resume).
+            try { _rtsp?.Pause(); }
+            catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP PAUSE failed: {ex.Message}"); }
+            _log?.LogInfo("[ext-sync] pause — RTSP PAUSE");
             return Task.CompletedTask;
         }
 
         public Task SeekAsync(TimeSpan position) {
-            try { _rtsp?.Play(startMs: (long)position.TotalMilliseconds, rate: _lastRequestedRate); }
-            catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP seek failed: {ex.Message}"); }
-            // Both streams jump — re-anchor the pacer so it re-aligns video to
-            // the audio clock at the new position (the wire offset is unchanged
-            // because the server re-sends prior-IDR padding on each PLAY).
-            _pacer?.Reanchor();
+            try {
+                // Seeking a PLAYING WMPNss stream: a bare PLAY-with-Range on the
+                // live session makes the server ACK (200 OK + new RTP-Info) but
+                // then STOP sending RTP — audio/video MAUs cease at the seek and
+                // A/V freeze; only a full stop/restart recovers (confirmed in
+                // logs: libav-audio stats stop at the seek instant, RTCP w3→0,
+                // highest-seq frozen). The standard RTSP seek for a playing
+                // stream is PAUSE → PLAY(Range): the PAUSE resets the server's
+                // streaming/BFR state so it resumes cleanly from the new point.
+                // Pause() arms _resumeNextPlay so the following Play hits the
+                // wire even though the Range differs.
+                //
+                // ONLY pause when the stream is ALREADY playing (a true
+                // mid-session seek). A "seek" with StartTime>0 also arrives at
+                // OPEN as a resume-from-last-position, BEFORE the stream is
+                // established (renderer not ready, _isOpen=false). PAUSE→PLAY
+                // there disrupts WMPNss's initial handshake/pacing — observed:
+                // audio delivery thrashes 30%↔172%, the min(played,written)
+                // master clock stutters, and the video pacer wedges and never
+                // recovers. At open/resume there's nothing to pause; just PLAY
+                // with the start position (the server seeks on the initial PLAY).
+                if (_isOpen) _rtsp?.Pause();
+                _rtsp?.Play(startMs: (long)position.TotalMilliseconds, rate: _lastRequestedRate);
+            } catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP seek failed: {ex.Message}"); }
+
+            ReBaselineSync($"seek to {(long)position.TotalMilliseconds}ms");
             return Task.CompletedTask;
         }
 
+        /// <summary>Re-baseline the A/V sync after a position change (seek, or
+        /// returning to 1× from server-side trick play). Both streams restart
+        /// from a new position with a NEW RTP-Info and new first-MAU timestamps,
+        /// so the prior cross-stream offset no longer applies — keeping it leaves
+        /// audio/video out of sync. Clears the sync anchors + finalized flag
+        /// (WITHOUT tearing down decoders/renderer — playback continues; same
+        /// media so codec/clock stay intact), gates re-anchoring until the new
+        /// RTP-Info arrives (discards pre-change in-flight MAUs), resets the
+        /// Correspondence estimator, and re-anchors the pacer. The user trim
+        /// (_liveTrimMs) persists as the fixed residual.</summary>
+        private void ReBaselineSync(string reason) {
+            _syncFinalized = false;
+            Interlocked.Exchange(ref _firstAudioMauRtpRaw, -1L);
+            Interlocked.Exchange(ref _firstVideoMauRtpRaw, -1L);
+            Interlocked.Exchange(ref _firstAudioMauWirePtsMs, -1L);
+            Interlocked.Exchange(ref _firstVideoMauWirePtsMs, -1L);
+            Interlocked.Exchange(ref _anchorMinRtpInfoGen, (_rtsp?.RtpInfoGeneration ?? 0) + 1);
+            _seekGateTick = Environment.TickCount;
+            try { _rtsp?.ResetCorrespondenceEstimator(); } catch { }
+            _pacer?.Reanchor();
+            ResetMasterSmoothing();
+            _log?.LogInfo($"[ext-sync] {reason} — re-baselining A/V sync");
+        }
+
         public Task SetRateAsync(double rate) {
+            // NO-OP when the rate isn't actually changing. WMC's AVCTRL handler
+            // calls SetRateAsync on EVERY Start for rate-forwarding — including
+            // the StartTime=0 at open and every resume/seek Start (all at 1×).
+            // Acting on those (sending an RTSP SetRate→PLAY and re-baselining)
+            // fires a redundant PLAY during the open handshake / alongside the
+            // seek's own PLAY — a double-PLAY that disrupts WMPNss and yields NO
+            // playback on resume, plus a spurious re-baseline that arms the
+            // anchor gate before anything is streaming. Only a genuine rate
+            // CHANGE (entering or exiting trick play) should do anything.
+            double prevRate = _lastRequestedRate;
+            if (Math.Abs(rate - prevRate) < 0.0001) return Task.CompletedTask;
             _lastRequestedRate = rate;
             bool normal = Math.Abs(rate - 1.0) < 0.0001;
             // Non-1x = server-side trick play: audio drops, so the master clock
             // stalls. Switch the pacer to free-run so the (fast-PTS) video keeps
             // updating; return to audio-slaved at 1x.
             _pacer?.SetFreeRun(!normal);
-            if (normal) _pacer?.Reanchor();
             try { _rtsp?.SetRate(rate); }
             catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP SetRate({rate}) failed: {ex.Message}"); }
+            // Reaching here with normal=true means we were in trick play (prev
+            // rate ≠ 1×) and are returning to 1× — that lands at a NEW position
+            // with NEW RTP-Info, so re-baseline the offset (not just Reanchor) or
+            // A/V stay out of sync after FF/RW. Entering trick play (rate≠1) needs
+            // no re-baseline — the pacer is free-run and ignores the offset.
+            if (normal) ReBaselineSync("trick-play exit → 1×");
             return Task.CompletedTask;
         }
 
@@ -517,8 +692,23 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             _videoClockHz = 90000;
             Interlocked.Exchange(ref _firstAudioMauRtpRaw, -1L);
             Interlocked.Exchange(ref _firstVideoMauRtpRaw, -1L);
+            // BOTH WirePts capture-gates must reset, not just video. OnAudioMau
+            // gates its first-MAU anchor capture on _firstAudioMauWirePtsMs; if
+            // it isn't reset, the 2nd media in a session never re-captures the
+            // audio anchor → _firstAudioMauRtpRaw stays -1 → UpdateSyncOffset
+            // bails (aRaw<0) → the offset is never applied → pacer runs at
+            // off=0 → 2nd recording plays out of sync. (Was missing here.)
+            Interlocked.Exchange(ref _firstAudioMauWirePtsMs, -1L);
             Interlocked.Exchange(ref _firstVideoMauWirePtsMs, -1L);
             Interlocked.Exchange(ref _baseOffsetMs, 0L);
+            // New media gets a fresh RTSPClient (RtpInfoGeneration restarts at 0),
+            // so clear the seek anchor-gate or it would block the new media.
+            Interlocked.Exchange(ref _anchorMinRtpInfoGen, 0L);
+            // Reset rate so a prior media that ended in trick play doesn't make
+            // the new media's first 1× Start look like a rate change (→ spurious
+            // SetRate/re-baseline during the new open).
+            _lastRequestedRate = 1.0;
+            _paused = false;
             // Fresh open gate so the next media's OpenAsync waits for the new
             // renderer rather than returning the previous media's result.
             if (!_disposed) _openTcs = new TaskCompletionSource<bool>();

@@ -86,6 +86,16 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private Queue<byte[]> _holdQueue;
         private long _pendingSkipBytes;
 
+        // Startup PRE-ROLL: when started held, accumulate this much audio before
+        // releasing playback, so the device starts with a cushion and doesn't
+        // stutter through the bursty first second of delivery. Auto-released by
+        // WritePcm once the held audio reaches PrerollTargetMs (or the timeout
+        // elapses, so slow/short startup delivery can't hang the hold forever).
+        private const int PrerollTargetMs  = 1000;
+        private const int PrerollTimeoutMs = 3000;
+        private long _heldBytes;
+        private readonly System.Diagnostics.Stopwatch _holdWall = new System.Diagnostics.Stopwatch();
+
         public NAudioMasterRenderer(int sampleRate, int channels, int bitsPerSample, Logger log)
             : this(sampleRate, channels, bitsPerSample, log, startHeld: false) { }
 
@@ -150,6 +160,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// </summary>
         public void WritePcm(byte[] pcm, int len, long ptsMs) {
             if (_disposed || pcm == null || len <= 0) return;
+            bool releaseAfterUnlock = false;
             lock (_gate) {
                 if (!_baseSet) {
                     _basePtsMs = ptsMs;
@@ -163,9 +174,24 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                     byte[] copy = new byte[len];
                     Buffer.BlockCopy(pcm, 0, copy, 0, len);
                     _holdQueue.Enqueue(copy);
-                    return;
+                    _heldBytes += len;
+                    if (!_holdWall.IsRunning) _holdWall.Restart();
+                    long bps = _format.AverageBytesPerSecond;
+                    long heldMs = bps > 0 ? _heldBytes * 1000L / bps : 0;
+                    // Release once we've buffered the pre-roll target — or the
+                    // timeout fires (slow/short startup delivery), so the hold
+                    // can't stall playback indefinitely. skip=0: KEEP the held
+                    // audio as the startup cushion (don't discard it).
+                    if (heldMs >= PrerollTargetMs || _holdWall.ElapsedMilliseconds >= PrerollTimeoutMs) {
+                        _log?.LogInfo($"[naudio-master] pre-roll complete: heldMs={heldMs} " +
+                                      $"(target={PrerollTargetMs}, waited={_holdWall.ElapsedMilliseconds}ms) — releasing");
+                        releaseAfterUnlock = true;
+                    } else {
+                        return;  // keep holding
+                    }
                 }
             }
+            if (releaseAfterUnlock) { ReleaseHold(0); return; }
             FeedPcmInternal(pcm, 0, len);
         }
 

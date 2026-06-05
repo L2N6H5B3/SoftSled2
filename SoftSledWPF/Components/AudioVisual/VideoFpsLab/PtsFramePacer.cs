@@ -68,23 +68,43 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         // audio clock): present the newest frame as it arrives.
         private Func<long> _masterClockMs;
         private long _syncOffsetMs;
+        private long _targetOffsetMs;   // slew goal; _syncOffsetMs eases toward it
+        private long _slewLastMs = -1;  // _diagClock ms at last slew step
+        private const int OffsetSlewMsPerSec = 150; // ≤15% momentary video speed change during a correction
         private volatile bool _freeRun;
         private long _masterAtAnchor;   // master-clock value when _pts0 was captured
         private bool _anchored;         // false until the first anchor; gates initial-vs-seek anchor
 
         public void SetMasterClock(Func<long> masterClockMs) { _masterClockMs = masterClockMs; }
+
+        /// <summary>Set the A/V sync offset INSTANTLY (startup / seek). Also
+        /// clears any in-flight slew so the value sticks.</summary>
         public void SetSyncOffsetMs(long offsetMs) {
             System.Threading.Interlocked.Exchange(ref _syncOffsetMs, offsetMs);
-            // The buffer must hold the WHOLE offset-induced video delay (the
-            // server can deliver video content several seconds ahead of audio,
-            // and the slaved pacer holds those frames until the audio clock
-            // reaches them) PLUS the jitter/pre-roll headroom. If maxBuffer is
-            // smaller than |offset| the queue overflows on every cycle and the
-            // drop churn makes video stutter (freeze↔catch-up) — the symptom
-            // seen when the jitter buffer was set below the offset. Grow to fit.
+            System.Threading.Interlocked.Exchange(ref _targetOffsetMs, offsetMs);
+            SizeBufferForOffset(offsetMs, slew: false);
+        }
+
+        /// <summary>Ease the offset toward <paramref name="target"/> at
+        /// <see cref="OffsetSlewMsPerSec"/> (done in the release loop) so an
+        /// auto-correction lands as a brief, smooth video speed nudge rather
+        /// than a visible jump. Used when the Correspondence estimate converges
+        /// to a better offset than the initial RTP-Info value.</summary>
+        public void SlewSyncOffsetMs(long target) {
+            System.Threading.Interlocked.Exchange(ref _targetOffsetMs, target);
+            SizeBufferForOffset(target, slew: true);
+        }
+
+        // The buffer must hold the WHOLE offset-induced video delay PLUS the
+        // jitter/pre-roll headroom, or it overflows every cycle (freeze↔catch-up
+        // stutter). Grow to fit |offset|; never shrink mid-slew below what the
+        // current offset still needs.
+        private void SizeBufferForOffset(long offsetMs, bool slew) {
             int want = _prerollMs + 2000 + (int)Math.Abs(offsetMs);
             lock (_gate) {
-                _maxBufferMs = Math.Min(want, MaxBufferHardCapMs);
+                int newMax = Math.Min(want, MaxBufferHardCapMs);
+                if (slew && newMax < _maxBufferMs) newMax = _maxBufferMs; // don't shrink during a correction
+                _maxBufferMs = newMax;
                 if (want > MaxBufferHardCapMs) {
                     _log?.LogInfo($"[pacer] offset {offsetMs}ms needs {want}ms buffer but capped at " +
                                   $"{MaxBufferHardCapMs}ms — video may drop frames (raise cap or reduce offset)");
@@ -207,6 +227,25 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                 bool sSlaved = false; long sMaster = 0, sAnchor = 0, sOffset = 0, sElapsed = 0;
                 int sQueue = 0; long sBufSpan = 0; bool sFreeRun = false;
                 lock (_gate) {
+                    // Ease _syncOffsetMs toward the slew target (auto-correction),
+                    // capped at OffsetSlewMsPerSec so the offset change reads as a
+                    // brief smooth video speed nudge rather than a jump.
+                    {
+                        long cur = Interlocked.Read(ref _syncOffsetMs);
+                        long tgt = Interlocked.Read(ref _targetOffsetMs);
+                        long nowMs = _diagClock.ElapsedMilliseconds;
+                        if (_slewLastMs < 0) _slewLastMs = nowMs;
+                        long dt = nowMs - _slewLastMs;
+                        _slewLastMs = nowMs;
+                        if (cur != tgt) {
+                            long step = OffsetSlewMsPerSec * dt / 1000;
+                            if (step < 1) step = 1;
+                            long diff = tgt - cur;
+                            if (Math.Abs(diff) <= step) cur = tgt;
+                            else cur += Math.Sign(diff) * step;
+                            Interlocked.Exchange(ref _syncOffsetMs, cur);
+                        }
+                    }
                     // Snapshot the true state up-front so the periodic diagnostic
                     // is meaningful even on empty-queue / free-run iterations
                     // (which skip the slaved branch below).
