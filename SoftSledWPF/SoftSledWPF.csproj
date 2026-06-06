@@ -256,13 +256,6 @@
     <Compile Include="Components\Extender\RemotedExperienceService.cs" />
     <Compile Include="Components\Extender\Archive\RSAEncoder.cs" />
     <Compile Include="Components\Extender\TrustAgreementService.cs" />
-    <Compile Include="Components\RTSP\AACPayload.cs" />
-    <Compile Include="Components\RTSP\AMRPayload.cs" />
-    <Compile Include="Components\RTSP\Authentication.cs" />
-    <Compile Include="Components\RTSP\BitStream.cs" />
-    <Compile Include="Components\RTSP\G711Payload.cs" />
-    <Compile Include="Components\RTSP\H264Payload.cs" />
-    <Compile Include="Components\RTSP\H265Payload.cs" />
     <Compile Include="Components\RTSP\IRTSPTransport.cs" />
     <Compile Include="Components\RTSP\Messages\PortCouple.cs" />
     <Compile Include="Components\RTSP\Messages\RTSPChunk.cs" />
