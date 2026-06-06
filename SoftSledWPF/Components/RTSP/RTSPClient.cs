@@ -40,7 +40,6 @@ namespace SoftSled.Components.RTSP {
         bool client_wants_audio = false;                        // Client wants to receive Audio
 
         Uri video_uri = null;                                   // URI used for the Video Track
-        string video_codec = "";                                // Codec used with Payload Types 96..127 (eg "H264")
         Uri audio_uri = null;                                   // URI used for the Audio Track
         int video_payload = -1;                                 // Payload Type for the Video. (often 96 which is the first dynamic payload value. Bosch use 35)
         int audio_payload = -1;                                 // Payload Type for the Video. (often 96 which is the first dynamic payload value)
@@ -48,7 +47,6 @@ namespace SoftSled.Components.RTSP {
         int audio_data_channel = -1;                            // RTP Channel Number used for the audio RTP stream or the UDP port number
         int video_rtcp_channel = -1;                            // RTP Channel Number used for the video RTCP status report messages OR the UDP port number
         int audio_rtcp_channel = -1;                            // RTP Channel Number used for the audio RTCP status report messages OR the UDP port number
-        string audio_codec = "";                                // Codec used with Payload Types (eg "PCMA" or "AMR")
 
         bool server_supports_get_parameter = false;             // Used with RTSP keepalive
         bool server_supports_set_parameter = false;             // Used with RTSP keepalive
@@ -2742,8 +2740,6 @@ namespace SoftSled.Components.RTSP {
                                             //EncodingParameters = rtpmap.EncodingParameters
                                         });
                                     }
-                                    video_codec = rtpmap.EncodingName.ToUpper();
-                                    //video_payload = sdp_data.Medias[x].PayloadType;
                                     video_payload = rtpmap.PayloadNumber;
                                 }
                                 if (audio && Array.IndexOf(valid_audio_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
@@ -2761,39 +2757,11 @@ namespace SoftSled.Components.RTSP {
                                             EncodingParameters = rtpmap.EncodingParameters
                                         });
                                     }
-                                    audio_codec = rtpmap.EncodingName.ToUpper();
-                                    //audio_payload = sdp_data.Medias[x].PayloadType;
                                     audio_payload = rtpmap.PayloadNumber;
                                 }
                             }
                         }
 
-                        // If the rtpmap contains H264 then split the fmtp to get the sprop-parameter-sets which hold the SPS and PPS in base64
-                        if (video && (video_codec.Contains("H264") || video_codec.ToUpper().Contains("X-WMF-PF")) && fmtp != null) {
-                            var param = Rtsp.Sdp.H264Parameters.Parse(fmtp.FormatParameter);
-                            var sps_pps = param.SpropParameterSets;
-                            if (sps_pps.Count() >= 2) {
-                                byte[] sps = sps_pps[0];
-                                byte[] pps = sps_pps[1];
-                                if (Received_SPS_PPS != null) {
-                                    Received_SPS_PPS(sps, pps);
-                                }
-                            }
-                        }
-                        // If the rtpmap contains H265 then split the fmtp to get the sprop-vps, sprop-sps and sprop-pps
-                        // The RFC makes the VPS, SPS and PPS OPTIONAL so they may not be present. In which we pass back NULL values
-                        if (video && video_codec.Contains("H265") && fmtp != null) {
-                            var param = Rtsp.Sdp.H265Parameters.Parse(fmtp.FormatParameter);
-                            var vps_sps_pps = param.SpropParameterSets;
-                            if (vps_sps_pps.Count() >= 3) {
-                                byte[] vps = vps_sps_pps[0];
-                                byte[] sps = vps_sps_pps[1];
-                                byte[] pps = vps_sps_pps[2];
-                                if (Received_VPS_SPS_PPS != null) {
-                                    Received_VPS_SPS_PPS(vps, sps, pps);
-                                }
-                            }
-                        }
                         // Send the SETUP RTSP command if we have a matching Payload Decoder
                         if (video && video_payload == -1) continue;
                         if (audio && audio_payload == -1) continue;
