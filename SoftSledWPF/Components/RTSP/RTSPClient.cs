@@ -1,14 +1,25 @@
 ﻿using Rtsp.Messages;
 using SoftSled.Components.AudioVisual;
 using SoftSled.Components.AudioVisual.FormatStructures;
+using SoftSledWPF.Components.Utility;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 
 namespace SoftSled.Components.RTSP {
     class RTSPClient {
+
+        #region Enums #########################################################
+
+        public enum RTP_TRANSPORT { UDP, TCP, MULTICAST, UNKNOWN };
+        public enum MEDIA_REQUEST { VIDEO_ONLY, AUDIO_ONLY, VIDEO_AND_AUDIO };
+        private enum RTSP_STATUS { WaitingToConnect, Connecting, ConnectFailed, Connected };
+
+        #endregion ############################################################
+
+
+        #region Variables #####################################################
 
         private string UserAgent = "User-Agent: MCExtender/1.50.X.090522.00"; // Assume Xbox 360?
         //private string UserAgent = "User-Agent: MCExtender/1.50.0.0";
@@ -17,10 +28,6 @@ namespace SoftSled.Components.RTSP {
         private string AcceptHeader = "Accept: application/sdp";
         private string LanguageHeader = "Accept-Language: en-us, *;q=0.1";
         private string SupportedHeader = "Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile";
-
-        public enum RTP_TRANSPORT { UDP, TCP, MULTICAST, UNKNOWN };
-        public enum MEDIA_REQUEST { VIDEO_ONLY, AUDIO_ONLY, VIDEO_AND_AUDIO };
-        private enum RTSP_STATUS { WaitingToConnect, Connecting, ConnectFailed, Connected };
 
         Rtsp.RtspTcpTransport rtsp_socket = null;               // RTSP connection
         volatile RTSP_STATUS rtsp_socket_status = RTSP_STATUS.WaitingToConnect;
@@ -148,6 +155,57 @@ namespace SoftSled.Components.RTSP {
         WmrptVideoDepacketizer videoDepacketizer = null;
         WmrptAudioDepacketizer audioDepacketizer = null;
 
+        int rtp_count = 0; // used for statistics
+        private int _vidRecvLoggedOnce;
+        private int _audRecvLoggedOnce;
+
+
+        // Flag set by Stop() so the keepalive miss-counter (and any other
+        // background path that observes a socket exception) knows the
+        // disconnect is user-initiated and shouldn't escalate to a
+        // Disconnected event.
+        private volatile bool _stopRequested;
+        private int _keepaliveConsecutiveFailures;
+
+
+        // First video MAU's wire-side RTP timestamp (90kHz units,
+        // stored as long so -1 can mean "not yet set" without
+        // colliding with valid 32-bit RTP values). Used by
+        // ExternalSyncMediaController in Phase 2.5 to compute the
+        // wireOffset between audio and video first-MAU times,
+        // letting it target the server's intended sync rather than
+        // the post-startup skew. Volatile-ish access via Interlocked
+        // because it's written on the depacketizer thread and read
+        // on the sync-controller dispatcher thread.
+        private long _firstVideoMauWirePtsRaw = -1L;
+
+        // Per-stream play-point RTP timestamps from the PLAY response's
+        // RTP-Info header (-1 = not seen). Each is its OWN stream's RTP clock.
+        private long _audioRtpInfoRtptime = -1L;
+        private long _videoRtpInfoRtptime = -1L;
+
+        // Incremented every time a PLAY response's RTP-Info is parsed (initial
+        // PLAY + every seek / trick-play PLAY). Lets the controller tell post-
+        // seek MAUs from pre-seek in-flight MAUs: after a seek it waits for this
+        // to advance before re-anchoring, so it doesn't latch the offset onto a
+        // stale pre-seek MAU using the old RTP-Info (which left A/V out of sync
+        // after a scrub).
+        private long _rtpInfoGeneration;
+        public long RtpInfoGeneration => System.Threading.Interlocked.Read(ref _rtpInfoGeneration);
+
+
+        // Drop counters for MAUs that arrive when no sink has been set up
+        // for the corresponding codec — log throttled at every 256 to avoid
+        // spam. Useful for telling apart "depacketizer dead" vs "no sink".
+        private long _videoDroppedNoSink;
+        private long _audioDroppedNoSink;
+
+
+        #endregion ############################################################
+
+
+        #region Constructor ###################################################
+
         public RTSPClient() {
             videoDepacketizer = new WmrptVideoDepacketizer();
             audioDepacketizer = new WmrptAudioDepacketizer();
@@ -198,9 +256,8 @@ namespace SoftSled.Components.RTSP {
                 // elementary stream to a libav+D3DImage benchmark consumer when
                 // one is attached. Cheap no-op (one null check) otherwise, so it
                 // stays out of the way in normal sessions.
-                if (SoftSled.Components.AudioVisual.VideoFpsLab.LiveVideoTap.HasSubscribers) {
-                    SoftSled.Components.AudioVisual.VideoFpsLab.LiveVideoTap.Publish(
-                        eventData.data, eventData.timestamp, _wireVideoCodec);
+                if (AudioVisual.VideoFpsLab.LiveVideoTap.HasSubscribers) {
+                    AudioVisual.VideoFpsLab.LiveVideoTap.Publish(eventData.data, eventData.timestamp, _wireVideoCodec);
                 }
 
                 // External-video consumer (the libav + D3DImage player).
@@ -210,14 +267,14 @@ namespace SoftSled.Components.RTSP {
                 if (_externalVideoMauArrived != null) {
                     if (!_externalVideoCodecFired) {
                         _externalVideoCodecFired = true;
-                        try { 
-                            _externalVideoCodecCommit?.Invoke(_wireVideoCodec ?? "VND.MS.WM-MPV"); 
+                        try {
+                            _externalVideoCodecCommit?.Invoke(_wireVideoCodec ?? "VND.MS.WM-MPV");
                         } catch (Exception ex) {
                             Debug.WriteLine($"[ext-video] codecCommit threw: {ex.Message}");
                         }
                     }
-                    try { 
-                        _externalVideoMauArrived(eventData.data, eventData.timestamp); 
+                    try {
+                        _externalVideoMauArrived(eventData.data, eventData.timestamp);
                     } catch (Exception ex) {
                         Debug.WriteLine($"[ext-video] mauArrived threw: {ex.Message}");
                     }
@@ -256,14 +313,14 @@ namespace SoftSled.Components.RTSP {
                     if (!_externalAudioCodecFired) {
                         _externalAudioCodecFired = true;
                         string wc = _wireAudioCodec ?? "VND.MS.WM-MPA";
-                        try { 
-                            _externalAudioCodecCommit?.Invoke(BuildExternalAudioFormat(wc)); 
+                        try {
+                            _externalAudioCodecCommit?.Invoke(BuildExternalAudioFormat(wc));
                         } catch (Exception ex) {
                             Debug.WriteLine($"[ext-audio] codecCommit threw: {ex.Message}");
                         }
                     }
-                    try { 
-                        _externalAudioMauArrived(eventData.data, eventData.timestamp); 
+                    try {
+                        _externalAudioMauArrived(eventData.data, eventData.timestamp);
                     } catch (Exception ex) {
                         Debug.WriteLine($"[ext-audio] mauArrived threw: {ex.Message}");
                     }
@@ -281,30 +338,8 @@ namespace SoftSled.Components.RTSP {
             };
         }
 
-        // First video MAU's wire-side RTP timestamp (90kHz units,
-        // stored as long so -1 can mean "not yet set" without
-        // colliding with valid 32-bit RTP values). Used by
-        // ExternalSyncMediaController in Phase 2.5 to compute the
-        // wireOffset between audio and video first-MAU times,
-        // letting it target the server's intended sync rather than
-        // the post-startup skew. Volatile-ish access via Interlocked
-        // because it's written on the depacketizer thread and read
-        // on the sync-controller dispatcher thread.
-        private long _firstVideoMauWirePtsRaw = -1L;
+        #endregion ############################################################
 
-        // Per-stream play-point RTP timestamps from the PLAY response's
-        // RTP-Info header (-1 = not seen). Each is its OWN stream's RTP clock.
-        private long _audioRtpInfoRtptime = -1L;
-        private long _videoRtpInfoRtptime = -1L;
-
-        // Incremented every time a PLAY response's RTP-Info is parsed (initial
-        // PLAY + every seek / trick-play PLAY). Lets the controller tell post-
-        // seek MAUs from pre-seek in-flight MAUs: after a seek it waits for this
-        // to advance before re-anchoring, so it doesn't latch the offset onto a
-        // stale pre-seek MAU using the old RTP-Info (which left A/V out of sync
-        // after a scrub).
-        private long _rtpInfoGeneration;
-        public long RtpInfoGeneration => System.Threading.Interlocked.Read(ref _rtpInfoGeneration);
 
         /// <summary>
         /// Cross-stream A/V offset (ms) from the PLAY response's RTP-Info,
@@ -335,6 +370,9 @@ namespace SoftSled.Components.RTSP {
             return true;
         }
 
+
+        #region External Audio Consumer #######################################
+
         // External-audio consumer.
         // When set, audio MAUs are routed to these callbacks
         // INSTEAD of the muxer cascade — ExternalSyncMediaController
@@ -363,6 +401,11 @@ namespace SoftSled.Components.RTSP {
             _externalAudioCodecFired = false;   // re-arm for a new consumer
         }
 
+        #endregion ############################################################
+
+
+        #region External Video Consumer #######################################
+
         // External-video consumer — the video counterpart of the audio
         // consumer above. When set, video MAUs (H.264 / MPEG-1/2 elementary
         // stream) are routed to these callbacks instead of the FFME producer
@@ -387,6 +430,11 @@ namespace SoftSled.Components.RTSP {
             _externalVideoMauArrived = mauArrived;
             _externalVideoCodecFired = false;   // re-arm for a new consumer
         }
+
+        #endregion ############################################################
+
+
+        #region External Audio Format #########################################
 
         /// <summary>
         /// Build an <see cref="SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat"/>
@@ -478,32 +526,10 @@ namespace SoftSled.Components.RTSP {
             return fmt;
         }
 
-        // PT-preference negotiation experiment removed after testing
-        // confirmed WMPNss ignores all known plausible mechanisms:
-        //   - Client `Bandwidth:` header (option 2, reverted) — ignored
-        //   - RFC 2616 q-graded `Accept:` — ignored
-        //   - Microsoft-style `Pragma: client-preferred-pt=` — ignored
-        //   - RTSP Transport extension `;rtp-pt=NN` — ignored
-        //   - `Require: com.microsoft.wm.ptselect` — 551 Option Not
-        //     Supported (definitively: no PT-select feature exists in
-        //     WMPNss 12.00.7601.23403). See commit-debug.log + wire dump
-        //     from May 2026 for the test trail.
-        //
-        // The selector + hint-builder helpers were removed with the
-        // SETUP hint injection — kept only the AC3 whitelist fix (real
-        // bug: AC3 PTs were missing .Codec assignment, masking them
-        // from any audio-PT enumeration we might do later). Future
-        // PT-preference work could resurrect this code from git history
-        // if a new mechanism becomes available (e.g. via WMRTP corpus
-        // reverse-engineering, or testing against a different server
-        // version that does honour one of the hints).
+        #endregion ############################################################
 
-        // Drop counters for MAUs that arrive when no sink has been set up
-        // for the corresponding codec — log throttled at every 256 to avoid
-        // spam. Useful for telling apart "depacketizer dead" vs "no sink".
-        private long _videoDroppedNoSink;
-        private long _audioDroppedNoSink;
 
+        #region Main Methods ##################################################
 
         public void Connect(string url, RTP_TRANSPORT rtp_transport, MEDIA_REQUEST media_request = MEDIA_REQUEST.VIDEO_AND_AUDIO) {
 
@@ -589,14 +615,6 @@ namespace SoftSled.Components.RTSP {
             describe_message.AddHeader(UserAgent);
             rtsp_client.SendMessage(describe_message);
         }
-
-        // return true if this connection failed, or if it connected but is no longer connected.
-        public bool StreamingFinished() {
-            if (rtsp_socket_status == RTSP_STATUS.ConnectFailed) return true;
-            if (rtsp_socket_status == RTSP_STATUS.Connected && rtsp_socket.Connected == false) return true;
-            else return false;
-        }
-
 
         public void Pause() {
             if (rtsp_client != null) {
@@ -733,6 +751,9 @@ namespace SoftSled.Components.RTSP {
         /// means "no PLAY sent yet this session".</summary>
         private long _lastSentStartMs = -1;
         private double _lastSentRate = 1.0;
+
+        #endregion ############################################################
+
 
         /// <summary>
         /// Send an RTSP PLAY directly to the wire, bypassing the
@@ -959,10 +980,11 @@ namespace SoftSled.Components.RTSP {
         private long _currentStartMsRequested = -1;
         private double _currentRateRequested = 1.0;
 
+
+        #region MS-DMCT Playback Events #######################################
+
         // ====================================================================
-        //  Spec-event surface (Phase 2)
-        //  -------------------------------------------------------------------
-        //  These three events are consumed by FfmeMediaController and relayed
+        //  These three events are consumed by MediaController and relayed
         //  on to VirtualChannelAvCtrlHandler.OnMediaEvent as MS-DMCT codes
         //  RTSP_DISCONNECT (3), PTS_ERROR (5), UNRECOVERABLE_SKEW (6).
         // ====================================================================
@@ -1000,6 +1022,9 @@ namespace SoftSled.Components.RTSP {
                 Debug.WriteLine($"[rtsp] UnrecoverableSkew handler threw: {subEx.Message}");
             }
         }
+
+        #endregion ############################################################
+
 
         /// <summary>Re-arms the "first sample after seek" detector used
         /// by both the PTS monitor and the UNRECOVERABLE_SKEW first-
@@ -1042,7 +1067,6 @@ namespace SoftSled.Components.RTSP {
                 teardown_message.RtspUri = new Uri(url);
                 teardown_message.Session = session;
                 teardown_message.AddHeader(LanguageHeader);
-                //teardown_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                 teardown_message.AddHeader(SupportedHeader);
                 teardown_message.AddHeader(UserAgent);
                 rtsp_client.SendMessage(teardown_message);
@@ -1114,41 +1138,8 @@ namespace SoftSled.Components.RTSP {
             _rtcpDiagLog = null;
         }
 
-        /// <summary>
-        /// Spin up the periodic RTCP Receiver Report transmitter. WMPNss
-        /// paces media ~5x slower than real time when no client RR is
-        /// received. Even a minimal empty RR (RC=0, just header + sender
-        /// SSRC) is enough to convince the server we're keeping up. Cadence:
-        /// every 1 second for the first ~5 seconds, then sticking with 1s
-        /// forever (light traffic, ~30 bytes/s).
-        ///
-        /// We bind via the UDP control socket each stream already opened
-        /// (Rtsp.UDPSocket.SendRtcpToServer), which sends from the local
-        /// client_port+1 — what the server expects as the RTCP feedback
-        /// source.
-        /// </summary>
-        // Resolve the directory for RTSP diagnostic logs: an "rtsp" subfolder
-        // under the configured main log directory (SoftSledConfig.LogFileDirectory,
-        // default %LocalAppData%/SoftSled/Logs) so they sit alongside the
-        // session logs instead of in %TEMP%. Falls back to %TEMP% if config
-        // resolution or directory creation fails, so diagnostics are never lost.
-        private static string ResolveRtspDiagDir() {
-            try {
-                string dir = null;
-                try { dir = SoftSled.Components.Configuration.SoftSledConfigManager.ReadConfig()?.LogFileDirectory; }
-                catch { }
-                if (string.IsNullOrWhiteSpace(dir)) {
-                    dir = System.IO.Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                        "SoftSled", "Logs");
-                }
-                dir = System.IO.Path.Combine(dir, "rtsp");
-                System.IO.Directory.CreateDirectory(dir);
-                return dir;
-            } catch {
-                return System.IO.Path.GetTempPath();
-            }
-        }
+
+        #region TEMP - Correspondence Testing #################################
 
         // ---- Correspondence-offset cross-check (LOGGED ONLY — does not change
         // sync). Per stream, accumulate a steady-state (post-warmup) least-squares
@@ -1162,7 +1153,7 @@ namespace SoftSled.Components.RTSP {
         private readonly object _corrLock = new object();
         private const double CorrWarmupSec = 15.0;       // skip preroll burst + buffer-refill transient
         private double _corrFirstNtpV = -1, _corrFirstNtpA = -1;
-        private long   _corrFirstHdrV = -1, _corrFirstHdrA = -1;
+        private long _corrFirstHdrV = -1, _corrFirstHdrA = -1;
         private double _vN, _vSx, _vSy, _vSxx, _vSxy;     // video least-squares sums (steady-state)
         private double _aN, _aSx, _aSy, _aSxx, _aSxy;     // audio sums
         private double _corrLastLogNtp = -1;
@@ -1170,7 +1161,7 @@ namespace SoftSled.Components.RTSP {
         // settles, so the controller can slew the live offset to it (auto sync,
         // no per-file trim). Stable = consecutive estimates within tolerance.
         private double _corrLastEstimate = double.NaN;
-        private int    _corrStableCount;
+        private int _corrStableCount;
         private double _corrFiredOffset = double.NaN;
         // Tightened (2026-06-04): the estimate DRIFTS as the per-stream hdr/ntp
         // slopes settle (observed +1265→-1458ms over one session), so a loose gate
@@ -1178,8 +1169,8 @@ namespace SoftSled.Components.RTSP {
         // within a tight band so only a genuinely-settled value applies — which
         // also means it stays out of the way when RTP-Info is already correct and
         // only steps in as a safety net if it stabilises on a clearly different value.
-        private const double CorrStableTolMs   = 40;    // estimates within this = "stable"
-        private const int    CorrStableNeeded  = 4;     // this many stable in a row → fire
+        private const double CorrStableTolMs = 40;    // estimates within this = "stable"
+        private const int CorrStableNeeded = 4;     // this many stable in a row → fire
         private const double CorrRefireDeltaMs = 200;   // re-fire if it later shifts more than this
         private const double CorrMaxPlausibleMs = 8000; // ignore implausible values
         /// <summary>Fires (once converged) with the Correspondence-derived
@@ -1246,7 +1237,7 @@ namespace SoftSled.Components.RTSP {
                         _corrLastEstimate = corrOffset;
 
                         bool firstFire = double.IsNaN(_corrFiredOffset);
-                        bool shifted   = !firstFire && Math.Abs(corrOffset - _corrFiredOffset) > CorrRefireDeltaMs;
+                        bool shifted = !firstFire && Math.Abs(corrOffset - _corrFiredOffset) > CorrRefireDeltaMs;
                         if (_corrStableCount >= CorrStableNeeded && (firstFire || shifted)) {
                             _corrFiredOffset = corrOffset;
                             long val = (long)Math.Round(corrOffset);
@@ -1271,31 +1262,24 @@ namespace SoftSled.Components.RTSP {
             intercept = (sy - slope * sx) / n;
             return true;
         }
+        #endregion ############################################################
 
-        // Diagnostic log for the RTCP send loop + WMRTP timing dumps. Written to
-        // <configured-log-dir>/rtsp/softsled-rtcp-debug.log so we have ground-truth
-        // visibility into the timer/guards/sends — independent of Debug.WriteLine.
-        private System.IO.StreamWriter _rtcpDiagLog;
-        private void RtcpDiagInit() {
-            if (_rtcpDiagLog != null) return;
-            try {
-                string path = System.IO.Path.Combine(ResolveRtspDiagDir(),
-                                                     "softsled-rtcp-debug.log");
-                _rtcpDiagLog = new System.IO.StreamWriter(
-                    new System.IO.FileStream(path, System.IO.FileMode.Create,
-                                             System.IO.FileAccess.Write,
-                                             System.IO.FileShare.Read),
-                    System.Text.Encoding.ASCII);
-                _rtcpDiagLog.AutoFlush = true;
-                _rtcpDiagLog.WriteLine($"# RTCP send-loop diagnostic, started {DateTime.Now:HH:mm:ss.fff}");
-                _rtcpDiagLog.WriteLine($"# columns: timestamp tick event details");
-            } catch (Exception ex) {
-                Debug.WriteLine($"[rtcp-diag] log open failed: {ex.Message}");
-            }
-        }
-        private void RtcpDiagLog(string line) {
-            try { _rtcpDiagLog?.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {line}"); } catch { }
-        }
+
+        #region RTCP Methods ##################################################
+
+        /// <summary>
+        /// Spin up the periodic RTCP Receiver Report transmitter. WMPNss
+        /// paces media ~5x slower than real time when no client RR is
+        /// received. Even a minimal empty RR (RC=0, just header + sender
+        /// SSRC) is enough to convince the server we're keeping up. Cadence:
+        /// every 1 second for the first ~5 seconds, then sticking with 1s
+        /// forever (light traffic, ~30 bytes/s).
+        ///
+        /// We bind via the UDP control socket each stream already opened
+        /// (Rtsp.UDPSocket.SendRtcpToServer), which sends from the local
+        /// client_port+1 — what the server expects as the RTCP feedback
+        /// source.
+        /// </summary>
 
         private void StartRtcpReceiverReports() {
             if (_rtcpTimer != null) return;  // already running
@@ -1579,12 +1563,62 @@ namespace SoftSled.Components.RTSP {
             return (ushort)((el * BfrTdMs) / BfrRampDurationMs);
         }
 
-        private static void WriteU32Be(byte[] buf, int off, uint value) {
-            buf[off + 0] = (byte)((value >> 24) & 0xFF);
-            buf[off + 1] = (byte)((value >> 16) & 0xFF);
-            buf[off + 2] = (byte)((value >> 8) & 0xFF);
-            buf[off + 3] = (byte)((value >> 0) & 0xFF);
+        /// <summary>
+        /// Parse the MS-RTSP <c>rtcp-fb-ssrc=XXXXXXXX</c> parameter from a
+        /// Transport response header. This is the SSRC the server expects
+        /// us to put in the "SSRC of packet sender" field of outbound RTCP
+        /// packets so it can correlate feedback to the right session.
+        /// Returns 0 if the parameter isn't present (in which case the
+        /// caller should fall back to a locally-chosen SSRC).
+        /// </summary>
+        private static uint ParseRtcpFbSsrcFromTransport(string transportHeader) {
+            if (string.IsNullOrEmpty(transportHeader)) return 0;
+            foreach (string part in transportHeader.Split(';')) {
+                string p = part.Trim();
+                if (p.StartsWith("rtcp-fb-ssrc=", StringComparison.OrdinalIgnoreCase)) {
+                    string v = p.Substring("rtcp-fb-ssrc=".Length).Trim();
+                    if (uint.TryParse(v, System.Globalization.NumberStyles.HexNumber,
+                                      System.Globalization.CultureInfo.InvariantCulture,
+                                      out uint result))
+                        return result;
+                }
+            }
+            return 0;
         }
+
+        /// <summary>
+        /// Update per-stream RTP sequence-number tracking used by RTCP RR
+        /// reception-report blocks. Tracks base sequence (first seen),
+        /// highest sequence seen, and 16-bit-cycles count for the extended
+        /// highest sequence number. Wrap detection per RFC 3550 §A.1.
+        /// </summary>
+        private void UpdateRtcpSeqTracking(bool isAudio, ushort seq) {
+            if (isAudio) {
+                if (!_audioSeqInit) {
+                    _audioBaseSeq = seq;
+                    _audioHighestSeq = seq;
+                    _audioSeqInit = true;
+                } else if (IsSeqGreater(seq, _audioHighestSeq)) {
+                    // Detect 16-bit wrap (highest near 0xFFFF, new near 0).
+                    if (seq < _audioHighestSeq) _audioSeqCycles++;
+                    _audioHighestSeq = seq;
+                }
+                System.Threading.Interlocked.Increment(ref _audioPktsReceived);
+            } else {
+                if (!_videoSeqInit) {
+                    _videoBaseSeq = seq;
+                    _videoHighestSeq = seq;
+                    _videoSeqInit = true;
+                } else if (IsSeqGreater(seq, _videoHighestSeq)) {
+                    if (seq < _videoHighestSeq) _videoSeqCycles++;
+                    _videoHighestSeq = seq;
+                }
+                System.Threading.Interlocked.Increment(ref _videoPktsReceived);
+            }
+        }
+
+        #endregion ############################################################
+
 
         /// <summary>
         /// Parse the <c>ssrc=XXXXXXXX</c> parameter from a Transport header
@@ -1674,69 +1708,6 @@ namespace SoftSled.Components.RTSP {
             System.Threading.Interlocked.Increment(ref _rtpInfoGeneration);
         }
 
-        /// <summary>
-        /// Parse the MS-RTSP <c>rtcp-fb-ssrc=XXXXXXXX</c> parameter from a
-        /// Transport response header. This is the SSRC the server expects
-        /// us to put in the "SSRC of packet sender" field of outbound RTCP
-        /// packets so it can correlate feedback to the right session.
-        /// Returns 0 if the parameter isn't present (in which case the
-        /// caller should fall back to a locally-chosen SSRC).
-        /// </summary>
-        private static uint ParseRtcpFbSsrcFromTransport(string transportHeader) {
-            if (string.IsNullOrEmpty(transportHeader)) return 0;
-            foreach (string part in transportHeader.Split(';')) {
-                string p = part.Trim();
-                if (p.StartsWith("rtcp-fb-ssrc=", StringComparison.OrdinalIgnoreCase)) {
-                    string v = p.Substring("rtcp-fb-ssrc=".Length).Trim();
-                    if (uint.TryParse(v, System.Globalization.NumberStyles.HexNumber,
-                                      System.Globalization.CultureInfo.InvariantCulture,
-                                      out uint result))
-                        return result;
-                }
-            }
-            return 0;
-        }
-
-        /// <summary>
-        /// Update per-stream RTP sequence-number tracking used by RTCP RR
-        /// reception-report blocks. Tracks base sequence (first seen),
-        /// highest sequence seen, and 16-bit-cycles count for the extended
-        /// highest sequence number. Wrap detection per RFC 3550 §A.1.
-        /// </summary>
-        private void UpdateRtcpSeqTracking(bool isAudio, ushort seq) {
-            if (isAudio) {
-                if (!_audioSeqInit) {
-                    _audioBaseSeq = seq;
-                    _audioHighestSeq = seq;
-                    _audioSeqInit = true;
-                } else if (IsSeqGreater(seq, _audioHighestSeq)) {
-                    // Detect 16-bit wrap (highest near 0xFFFF, new near 0).
-                    if (seq < _audioHighestSeq) _audioSeqCycles++;
-                    _audioHighestSeq = seq;
-                }
-                System.Threading.Interlocked.Increment(ref _audioPktsReceived);
-            } else {
-                if (!_videoSeqInit) {
-                    _videoBaseSeq = seq;
-                    _videoHighestSeq = seq;
-                    _videoSeqInit = true;
-                } else if (IsSeqGreater(seq, _videoHighestSeq)) {
-                    if (seq < _videoHighestSeq) _videoSeqCycles++;
-                    _videoHighestSeq = seq;
-                }
-                System.Threading.Interlocked.Increment(ref _videoPktsReceived);
-            }
-        }
-
-        /// <summary>
-        /// 16-bit modular sequence comparison (RFC 1982 SerialNumberArithmetic
-        /// scaled to 16 bits). Returns true if `a` is more recent than `b`,
-        /// handling wrap-around.
-        /// </summary>
-        private static bool IsSeqGreater(ushort a, ushort b) {
-            int diff = (a - b) & 0xFFFF;
-            return diff != 0 && diff < 0x8000;
-        }
 
         /// <summary>
         /// Record the codec observed on the first wire packet of this
@@ -1791,29 +1762,6 @@ namespace SoftSled.Components.RTSP {
             return 0;
         }
 
-        // Diagnostic log for the wire-commit / FinalizePipelineSetup /
-        // TrySetupMpegPsPipeline chain — written unconditionally to
-        // <configured-log-dir>/rtsp/softsled-commit-debug.log. Helps diagnose
-        // "RTP arriving but pipeline never commits" bugs by tracing exactly
-        // which branch the pipeline-setup state machine takes.
-        private System.IO.StreamWriter _commitDiagLog;
-        private void CommitDiagLog(string line) {
-            try {
-                if (_commitDiagLog == null) {
-                    string path = System.IO.Path.Combine(
-                        ResolveRtspDiagDir(),
-                        "softsled-commit-debug.log");
-                    _commitDiagLog = new System.IO.StreamWriter(
-                        new System.IO.FileStream(path,
-                            System.IO.FileMode.Create,
-                            System.IO.FileAccess.Write,
-                            System.IO.FileShare.Read),
-                        System.Text.Encoding.ASCII) { AutoFlush = true };
-                    _commitDiagLog.WriteLine($"# commit-debug, started {DateTime.Now:HH:mm:ss.fff}");
-                }
-                _commitDiagLog.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {line}");
-            } catch { /* never break the wire path because diag fails */ }
-        }
 
         // Lock-held caller. Either commits NOW if both codecs known, or
         // starts a 300ms safety-net timer that commits with whatever
@@ -1850,8 +1798,7 @@ namespace SoftSled.Components.RTSP {
                 if (needVideo && entry.Type == MediaType.Video) { sdpHasMissingSide = true; break; }
             }
             if (!sdpHasMissingSide) {
-                CommitDiagLog($"TryFinalize: only have audio={_wireAudioCodec ?? "(none)"} video={_wireVideoCodec ?? "(none)"} " +
-                              "and SDP has no entry for the missing side — finalizing now");
+                CommitDiagLog($"TryFinalize: only have audio={_wireAudioCodec ?? "(none)"} video={_wireVideoCodec ?? "(none)"} and SDP has no entry for the missing side — finalizing now");
                 FinalizePipelineSetup();
                 return;
             }
@@ -1881,30 +1828,8 @@ namespace SoftSled.Components.RTSP {
             // just commits the wire codecs and tears down the commit timer.
         }
 
-        /// <summary>
-        /// Find <paramref name="key"/>=value in a semicolon-separated fmtp
-        /// FormatParameter string. Returns the value (without quotes) or
-        /// null if absent. Whitespace-tolerant.
-        /// </summary>
-        private static string ExtractFmtpParameter(string fmtp, string key) {
-            foreach (string token in fmtp.Split(';')) {
-                string t = token.Trim();
-                int eq = t.IndexOf('=');
-                if (eq <= 0) continue;
-                if (string.Equals(t.Substring(0, eq), key, StringComparison.OrdinalIgnoreCase)) {
-                    string val = t.Substring(eq + 1).Trim();
-                    if (val.Length >= 2 && val[0] == '"' && val[val.Length - 1] == '"')
-                        val = val.Substring(1, val.Length - 2);
-                    return val;
-                }
-            }
-            return null;
-        }
+        #region RTP Methods ###################################################
 
-
-        int rtp_count = 0; // used for statistics
-        private int _vidRecvLoggedOnce;
-        private int _audRecvLoggedOnce;
         // RTP packet (or RTCP packet) has been received.
         public void Rtp_VideoDataReceived(object sender, Rtsp.RtspChunkEventArgs e) {
 
@@ -2489,6 +2414,10 @@ namespace SoftSled.Components.RTSP {
             }
         }
 
+        #endregion ############################################################
+
+
+        #region RTSP Methods ##################################################
 
         // RTSP Messages are OPTIONS, DESCRIBE, SETUP, PLAY etc
         private void Rtsp_MessageReceived(object sender, Rtsp.RtspChunkEventArgs e) {
@@ -2521,7 +2450,7 @@ namespace SoftSled.Components.RTSP {
                 if (keepalive_timer == null) {
                     // Start a Timer to send an Keepalive RTSP command every 20 seconds
                     keepalive_timer = new System.Timers.Timer();
-                    keepalive_timer.Elapsed += Timer_Elapsed;
+                    keepalive_timer.Elapsed += KeepaliveTimer_Elapsed;
                     keepalive_timer.Interval = 20 * 1000;
                     keepalive_timer.Enabled = true;
 
@@ -2557,7 +2486,7 @@ namespace SoftSled.Components.RTSP {
                 if (keepalive_timer == null) {
                     // Start a Timer to send an Keepalive RTSP command every 20 seconds
                     keepalive_timer = new System.Timers.Timer();
-                    keepalive_timer.Elapsed += Timer_Elapsed;
+                    keepalive_timer.Elapsed += KeepaliveTimer_Elapsed;
                     keepalive_timer.Interval = 20 * 1000;
                     keepalive_timer.Enabled = true;
                 }
@@ -2980,7 +2909,7 @@ namespace SoftSled.Components.RTSP {
                 }
 
 
-                // Check if we have another SETUP command to send, then remote it from the list
+                // Check if we have another SETUP command to send, then remove it from the list
                 if (setup_messages.Count > 0) {
                     // send the next SETUP message, after adding in the 'session'
                     RtspRequestSetup next_setup = setup_messages[0];
@@ -2991,11 +2920,8 @@ namespace SoftSled.Components.RTSP {
                     // from the SETUP URI's path tail (m= line control
                     // URLs end in /audio or /video — see SDP loop).
                     string nextSetupUriStr = next_setup.RtspUri?.ToString() ?? "";
-                    bool nextIsVideo = nextSetupUriStr.EndsWith("/video",
-                                          StringComparison.OrdinalIgnoreCase);
-                    next_setup.AddHeader(BuildBufferInfoHeader(
-                        _bufferInfoBandwidthBps, _bufferInfoOptimisedPreroll,
-                        isVideo: nextIsVideo));
+                    bool nextIsVideo = nextSetupUriStr.EndsWith("/video", StringComparison.OrdinalIgnoreCase);
+                    next_setup.AddHeader(BuildBufferInfoHeader(_bufferInfoBandwidthBps, _bufferInfoOptimisedPreroll, isVideo: nextIsVideo));
                     next_setup.AddHeader(SupportedHeader);
                     next_setup.AddHeader(UserAgent);
                     rtsp_client.SendMessage(next_setup);
@@ -3044,7 +2970,7 @@ namespace SoftSled.Components.RTSP {
                     Debug.WriteLine($"[rtp-info] parse failed: {ex.Message}");
                 }
 
-                // Phase-0c follow-up: start sending RTCP Receiver Reports.
+                // Start sending RTCP Receiver Reports.
                 // WMPNss paces ~20% real-time without RR feedback. We send
                 // a minimal 8-byte RR every 1 second for each stream that
                 // has a known server RTCP port. First send is immediate so
@@ -3057,25 +2983,19 @@ namespace SoftSled.Components.RTSP {
 
         }
 
-        // Flag set by Stop() so the keepalive miss-counter (and any other
-        // background path that observes a socket exception) knows the
-        // disconnect is user-initiated and shouldn't escalate to a
-        // Disconnected event.
-        private volatile bool _stopRequested;
-        private int _keepaliveConsecutiveFailures;
+        #endregion ############################################################
 
-        void Timer_Elapsed(object sender, System.Timers.ElapsedEventArgs e) {
+
+        #region RTSP Keepalive ################################################
+
+        void KeepaliveTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e) {
             // Send Keepalive message
-            // The ONVIF Standard uses SET_PARAMETER as "an optional method to keep an RTSP session alive"
-            // RFC 2326 (RTSP Standard) says "GET_PARAMETER with no entity body may be used to test client or server liveness("ping")"
-
             // This code uses GET_PARAMETER (unless OPTIONS report it is not supported, and then it sends OPTIONS as a keepalive)
 
             if (_stopRequested) return;
 
             try {
                 if (server_supports_get_parameter) {
-
                     RtspRequest getparam_message = new RtspRequestGetParameter();
                     getparam_message.RtspUri = new Uri(url);
                     getparam_message.Session = session;
@@ -3083,9 +3003,7 @@ namespace SoftSled.Components.RTSP {
                     getparam_message.AddHeader(SupportedHeader);
                     getparam_message.AddHeader(UserAgent);
                     rtsp_client.SendMessage(getparam_message);
-
                 } else {
-
                     RtspRequest options_message = new RtspRequestOptions();
                     options_message.RtspUri = new Uri(url);
                     options_message.AddHeader(LanguageHeader);
@@ -3104,6 +3022,8 @@ namespace SoftSled.Components.RTSP {
                 }
             }
         }
+
+        #endregion ############################################################
 
 
         // ===================================================================
@@ -3180,7 +3100,7 @@ namespace SoftSled.Components.RTSP {
         /// <summary>
         /// Monitor a freshly-committed sample's PTS for the spec thresholds.
         /// Called from inside the audio + video depacketizer callbacks
-        /// (Layer 4f). The check is best-effort — if no SR has anchored
+        /// The check is best-effort — if no SR has anchored
         /// the per-stream clock yet, we return without firing.
         /// </summary>
         private void MonitorPts(bool isAudio, uint rtpTs) {
@@ -3190,7 +3110,7 @@ namespace SoftSled.Components.RTSP {
             long ptsMs = clock.PtsMs(rtpTs);
             long prev = isAudio ? _lastAudioPtsMs : _lastVideoPtsMs;
 
-            // First-sample-after-seek capture — used by Layer 4g(b).
+            // First-sample-after-seek capture
             if (isAudio) {
                 if (System.Threading.Interlocked.CompareExchange(
                         ref _firstAudioPtsCapturedMs, ptsMs, long.MinValue) == long.MinValue) {
@@ -3217,7 +3137,7 @@ namespace SoftSled.Components.RTSP {
         }
 
         /// <summary>
-        /// Layer 4g(b): once both first-sample PTS values are captured
+        /// Once both first-sample PTS values are captured
         /// after a seek, compare and fire UNRECOVERABLE_SKEW if the gap
         /// exceeds 3500ms. Only fires once per seek.
         /// </summary>
@@ -3233,8 +3153,8 @@ namespace SoftSled.Components.RTSP {
         }
 
         /// <summary>
-        /// Layer 4g(a): start the decoder-open stopwatch the first time
-        /// a sample is handed to FFME. Called from the producer-submit
+        /// start the decoder-open stopwatch the first time
+        /// a sample is handed to MediaController. Called from the producer-submit
         /// path of whichever pipeline commits first.
         /// </summary>
         internal void ArmDecoderOpenStopwatch() {
@@ -3243,26 +3163,96 @@ namespace SoftSled.Components.RTSP {
             }
         }
 
-    }
+        #region Utility #######################################################
 
-    public class WMFPayloadData {
-        public MediaType Type { get; set; }
-        public string Codec { get; set; }
-        public int PayloadNumber { get; set; }
-        public string FormatParameter { get; set; }
+        // Resolve the directory for RTSP diagnostic logs: an "rtsp" subfolder
+        // under the configured main log directory (SoftSledConfig.LogFileDirectory,
+        // default %LocalAppData%/SoftSled/Logs) so they sit alongside the
+        // session logs instead of in %TEMP%. Falls back to %TEMP% if config
+        // resolution or directory creation fails, so diagnostics are never lost.
+        private static string ResolveRtspDiagDir() {
+            try {
+                string dir = null;
+                try { dir = SoftSled.Components.Configuration.SoftSledConfigManager.ReadConfig()?.LogFileDirectory; } catch { }
+                if (string.IsNullOrWhiteSpace(dir)) {
+                    dir = System.IO.Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "SoftSled", "Logs");
+                }
+                dir = System.IO.Path.Combine(dir, "rtsp");
+                System.IO.Directory.CreateDirectory(dir);
+                return dir;
+            } catch {
+                return System.IO.Path.GetTempPath();
+            }
+        }
+
+        // Diagnostic log for the wire-commit / FinalizePipelineSetup /
+        // TrySetupMpegPsPipeline chain — written unconditionally to
+        // <configured-log-dir>/rtsp/softsled-commit-debug.log. Helps diagnose
+        // "RTP arriving but pipeline never commits" bugs by tracing exactly
+        // which branch the pipeline-setup state machine takes.
+        private System.IO.StreamWriter _commitDiagLog;
+        private void CommitDiagLog(string line) {
+            try {
+                if (_commitDiagLog == null) {
+                    string path = System.IO.Path.Combine(
+                        ResolveRtspDiagDir(),
+                        "softsled-commit-debug.log");
+                    _commitDiagLog = new System.IO.StreamWriter(
+                        new System.IO.FileStream(path,
+                            System.IO.FileMode.Create,
+                            System.IO.FileAccess.Write,
+                            System.IO.FileShare.Read),
+                        System.Text.Encoding.ASCII) { AutoFlush = true };
+                    _commitDiagLog.WriteLine($"# commit-debug, started {DateTime.Now:HH:mm:ss.fff}");
+                }
+                _commitDiagLog.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {line}");
+            } catch { /* never break the wire path because diag fails */ }
+        }
+
+        // Diagnostic log for the RTCP send loop + WMRTP timing dumps. Written to
+        // <configured-log-dir>/rtsp/softsled-rtcp-debug.log so we have ground-truth
+        // visibility into the timer/guards/sends — independent of Debug.WriteLine.
+        private System.IO.StreamWriter _rtcpDiagLog;
+        private void RtcpDiagInit() {
+            if (_rtcpDiagLog != null) return;
+            try {
+                string path = System.IO.Path.Combine(ResolveRtspDiagDir(),
+                                                     "softsled-rtcp-debug.log");
+                _rtcpDiagLog = new System.IO.StreamWriter(
+                    new System.IO.FileStream(path, System.IO.FileMode.Create,
+                                             System.IO.FileAccess.Write,
+                                             System.IO.FileShare.Read),
+                    System.Text.Encoding.ASCII);
+                _rtcpDiagLog.AutoFlush = true;
+                _rtcpDiagLog.WriteLine($"# RTCP send-loop diagnostic, started {DateTime.Now:HH:mm:ss.fff}");
+                _rtcpDiagLog.WriteLine($"# columns: timestamp tick event details");
+            } catch (Exception ex) {
+                Debug.WriteLine($"[rtcp-diag] log open failed: {ex.Message}");
+            }
+        }
+        private void RtcpDiagLog(string line) {
+            try { _rtcpDiagLog?.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {line}"); } catch { }
+        }
+
         /// <summary>
-        /// RTP timestamp clock in Hz, parsed from the rtpmap entry
-        /// (e.g. <c>vnd.ms.wm-MPA/90000</c> → 90000, <c>x-wmf-pf/1000</c> → 1000).
-        /// Used by container muxers to convert per-stream RTP timestamps
-        /// to a canonical PTS clock. Defaults to 90000 if unknown.
+        /// 16-bit modular sequence comparison (RFC 1982 SerialNumberArithmetic
+        /// scaled to 16 bits). Returns true if `a` is more recent than `b`,
+        /// handling wrap-around.
         /// </summary>
-        public int ClockHz { get; set; } = 90000;
-        public string EncodingParameters { get; set; }
-        public AM_Media_Format AM_Media_Format { get; set; }
-    }
+        private static bool IsSeqGreater(ushort a, ushort b) {
+            int diff = (a - b) & 0xFFFF;
+            return diff != 0 && diff < 0x8000;
+        }
 
-    public enum MediaType {
-        Video,
-        Audio
+        private static void WriteU32Be(byte[] buf, int off, uint value) {
+            buf[off + 0] = (byte)((value >> 24) & 0xFF);
+            buf[off + 1] = (byte)((value >> 16) & 0xFF);
+            buf[off + 2] = (byte)((value >> 8) & 0xFF);
+            buf[off + 3] = (byte)((value >> 0) & 0xFF);
+        }
+
+        #endregion ############################################################
     }
 }

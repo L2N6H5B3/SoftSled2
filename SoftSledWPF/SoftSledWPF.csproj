@@ -296,6 +296,7 @@
     <Compile Include="Components\RTSP\Sdp\SdpTimeZone.cs" />
     <Compile Include="Components\RTSP\Sdp\Timing.cs" />
     <Compile Include="Components\RTSP\UdpSocket.cs" />
+    <Compile Include="Components\RTSP\WMFPayloadData.cs" />
     <Compile Include="Components\Utility\DataUtilities.cs" />
     <Compile Include="Components\Utility\Enums.cs" />
     <Compile Include="Components\Utility\Utility.cs" />
