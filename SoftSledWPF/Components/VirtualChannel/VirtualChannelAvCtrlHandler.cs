@@ -50,21 +50,21 @@ namespace SoftSled.Components.VirtualChannel {
             set {
                 if (ReferenceEquals(_mediaController, value)) return;
                 if (_mediaController != null) {
-                    _mediaController.BufferingEnded     -= OnControllerBufferingEnded;
-                    _mediaController.MediaEnded         -= OnControllerMediaEnded;
-                    _mediaController.MediaFailed        -= OnControllerMediaFailed;
-                    _mediaController.RtspDisconnected   -= OnControllerRtspDisconnected;
-                    _mediaController.PtsError           -= OnControllerPtsError;
-                    _mediaController.UnrecoverableSkew  -= OnControllerUnrecoverableSkew;
+                    _mediaController.BufferingEnded -= OnControllerBufferingEnded;
+                    _mediaController.MediaEnded -= OnControllerMediaEnded;
+                    _mediaController.MediaFailed -= OnControllerMediaFailed;
+                    _mediaController.RtspDisconnected -= OnControllerRtspDisconnected;
+                    _mediaController.PtsError -= OnControllerPtsError;
+                    _mediaController.UnrecoverableSkew -= OnControllerUnrecoverableSkew;
                 }
                 _mediaController = value;
                 if (_mediaController != null) {
-                    _mediaController.BufferingEnded     += OnControllerBufferingEnded;
-                    _mediaController.MediaEnded         += OnControllerMediaEnded;
-                    _mediaController.MediaFailed        += OnControllerMediaFailed;
-                    _mediaController.RtspDisconnected   += OnControllerRtspDisconnected;
-                    _mediaController.PtsError           += OnControllerPtsError;
-                    _mediaController.UnrecoverableSkew  += OnControllerUnrecoverableSkew;
+                    _mediaController.BufferingEnded += OnControllerBufferingEnded;
+                    _mediaController.MediaEnded += OnControllerMediaEnded;
+                    _mediaController.MediaFailed += OnControllerMediaFailed;
+                    _mediaController.RtspDisconnected += OnControllerRtspDisconnected;
+                    _mediaController.PtsError += OnControllerPtsError;
+                    _mediaController.UnrecoverableSkew += OnControllerUnrecoverableSkew;
                 }
             }
         }
@@ -106,7 +106,7 @@ namespace SoftSled.Components.VirtualChannel {
             // payload error code; pass 0 and let the event itself signal
             // the threshold breach.
             m_logger?.LogDebug($"AVCTRL: PtsError → emitting PTS_ERROR " +
-                               $"({(info.IsAudio?"audio":"video")} delta={info.DeltaMs}ms)");
+                               $"({(info.IsAudio ? "audio" : "video")} delta={info.DeltaMs}ms)");
             OnMediaEvent(MediaEvent.PTS_ERROR, 0);
         }
         private void OnControllerUnrecoverableSkew(SoftSled.Components.AudioVisual.SkewInfo info) {
@@ -157,7 +157,6 @@ namespace SoftSled.Components.VirtualChannel {
         // controller isn't available yet (very early in the session),
         // we just report _playbackStartPositionMs unchanged.
         private long _playbackStartPositionMs;   // StartPayloadStartTime from WMC (0 for fresh play)
-        private const long DefaultDurationMs = 2L * 60L * 60L * 1000L; // 2 h fallback = 7,200,000 ms
 
         // First-Start latch. WMC sends two Start requests in quick
         // succession at the very beginning of a session — but FFME's
@@ -254,7 +253,7 @@ namespace SoftSled.Components.VirtualChannel {
                         Guid createServiceServiceID = DataUtilities.GuidFromArray(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16);
                         int createServiceServiceHandle = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 16 + 16);
 
-                        
+
 
                         switch (createServiceClassID.ToString().ToLower()) {
                             // DMCT ClassID
@@ -298,19 +297,19 @@ namespace SoftSled.Components.VirtualChannel {
 
                         // If this is the DMCT Service
                         if (deleteServiceServiceHandle == DMCTServiceHandle) {
-                        m_logger?.LogDebug($"MCXSESS: DeleteService DMCT ({DMCTServiceHandle})");
+                            m_logger?.LogDebug($"MCXSESS: DeleteService DMCT ({DMCTServiceHandle})");
                             // Clear the DMCT Service
                             DMCTServiceHandle = 0;
                         }
                         // If this is the DSPA Service
                         else if (deleteServiceServiceHandle == DSPAServiceHandle) {
-                        m_logger?.LogDebug($"MCXSESS: DeleteService DSPA ({DSPAServiceHandle})");
+                            m_logger?.LogDebug($"MCXSESS: DeleteService DSPA ({DSPAServiceHandle})");
                             // Clear the DSPA Service
                             DSPAServiceHandle = 0;
                         }
                         // If this is the DRMRI Service
                         else if (deleteServiceServiceHandle == DRMRIServiceHandle) {
-                        m_logger?.LogDebug($"MCXSESS: DeleteService DRMRI ({DRMRIServiceHandle})");
+                            m_logger?.LogDebug($"MCXSESS: DeleteService DRMRI ({DRMRIServiceHandle})");
                             // Clear the DRMRI Service
                             DRMRIServiceHandle = 0;
                         }
@@ -352,23 +351,9 @@ namespace SoftSled.Components.VirtualChannel {
                         int OpenMediaPayloadSurfaceID = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4 + OpenMediaPayloadURLLength);
                         int OpenMediaPayloadTimeOut = DataUtilities.Get4ByteInt(incomingBuff, 6 + dispatchPayloadSize + 4 + 2 + 4 + OpenMediaPayloadURLLength + 4);
 
-                        // Promoted to LogInfo + extra fields so the surface
-                        // routing in Splash/RUI mode can be diagnosed from
-                        // the log alone. SurfaceID is the MS-RRSP2
-                        // DynamicSurfaceFactory uid that the splash channel
-                        // assigns at CreateVideoInstance time — see the
-                        // SurfaceRouter wire-up for the resolve chain.
-                        m_logger?.LogInfo($"AVCTRL: OpenMedia URL=\"{OpenMediaPayloadURL}\" " +
-                                          $"SurfaceID={OpenMediaPayloadSurfaceID} " +
-                                          $"Timeout={OpenMediaPayloadTimeOut}s");
+                        m_logger?.LogInfo($"AVCTRL: OpenMedia URL=\"{OpenMediaPayloadURL}\" SurfaceID={OpenMediaPayloadSurfaceID} Timeout={OpenMediaPayloadTimeOut}s");
 
-                        // Re-arm the first-Start ack deferral for the
-                        // new session.
-                        _firstStartSeen = false;
-
-                        DMCTOpenMediaURL = OpenMediaPayloadURL;
-                        Debug.WriteLine(DMCTOpenMediaURL);
-
+                        // Create RTSP Client
                         rtspClient = new RTSPClient();
 
                         // Bind the new RTSP session to the controller so
@@ -376,8 +361,9 @@ namespace SoftSled.Components.VirtualChannel {
                         // forward to the right place, and so RTSP's spec-
                         // events propagate as controller events (and from
                         // there as DMCT OnMediaEvent codes).
-                        try { _mediaController?.AttachRtspClient(rtspClient); }
-                        catch (Exception ex) {
+                        try {
+                            _mediaController?.AttachRtspClient(rtspClient);
+                        } catch (Exception ex) {
                             m_logger?.LogError($"AVCTRL: AttachRtspClient(open) threw: {ex.Message}");
                         }
 
@@ -385,17 +371,20 @@ namespace SoftSled.Components.VirtualChannel {
                         // on. In GDI mode this is ignored (single surface);
                         // in RUI mode SurfaceRouter looks it up in the
                         // Splash registry and positions Media accordingly.
-                        try { VideoSurfaceRequested?.Invoke(OpenMediaPayloadSurfaceID); }
-                        catch (Exception ex) {
+                        try {
+                            VideoSurfaceRequested?.Invoke(OpenMediaPayloadSurfaceID);
+                        } catch (Exception ex) {
                             m_logger?.LogError($"AVCTRL: VideoSurfaceRequested handler threw: {ex.Message}");
                         }
 
-                        rtspClient.Connect(DMCTOpenMediaURL, RTSPClient.RTP_TRANSPORT.UDP, RTSPClient.MEDIA_REQUEST.VIDEO_AND_AUDIO);
+                        // Connect RTSP Client to Media URL
+                        rtspClient.Connect(OpenMediaPayloadURL, RTSPClient.RTP_TRANSPORT.UDP, RTSPClient.MEDIA_REQUEST.VIDEO_AND_AUDIO);
 
                         // Initialise OpenMedia Response
                         byte[] response = DSLRCommunication.OpenMediaResponse(
                             dispatchRequestHandleArray
                         );
+
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = DSLRCommunication.Encapsulate(response);
 
@@ -410,29 +399,23 @@ namespace SoftSled.Components.VirtualChannel {
 
                         // Reset playback position tracking on CloseMedia.
                         _playbackStartPositionMs = 0;
-                        // Re-arm the first-Start deferral for the next
-                        // session — symmetric with OpenMedia. Without
-                        // this, OpenMedia → CloseMedia → OpenMedia
-                        // would skip the deferral on the second cycle.
-                        _firstStartSeen = false;
 
                         // Detach the live RTSP session from the controller
                         // BEFORE stopping it, so any final RTSP exceptions
                         // raised by Stop() don't propagate as
                         // RTSP_DISCONNECT (we're closing on purpose).
-                        try { _mediaController?.AttachRtspClient(null); }
-                        catch (Exception ex) {
+                        try { _mediaController?.AttachRtspClient(null); } catch (Exception ex) {
                             m_logger?.LogError($"AVCTRL: AttachRtspClient(close) threw: {ex.Message}");
                         }
 
                         // Signal the host to close FFME BEFORE we tear down
                         // RTSPClient — RTSPClient.Stop() disposes the producer
                         // which races with FFME's demux thread's Read.
-                        try { VideoPipelineClosed?.Invoke(); }
-                        catch (Exception ex) {
+                        try { VideoPipelineClosed?.Invoke(); } catch (Exception ex) {
                             m_logger?.LogError($"AVCTRL: VideoPipelineClosed handler threw: {ex.Message}");
                         }
 
+                        // Stop RTSP Client
                         rtspClient.Stop();
 
                         // Initialise CloseMedia Response
@@ -475,9 +458,7 @@ namespace SoftSled.Components.VirtualChannel {
                         // server can interpret it as a pause/restart and
                         // never start the stream. We therefore only treat a
                         // *non-zero* StartTime as a real seek request.
-                        bool isExplicitSeek =
-                            (StartPayloadStartTime != StartTimeSentinelResume) &&
-                            (StartPayloadStartTime > 0);
+                        bool isExplicitSeek = (StartPayloadStartTime != StartTimeSentinelResume) && (StartPayloadStartTime > 0);
 
                         // Capture where we ACTUALLY are BEFORE overwriting
                         // _playbackStartPositionMs below. The seek-vs-heartbeat
@@ -493,9 +474,7 @@ namespace SoftSled.Components.VirtualChannel {
                                 currentPlaybackMs += (long)_mediaController.Position.TotalMilliseconds;
                         } catch { /* controller not ready — use cached base */ }
 
-                        _playbackStartPositionMs =
-                            (StartPayloadStartTime == StartTimeSentinelResume)
-                                ? 0L : StartPayloadStartTime;
+                        _playbackStartPositionMs = (StartPayloadStartTime == StartTimeSentinelResume) ? 0L : StartPayloadStartTime;
 
                         // Decode the WMC PlayRate. NOTE: the wire encoding
                         // is not 100% nailed down from existing captures —
@@ -514,14 +493,12 @@ namespace SoftSled.Components.VirtualChannel {
                         // a SET_PARAMETER that WMPNss interprets as a
                         // mid-handshake state change.
                         if (StartPayloadAvailableBandwidth > 0) {
-                            try { _mediaController?.SetAvailableBandwidth(StartPayloadAvailableBandwidth); }
-                            catch (Exception ex) {
+                            try { _mediaController?.SetAvailableBandwidth(StartPayloadAvailableBandwidth); } catch (Exception ex) {
                                 m_logger?.LogError($"AVCTRL: SetAvailableBandwidth failed: {ex.Message}");
                             }
                         }
                         if (StartPayloadUseOptimisedPreroll != 0) {
-                            try { _mediaController?.SetOptimisedPreroll(true); }
-                            catch (Exception ex) {
+                            try { _mediaController?.SetOptimisedPreroll(true); } catch (Exception ex) {
                                 m_logger?.LogError($"AVCTRL: SetOptimisedPreroll failed: {ex.Message}");
                             }
                         }
@@ -558,9 +535,10 @@ namespace SoftSled.Components.VirtualChannel {
                                     $"±2s of current {currentMs}ms (delta={delta}ms) — treating " +
                                     $"as position heartbeat, NOT issuing seek");
                             } else {
-                                try { _ = _mediaController?.SeekAsync(
-                                            TimeSpan.FromMilliseconds(StartPayloadStartTime)); }
-                                catch (Exception ex) {
+                                try {
+                                    _ = _mediaController?.SeekAsync(
+                                            TimeSpan.FromMilliseconds(StartPayloadStartTime));
+                                } catch (Exception ex) {
                                     m_logger?.LogError($"AVCTRL: SeekAsync failed: {ex.Message}");
                                 }
                             }
@@ -586,132 +564,43 @@ namespace SoftSled.Components.VirtualChannel {
                         // The actual routing decision (client-side via
                         // SpeedRatio vs. server-side via RTSP Scale) lives
                         // inside SetRateAsync.
-                        bool clientSide =
-                            System.Math.Abs(rate) >= 0.5 && System.Math.Abs(rate) <= 2.0
-                            && rate > 0;
-                        m_logger?.LogInfo(
-                            $"AVCTRL: Start RequestedPlayRate={rate}x — forwarding " +
-                            $"({(clientSide ? "client-side via FFME SpeedRatio" : "server-side via RTSP PLAY-with-Scale")})" +
-                            (isExplicitRate ? "" : " [normal 1× — also drives any required FF/RW exit]"));
-                        try { _ = _mediaController?.SetRateAsync(rate); }
-                        catch (Exception ex) {
-                            m_logger?.LogError($"AVCTRL: SetRateAsync failed: {ex.Message}");
+                        bool clientSide = System.Math.Abs(rate) >= 0.5 && System.Math.Abs(rate) <= 2.0 && rate > 0;
+                        m_logger?.LogInfo($"AVCTRL: Start RequestedPlayRate={rate}x — forwarding ({(clientSide ? "client-side via FFME SpeedRatio" : "server-side via RTSP PLAY-with-Scale")})" + (isExplicitRate ? "" : " [normal 1× — also drives any required FF/RW exit]"));
+
+                        try { 
+                            _ = _mediaController?.SetRateAsync(rate); 
+                        } catch (Exception ex) {
+                            m_logger?.LogError($"AVCTRL: MediaController.SetRateAsync failed: {ex.Message}");
                         }
 
-                        // Drive FFME Play. Fire-and-forget — FFME may not
-                        // have finished Open yet (WMC sends Start very
-                        // shortly after OpenMedia), and PlayAsync is
-                        // dispatcher-marshaled internally so we never
-                        // block this VC handler. RTSP PLAY is emitted by
-                        // the existing auto-PLAY trigger in RTSPClient
-                        // (after the last SETUP response), picking up any
-                        // Range/Scale/Speed cached above via SeekAsync/
-                        // SetRateAsync.
-                        try { _ = _mediaController?.PlayAsync(); }
-                        catch (Exception ex) {
+                        try {
+                            _ = _mediaController?.PlayAsync(); 
+                        } catch (Exception ex) {
                             m_logger?.LogError($"AVCTRL: MediaController.PlayAsync failed: {ex.Message}");
                         }
-
-                        // Granted Rate (MS-DMCT §2.2.1.3.2): the play-rate the
-                        // extender granted, in the SAME encoding as the request
-                        // (an IEEE-754 float bit-pattern, NOT a literal int — see
-                        // DecodePlayRate). We honour whatever WMC asked (forwarded
-                        // via Scale/Speed), so echo the granted rate as the float
-                        // bits of the decoded/clamped value: 1.0x → 0x3F800000.
-                        // (Previously we sent the literal int 1 = 0x00000001,
-                        // which as a float is ~1.4e-45 ≈ 0 — telling WMC "granted
-                        // rate ≈ 0". Tolerated at 1x but wrong, and likely why
-                        // trick-play rate grants read oddly to WMC.)
-                        int grantedRateBits = BitConverter.ToInt32(
-                            BitConverter.GetBytes((float)rate), 0);
 
                         // Initialise Start Response
                         byte[] response = DSLRCommunication.StartResponse(
                             dispatchRequestHandleArray,
-                            grantedRateBits
+                            StartPayloadRequestedPlayRate
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = DSLRCommunication.Encapsulate(response);
 
-                        // First-Start deferral. WMC sends two Start
-                        // requests right after OpenMedia; FFME's
-                        // Media.Open is asynchronous and the first
-                        // Start typically arrives before MediaOpened
-                        // has fired. If we ack early, WMC starts
-                        // polling GetPosition (and may skip its
-                        // BUFFERING_STOP wait) against an engine that
-                        // isn't presenting yet, throwing off pacing
-                        // for the rest of the session.
-                        //
-                        // Solution: defer ONLY the first Start ack
-                        // until the controller reports IsOpen=true
-                        // (with a 5 s timeout safety net).
-                        bool deferAck = !_firstStartSeen
-                                        && _mediaController != null
-                                        && !_mediaController.IsOpen;
-                        _firstStartSeen = true;
-                        if (deferAck) {
-                            // Capture into locals so the continuation
-                            // doesn't see fields mutated by later
-                            // requests.
-                            var capturedController = _mediaController;
-                            var capturedResponse   = encapsulatedResponse;
-                            m_logger?.LogInfo("AVCTRL: Start — deferring first-Start ack " +
-                                              "until media controller reports IsOpen=true " +
-                                              $"(timeout {FirstStartAckTimeoutMs}ms)");
-                            // Fire-and-forget. The continuation runs
-                            // on a thread-pool thread; VirtualChannelSend
-                            // is thread-safe (FreeRdpClient marshals
-                            // to its own send thread internally).
-                            _ = System.Threading.Tasks.Task.Run(async () => {
-                                var sw = System.Diagnostics.Stopwatch.StartNew();
-                                try {
-                                    await capturedController.WaitUntilOpenAsync(FirstStartAckTimeoutMs);
-                                } catch (Exception ex) {
-                                    m_logger?.LogError("AVCTRL: WaitUntilOpenAsync threw: " + ex.Message);
-                                }
-                                sw.Stop();
-                                bool open = false;
-                                try { open = capturedController.IsOpen; } catch { }
-                                m_logger?.LogInfo(
-                                    $"AVCTRL: first-Start ack releasing after {sw.ElapsedMilliseconds}ms " +
-                                    $"(IsOpen={open})");
-                                try {
-                                    VirtualChannelSend(this,
-                                        new VirtualChannelSendArgs("avctrl", capturedResponse));
-                                } catch (Exception ex) {
-                                    m_logger?.LogError("AVCTRL: deferred StartResponse send threw: " + ex.Message);
-                                }
-                            });
-                        } else {
-                            // Send the Start Response immediately —
-                            // either we already saw the first Start,
-                            // or the controller is already open, or
-                            // there's no controller bound at all.
-                            VirtualChannelSend(this,
-                                new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
-                        }
+                        // Send the Play Response
+                        VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
 
                     }
                     // Pause Request
                     else if (dispatchFunctionHandle == 3) {
 
                         m_logger?.LogDebug("AVCTRL: Pause");
-
-                        // No bookkeeping needed for position — FFME's
-                        // MediaController.Position freezes automatically
-                        // when the underlying playback pauses, so
-                        // GetPosition naturally reports the pause-time
-                        // position until Start resumes.
-
-                        // Pause FFME so the decoder + audio output halt in
-                        // sync with the RTSP server's pause.
-                        try { _ = _mediaController?.PauseAsync(); }
-                        catch (Exception ex) {
+                        
+                        try { 
+                            _ = _mediaController?.PauseAsync(); 
+                        } catch (Exception ex) {
                             m_logger?.LogError($"AVCTRL: MediaController.PauseAsync failed: {ex.Message}");
                         }
-
-                        rtspClient.Pause();
 
                         // Initialise Pause Response
                         byte[] response = DSLRCommunication.PauseResponse(
@@ -732,30 +621,26 @@ namespace SoftSled.Components.VirtualChannel {
                         // Reset playback position tracking on Stop.
                         _playbackStartPositionMs = 0;
 
-                        // Detach the live RTSP session from the controller
-                        // BEFORE stopping it — same reason as CloseMedia.
-                        try { _mediaController?.AttachRtspClient(null); }
-                        catch (Exception ex) {
-                            m_logger?.LogError($"AVCTRL: AttachRtspClient(stop) threw: {ex.Message}");
+                        // Detach the live RTSP session from the controller BEFORE stopping it — same reason as CloseMedia.
+                        try { 
+                            _mediaController?.AttachRtspClient(null); 
+                        } catch (Exception ex) {
+                            m_logger?.LogError($"AVCTRL: MediaController.AttachRtspClient(stop) threw: {ex.Message}");
                         }
 
-                        // Pause FFME first so its decoder threads quiesce
-                        // before VideoPipelineClosed tears down the
-                        // producer's queue (avoids spurious "Read returned
-                        // 0" exceptions in the FFME demux thread). Fire-
-                        // and-forget — VideoPipelineClosed will follow.
-                        try { _ = _mediaController?.PauseAsync(); }
-                        catch (Exception ex) {
+                        try { 
+                            _ = _mediaController?.PauseAsync(); 
+                        } catch (Exception ex) {
                             m_logger?.LogError($"AVCTRL: MediaController.PauseAsync on Stop failed: {ex.Message}");
                         }
 
-                        // Signal the host to close FFME before tearing down
-                        // RTSPClient (which disposes the producer).
-                        try { VideoPipelineClosed?.Invoke(); }
-                        catch (Exception ex) {
+                        try { 
+                            VideoPipelineClosed?.Invoke(); 
+                        } catch (Exception ex) {
                             m_logger?.LogError($"AVCTRL: VideoPipelineClosed handler threw: {ex.Message}");
                         }
 
+                        // Stop the RTSP Client
                         rtspClient.Stop();
 
                         // Initialise Stop Response
@@ -772,30 +657,21 @@ namespace SoftSled.Components.VirtualChannel {
                     // GetDuration Request
                     else if (dispatchFunctionHandle == 5) {
 
-                        // Prefer FFME's natural duration when the video
-                        // pipeline is up and FFME has parsed enough of the
-                        // stream to know it. Live / unbounded RTSP streams
-                        // (recorded-TV with `a=range:npt=0-`) leave this
-                        // null — we fall back to a 2-hour ceiling so WMC
-                        // doesn't think the media is zero-length and stall.
-                        long durationMs = DefaultDurationMs;
-                        var ffmeDuration = _mediaController?.Duration;
-                        if (ffmeDuration.HasValue && ffmeDuration.Value > TimeSpan.Zero) {
-                            durationMs = (long)ffmeDuration.Value.TotalMilliseconds;
+                        long mediaDurationMs = 0;
+                        TimeSpan? mediaDuration = _mediaController?.Duration;
+                        if (mediaDuration.HasValue && mediaDuration.Value > TimeSpan.Zero) {
+                            mediaDurationMs = (long)mediaDuration.Value.TotalMilliseconds;
                         }
 
-                        // MS-DMCT §2.2.1.5: Duration is delivered to WMC in
-                        // units of 10 milliseconds. Convert at wire time.
-                        long durationWire = durationMs / 10;  /* /10 for 10ms units */
+                        // MS-DMCT §2.2.1.5: Duration is delivered to WMC in units of 10 milliseconds. Convert at wire time.
+                        long mediaDurationWire = mediaDurationMs / 10;
 
-                        m_logger?.LogDebug($"AVCTRL: GetDuration ({durationMs} ms = " +
-                                          $"{TimeSpan.FromMilliseconds(durationMs):c}, " +
-                                          $"wire={durationWire} ×10ms)");
+                        m_logger?.LogDebug($"AVCTRL: GetDuration ({mediaDurationMs} ms = {TimeSpan.FromMilliseconds(mediaDurationMs):c}, wire={mediaDurationWire} ×10ms)");
 
                         // Initialise GetDuration Response
                         byte[] response = DSLRCommunication.GetDurationResponse(
                             dispatchRequestHandleArray,
-                            durationWire
+                            mediaDurationWire
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = DSLRCommunication.Encapsulate(response);
@@ -807,33 +683,22 @@ namespace SoftSled.Components.VirtualChannel {
                     // GetPosition Request
                     else if (dispatchFunctionHandle == 6) {
 
-                        // Position comes from FFME's decoder clock — accurate
-                        // to within one frame and stops advancing on Pause.
-                        // Before the controller is set up (i.e. very early
-                        // in the session) we simply report the StartTime
-                        // WMC handed us, leaving the offset unchanged.
-                        // Either way the result is in absolute media-
-                        // timeline milliseconds.
-                        long positionMs;
+                        long mediaPositionMs;
                         if (_mediaController != null && _mediaController.IsOpen) {
-                            positionMs = _playbackStartPositionMs
-                                         + (long)_mediaController.Position.TotalMilliseconds;
+                            mediaPositionMs = _playbackStartPositionMs + (long)_mediaController.Position.TotalMilliseconds;
                         } else {
-                            positionMs = _playbackStartPositionMs;
+                            mediaPositionMs = _playbackStartPositionMs;
                         }
 
-                        // MS-DMCT §2.2.1.6: Position is delivered to WMC in
-                        // units of 10 milliseconds. Convert at wire time.
-                        long positionWire = positionMs / 10;  /* /10 for 10ms units */
+                        // MS-DMCT §2.2.1.6: Position is delivered to WMC in units of 10 milliseconds. Convert at wire time.
+                        long mediaPositionWire = mediaPositionMs / 10;
 
-                        m_logger?.LogDebug($"AVCTRL: GetPosition ({positionMs} ms = " +
-                                          $"{TimeSpan.FromMilliseconds(positionMs):c}, " +
-                                          $"wire={positionWire} ×10ms)");
+                        m_logger?.LogDebug($"AVCTRL: GetPosition ({mediaPositionMs} ms = {TimeSpan.FromMilliseconds(mediaPositionMs):c}, wire={mediaPositionWire} ×10ms)");
 
                         // Initialise GetPosition Response
                         byte[] response = DSLRCommunication.GetPositionResponse(
                             dispatchRequestHandleArray,
-                            positionWire
+                            mediaPositionWire
                         );
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = DSLRCommunication.Encapsulate(response);
@@ -852,7 +717,7 @@ namespace SoftSled.Components.VirtualChannel {
 
                         m_logger?.LogDebug("AVCTRL: RegisterMediaEventCallback");
 
-                        
+
                         // Add Stub RequestType to Dictionary
                         StubRequestTypeDict.Add(StubRequestHandleIter, StubRequestType.RegisterMediaEventCallback);
                         // Add Proxy RequestHandle Iter to Stub RequestHandle Match Dictionary
@@ -996,7 +861,7 @@ namespace SoftSled.Components.VirtualChannel {
                                 // Initialise GetDWORDProperty Response
                                 byte[] isMutedResponse = DSLRCommunication.GetDWORDPropertyResponse(
                                     dispatchRequestHandleArray,
-                                    isMuted ? 1 : 0 
+                                    isMuted ? 1 : 0
                                 );
                                 // Encapsulate the Response (Doesn't seem to work without this?)
                                 byte[] encapsulatedIsMutedResponse = DSLRCommunication.Encapsulate(isMutedResponse);
@@ -1017,7 +882,7 @@ namespace SoftSled.Components.VirtualChannel {
                                     m_logger?.LogDebug($"AVCTRL: CurrentVolume Div ({(currentVolume / 100)})");
                                     sendVolume = (int)Math.Floor((65535 / (currentVolume / 100)) / 100);
                                 }
-                               
+
                                 m_logger?.LogDebug($"AVCTRL: SendVolume ({sendVolume})");
 
                                 // Initialise GetDWORDProperty Response
@@ -1161,7 +1026,7 @@ namespace SoftSled.Components.VirtualChannel {
                             RegisterTransmitterServiceServiceIdBytes,
                             StubServiceHandleIter
                         );
-                        
+
                         // Encapsulate the Response (Doesn't seem to work without this?)
                         byte[] encapsulatedResponse = DSLRCommunication.Encapsulate(response);
 
@@ -1517,7 +1382,6 @@ namespace SoftSled.Components.VirtualChannel {
 
             // Increment Stub RequestHandle Iter
             StubRequestHandleIter++;
-
 
             // Send the OnMediaEvent Request
             VirtualChannelSend(this, new VirtualChannelSendArgs("avctrl", encapsulatedResponse));
