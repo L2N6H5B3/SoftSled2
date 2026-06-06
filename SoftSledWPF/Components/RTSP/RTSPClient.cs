@@ -1,6 +1,7 @@
 ﻿using Rtsp.Messages;
 using SoftSled.Components.AudioVisual;
 using SoftSled.Components.AudioVisual.FormatStructures;
+using SoftSled.Components.Communication;
 using SoftSledWPF.Components.Utility;
 using System;
 using System.Collections.Generic;
@@ -1849,286 +1850,15 @@ namespace SoftSled.Components.RTSP {
             // the Audio Channel or the Audio Control Channel (RTCP)
 
             if (data_received.Channel == video_rtcp_channel || data_received.Channel == audio_rtcp_channel) {
-                Debug.WriteLine("Received a RTCP message on channel " + data_received.Channel);
-
-                // RTCP Packet
-                // - Version, Padding and Receiver Report Count
-                // - Packet Type
-                // - Length
-                // - SSRC
-                // - payload
-
-                // There can be multiple RTCP packets transmitted together. Loop ever each one
-
-                long packetIndex = 0;
-                while (packetIndex < e.Message.Data.Length) {
-
-                    int rtcp_version = (e.Message.Data[packetIndex + 0] >> 6);
-                    int rtcp_padding = (e.Message.Data[packetIndex + 0] >> 5) & 0x01;
-                    int rtcp_reception_report_count = (e.Message.Data[packetIndex + 0] & 0x1F);
-                    byte rtcp_packet_type = e.Message.Data[packetIndex + 1]; // Values from 200 to 207
-                    uint rtcp_length = (uint)(e.Message.Data[packetIndex + 2] << 8) + (uint)(e.Message.Data[packetIndex + 3]); // number of 32 bit words
-                    uint rtcp_ssrc = (uint)(e.Message.Data[packetIndex + 4] << 24) + (uint)(e.Message.Data[packetIndex + 5] << 16)
-                        + (uint)(e.Message.Data[packetIndex + 6] << 8) + (uint)(e.Message.Data[packetIndex + 7]);
-
-                    // 200 = SR = Sender Report
-                    // 201 = RR = Receiver Report
-                    // 202 = SDES = Source Description
-                    // 203 = Bye = Goodbye
-                    // 204 = APP = Application Specific Method
-                    // 207 = XR = Extended Reports
-
-                    System.Diagnostics.Debug.WriteLine("RTCP Data. PacketType=" + rtcp_packet_type
-                                      + " SSRC=" + rtcp_ssrc);
-
-                    if (rtcp_packet_type == 200) {
-                        // SR (Sender Report). Carries the per-stream NTP↔RTP
-                        // anchor we need for absolute A/V timing.
-                        //
-                        //  off 4..7   sender SSRC
-                        //  off 8..15  NTP timestamp (64-bit fixed-point)
-                        //  off 16..19 RTP timestamp paired with above NTP
-
-                        UInt32 ntp_msw_seconds =
-                            (uint)(e.Message.Data[packetIndex + 8] << 24) |
-                            (uint)(e.Message.Data[packetIndex + 9] << 16) |
-                            (uint)(e.Message.Data[packetIndex + 10] << 8) |
-                            (uint)(e.Message.Data[packetIndex + 11]);
-                        UInt32 ntp_lsw_fractions =
-                            (uint)(e.Message.Data[packetIndex + 12] << 24) |
-                            (uint)(e.Message.Data[packetIndex + 13] << 16) |
-                            (uint)(e.Message.Data[packetIndex + 14] << 8) |
-                            (uint)(e.Message.Data[packetIndex + 15]);
-                        UInt32 rtp_timestamp_sr =
-                            (uint)(e.Message.Data[packetIndex + 16] << 24) |
-                            (uint)(e.Message.Data[packetIndex + 17] << 16) |
-                            (uint)(e.Message.Data[packetIndex + 18] << 8) |
-                            (uint)(e.Message.Data[packetIndex + 19]);
-
-                        ulong ntp_full = ((ulong)ntp_msw_seconds << 32) | ntp_lsw_fractions;
-
-                        // Plant the SR-derived anchor on the matching
-                        // per-stream clock (Layer 4e(iv)). The PTS monitor
-                        // (Layer 4f) reads this when committing each sample
-                        // to detect the MS-DMCT >200ms-behind / >2000ms-ahead
-                        // thresholds.
-                        ApplyRtcpSenderReport(rtcp_ssrc, ntp_full, rtp_timestamp_sr);
-
-                        // Periodic RR is already paced by StartRtcpReceiverReports
-                        // (~2 Hz timer in _rtcpTimer) for both UDP and TCP transports,
-                        // so we no longer ad-hoc send an extra RR per inbound SR.
-                    } else if (rtcp_packet_type == 203) {
-                        // BYE — RFC 3550 §6.6. Server is dropping the stream
-                        // for the SSRCs listed in the packet. Log and (for
-                        // a stream we depend on) surface as Disconnected
-                        // so AVCTRL can emit RTSP_DISCONNECT.
-                        bool dropsAudio = (rtcp_ssrc == _audioServerDataSsrc &&
-                                           _audioServerDataSsrc != 0);
-                        bool dropsVideo = (rtcp_ssrc == _videoServerDataSsrc &&
-                                           _videoServerDataSsrc != 0);
-                        if (dropsAudio || dropsVideo) {
-                            RaiseDisconnected(new System.IO.IOException(
-                                $"RTCP BYE for {(dropsAudio ? "audio" : "video")} stream " +
-                                $"ssrc=0x{rtcp_ssrc:X8}"));
-                        } else {
-                            Debug.WriteLine($"[rtcp] BYE for unrelated ssrc=0x{rtcp_ssrc:X8}");
-                        }
-                    }
-                    // PT 201 RR / 202 SDES / 204 APP / 207 XR — log-only.
-
-                    packetIndex = packetIndex + ((rtcp_length + 1) * 4);
-                }
-                return;
+                // Handle RTCP Data
+                Rtcp_HandleData(data_received, e);
             }
 
             if (data_received.Channel == video_data_channel || data_received.Channel == audio_data_channel) {
-                // Received some Video or Audio Data on the correct channel.
-
-                // RTP Packet Header
-                // 0 - Version, P, X, CC, M, PT and Sequence Number
-                //32 - Timestamp
-                //64 - SSRC
-                //96 - CSRCs (optional)
-                //nn - Extension ID and Length
-                //nn - Extension header
-
-                int rtp_version = (e.Message.Data[0] >> 6);
-                int rtp_padding = (e.Message.Data[0] >> 5) & 0x01;
-                int rtp_extension = (e.Message.Data[0] >> 4) & 0x01;
-                int rtp_csrc_count = (e.Message.Data[0] >> 0) & 0x0F;
-                int rtp_marker = (e.Message.Data[1] >> 7) & 0x01;
-                int rtp_payload_type = (e.Message.Data[1] >> 0) & 0x7F;
-                uint rtp_sequence_number = ((uint)e.Message.Data[2] << 8) + (uint)(e.Message.Data[3]);
-                uint rtp_timestamp = ((uint)e.Message.Data[4] << 24) + (uint)(e.Message.Data[5] << 16) + (uint)(e.Message.Data[6] << 8) + (uint)(e.Message.Data[7]);
-                uint rtp_ssrc = ((uint)e.Message.Data[8] << 24) + (uint)(e.Message.Data[9] << 16) + (uint)(e.Message.Data[10] << 8) + (uint)(e.Message.Data[11]);
-
-                int rtp_payload_start = 4 // V,P,M,SEQ
-                                    + 4 // time stamp
-                                    + 4 // ssrc
-                                    + (4 * rtp_csrc_count); // zero or more csrcs
-
-                uint rtp_extension_id = 0;
-                uint rtp_extension_size = 0;
-                if (rtp_extension == 1) {
-                    rtp_extension_id = ((uint)e.Message.Data[rtp_payload_start + 0] << 8) | (uint)e.Message.Data[rtp_payload_start + 1];
-                    // RFC 3550 §5.3.1: extension length is 16-bit big-endian and counted in 32-bit words.
-                    // Previous code had operator-precedence bug: `(hi<<8) + lo*4` instead of `((hi<<8)|lo)*4`.
-                    rtp_extension_size = (((uint)e.Message.Data[rtp_payload_start + 2] << 8) | (uint)e.Message.Data[rtp_payload_start + 3]) * 4u;
-                    rtp_payload_start += 4 + (int)rtp_extension_size;  // extension header and extension payload
-                }
-
-                //Debug.WriteLine("RTP Data"
-                //                   + " V=" + rtp_version
-                //                   + " P=" + rtp_padding
-                //                   + " X=" + rtp_extension
-                //                   + " CC=" + rtp_csrc_count
-                //                   + " M=" + rtp_marker
-                //                   + " PT=" + rtp_payload_type
-                //                   + " Seq=" + rtp_sequence_number
-                //                   + " Time (MS)=" + rtp_timestamp / 90 // convert from 90kHZ clock to ms
-                //                   + " SSRC=" + rtp_ssrc
-                //                   + " Size=" + e.Message.Data.Length);
-
-                //Debug.WriteLine("RTP Data"
-                //                       + " PT=" + rtp_payload_type
-                //                       + " Seq=" + rtp_sequence_number
-                //                       + " Timestamp=" + rtp_timestamp
-                //                       + " SSRC=" + rtp_ssrc);
-
-                // RFC 3550 §5.1: when the P bit is set, the LAST byte of the packet contains the
-                // padding count (including the count byte itself), and those bytes are NOT payload.
-                // Trim before handing to the depacketizer; otherwise stray bytes leak past BF1.
-                int rtp_payload_end = e.Message.Data.Length;
-                if (rtp_padding == 1) {
-                    int padCount = e.Message.Data[rtp_payload_end - 1];
-                    if (padCount > 0 && rtp_payload_end - padCount >= rtp_payload_start)
-                        rtp_payload_end -= padCount;
-                }
-                int rtp_payload_len = rtp_payload_end - rtp_payload_start;
-
-                // Handle Video with X-WMF-PF Payload
-                if (data_received.Channel == video_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
-                    CommitVideoPipelineForWireCodec("X-WMF-PF");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: false, (ushort)rtp_sequence_number);
-                    // Marker bit propagated for cross-checking F-field fragmentation completion
-                    // (WMRTP spec line 643).
-                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
-                                                          (ushort)rtp_sequence_number, rtp_timestamp,
-                                                          rtp_marker == 1);
-                    return;
-                }
-
-                // Handle Audio with X-WMF-PF Payload
-                if (data_received.Channel == audio_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
-                    CommitAudioPipelineForWireCodec("X-WMF-PF");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
-                                                          (ushort)rtp_sequence_number, rtp_timestamp,
-                                                          rtp_marker == 1);
-                    return;
-                }
-
-                // Handle Audio with VND.MS.WM-MPA Payload (WMRTP-wrapped MPEG
-                // audio — MPEG-1/2 Layer I/II/III, used by WMC recorded-TV
-                // MPEG-ES profiles like WMDRMND_MPEG_ES_NTSC_XAC3). The WMRTP
-                // wrapper is parsed by audioDepacketizer; the resulting MAU is
-                // a clean run of MPEG audio frame bytes (no RFC 2250 sub-
-                // header). The AudioDataReady handler picks the routing:
-                // PS muxer (if combined pipeline is up) > NAudio MP3 sink.
-                // Dispatch is therefore gated purely on the SDP codec match —
-                // NOT on the sink fields — so the PS pipeline gets to see
-                // audio MAUs even though _mpaAudioSink is intentionally null
-                // there.
-                if (data_received.Channel == audio_data_channel
-                    && wmfPayloadDataDict.ContainsKey(rtp_payload_type)
-                    && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec,
-                                     "VND.MS.WM-MPA", StringComparison.OrdinalIgnoreCase)) {
-                    CommitAudioPipelineForWireCodec("VND.MS.WM-MPA");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
-                                                          (ushort)rtp_sequence_number, rtp_timestamp,
-                                                          rtp_marker == 1);
-                    return;
-                }
-
-                // Handle Video with VND.MS.WM-MPV Payload (WMRTP-wrapped MPEG
-                // video — MPEG-1/2 ES, same recorded-TV profile). The
-                // resulting MAU is one MPEG video access unit (start-code
-                // prefixed). videoDepacketizer.NalUnitReady is hooked to push
-                // bytes into the MPEG-ES producer when one is set up.
-                if (data_received.Channel == video_data_channel
-                    && wmfPayloadDataDict.ContainsKey(rtp_payload_type)
-                    && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec,
-                                     "VND.MS.WM-MPV", StringComparison.OrdinalIgnoreCase)) {
-                    CommitVideoPipelineForWireCodec("VND.MS.WM-MPV");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: false, (ushort)rtp_sequence_number);
-                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
-                                                          (ushort)rtp_sequence_number, rtp_timestamp,
-                                                          rtp_marker == 1);
-                    return;
-                }
-
-                // Handle Audio with MPA (MPEG Audio over RTP, RFC 2250) Payload.
-                // WMPNss negotiates this for plain .mp3 source files — no
-                // WMRTP wrapper, 4-byte MBZ/Frag sub-header per packet.
-                // Strip the sub-header and push to whichever pipeline is
-                // active: FFME (preferred) or NAudio sink (legacy fallback).
-                if (data_received.Channel == audio_data_channel
-                    && wmfPayloadDataDict.ContainsKey(rtp_payload_type)
-                    && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec,
-                                     "MPA", StringComparison.OrdinalIgnoreCase)) {
-                    // Commit the wire codec on FIRST packet — without
-                    // this, TrySetupMp3FfmePipeline never runs, the
-                    // producer stays null, and every MAU below
-                    // silently drops. The matching X-WMF-PF /
-                    // VND.MS.WM-MPA branches all call this; the
-                    // original RFC 2250 branch was missing it (audio-
-                    // only MP3 sessions produced no audio as a result).
-                    CommitAudioPipelineForWireCodec("MPA");
-                    UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                    if (rtp_payload_len <= 4) return;
-                    // RFC 2250 §3.5: skip [16 bits MBZ][16 bits Frag_offset].
-                    int frameLen = rtp_payload_len - 4;
-                    byte[] frame = new byte[frameLen];
-                    Array.Copy(e.Message.Data, rtp_payload_start + 4, frame, 0, frameLen);
-
-                    // External-audio consumer (Phase 1 FFME-bypass).
-                    // When ExternalSyncMediaController is the active
-                    // controller it owns audio decoding + rendering
-                    // directly via libav + NAudio. We hand it the
-                    // raw MP3 frame; the muxer / FFME producers
-                    // below are skipped.
-                    if (_externalAudioMauArrived != null) {
-                        if (!_externalAudioCodecFired) {
-                            _externalAudioCodecFired = true;
-                            try { _externalAudioCodecCommit?.Invoke(BuildExternalAudioFormat("MPA")); } catch (Exception ex) {
-                                Debug.WriteLine($"[ext-audio] codecCommit threw: {ex.Message}");
-                            }
-                        }
-                        try { _externalAudioMauArrived(frame, rtp_timestamp); } catch (Exception ex) {
-                            Debug.WriteLine($"[ext-audio] mauArrived threw: {ex.Message}");
-                        }
-                        return;
-                    }
-
-                    // No external audio consumer attached — drop the frame.
-                    // Audio is always owned by the external controller, which
-                    // wires the consumer before PLAY.
-                    return;
-                } else {
-                    System.Diagnostics.Debug.WriteLine("No parser for RTP payload " + rtp_payload_type);
-                }
+                // Handle RTP Data
+                Rtp_HandleData(data_received, e);
             }
         }
-
 
         // RTP packet (or RTCP packet) has been received.
         public void Rtp_AudioDataReceived(object sender, Rtsp.RtspChunkEventArgs e) {
@@ -2149,268 +1879,273 @@ namespace SoftSled.Components.RTSP {
             // the Audio Channel or the Audio Control Channel (RTCP)
 
             if (data_received.Channel == video_rtcp_channel || data_received.Channel == audio_rtcp_channel) {
-                Debug.WriteLine("Received a RTCP message on channel " + data_received.Channel);
-
-                // RTCP Packet
-                // - Version, Padding and Receiver Report Count
-                // - Packet Type
-                // - Length
-                // - SSRC
-                // - payload
-
-                // There can be multiple RTCP packets transmitted together. Loop ever each one
-
-                long packetIndex = 0;
-                while (packetIndex < e.Message.Data.Length) {
-
-                    int rtcp_version = (e.Message.Data[packetIndex + 0] >> 6);
-                    int rtcp_padding = (e.Message.Data[packetIndex + 0] >> 5) & 0x01;
-                    int rtcp_reception_report_count = (e.Message.Data[packetIndex + 0] & 0x1F);
-                    byte rtcp_packet_type = e.Message.Data[packetIndex + 1]; // Values from 200 to 207
-                    uint rtcp_length = (uint)(e.Message.Data[packetIndex + 2] << 8) + (uint)(e.Message.Data[packetIndex + 3]); // number of 32 bit words
-                    uint rtcp_ssrc = (uint)(e.Message.Data[packetIndex + 4] << 24) + (uint)(e.Message.Data[packetIndex + 5] << 16)
-                        + (uint)(e.Message.Data[packetIndex + 6] << 8) + (uint)(e.Message.Data[packetIndex + 7]);
-
-                    // 200 = SR = Sender Report
-                    // 201 = RR = Receiver Report
-                    // 202 = SDES = Source Description
-                    // 203 = Bye = Goodbye
-                    // 204 = APP = Application Specific Method
-                    // 207 = XR = Extended Reports
-
-                    System.Diagnostics.Debug.WriteLine("RTCP Data. PacketType=" + rtcp_packet_type
-                                      + " SSRC=" + rtcp_ssrc);
-
-                    if (rtcp_packet_type == 200) {
-                        // SR (Sender Report). Carries the per-stream NTP↔RTP
-                        // anchor we need for absolute A/V timing.
-                        //
-                        //  off 4..7   sender SSRC
-                        //  off 8..15  NTP timestamp (64-bit fixed-point)
-                        //  off 16..19 RTP timestamp paired with above NTP
-
-                        UInt32 ntp_msw_seconds =
-                            (uint)(e.Message.Data[packetIndex + 8] << 24) |
-                            (uint)(e.Message.Data[packetIndex + 9] << 16) |
-                            (uint)(e.Message.Data[packetIndex + 10] << 8) |
-                            (uint)(e.Message.Data[packetIndex + 11]);
-                        UInt32 ntp_lsw_fractions =
-                            (uint)(e.Message.Data[packetIndex + 12] << 24) |
-                            (uint)(e.Message.Data[packetIndex + 13] << 16) |
-                            (uint)(e.Message.Data[packetIndex + 14] << 8) |
-                            (uint)(e.Message.Data[packetIndex + 15]);
-                        UInt32 rtp_timestamp_sr =
-                            (uint)(e.Message.Data[packetIndex + 16] << 24) |
-                            (uint)(e.Message.Data[packetIndex + 17] << 16) |
-                            (uint)(e.Message.Data[packetIndex + 18] << 8) |
-                            (uint)(e.Message.Data[packetIndex + 19]);
-
-                        ulong ntp_full = ((ulong)ntp_msw_seconds << 32) | ntp_lsw_fractions;
-
-                        // Plant the SR-derived anchor on the matching
-                        // per-stream clock (Layer 4e(iv)). The PTS monitor
-                        // (Layer 4f) reads this when committing each sample
-                        // to detect the MS-DMCT >200ms-behind / >2000ms-ahead
-                        // thresholds.
-                        ApplyRtcpSenderReport(rtcp_ssrc, ntp_full, rtp_timestamp_sr);
-
-                        // Periodic RR is already paced by StartRtcpReceiverReports
-                        // (~2 Hz timer in _rtcpTimer) for both UDP and TCP transports,
-                        // so we no longer ad-hoc send an extra RR per inbound SR.
-                    } else if (rtcp_packet_type == 203) {
-                        // BYE — RFC 3550 §6.6. Server is dropping the stream
-                        // for the SSRCs listed in the packet. Log and (for
-                        // a stream we depend on) surface as Disconnected
-                        // so AVCTRL can emit RTSP_DISCONNECT.
-                        bool dropsAudio = (rtcp_ssrc == _audioServerDataSsrc &&
-                                           _audioServerDataSsrc != 0);
-                        bool dropsVideo = (rtcp_ssrc == _videoServerDataSsrc &&
-                                           _videoServerDataSsrc != 0);
-                        if (dropsAudio || dropsVideo) {
-                            RaiseDisconnected(new System.IO.IOException(
-                                $"RTCP BYE for {(dropsAudio ? "audio" : "video")} stream " +
-                                $"ssrc=0x{rtcp_ssrc:X8}"));
-                        } else {
-                            Debug.WriteLine($"[rtcp] BYE for unrelated ssrc=0x{rtcp_ssrc:X8}");
-                        }
-                    }
-                    // PT 201 RR / 202 SDES / 204 APP / 207 XR — log-only.
-
-                    packetIndex = packetIndex + ((rtcp_length + 1) * 4);
-                }
-                return;
+                // Handle RTCP Data
+                Rtcp_HandleData(data_received, e);
             }
 
             if (data_received.Channel == video_data_channel || data_received.Channel == audio_data_channel) {
-                // Received some Video or Audio Data on the correct channel.
+                // Handle RTP Data
+                Rtp_HandleData(data_received, e);
+            }
+        }
 
-                // RTP Packet Header
-                // 0 - Version, P, X, CC, M, PT and Sequence Number
-                //32 - Timestamp
-                //64 - SSRC
-                //96 - CSRCs (optional)
-                //nn - Extension ID and Length
-                //nn - Extension header
+        private void Rtcp_HandleData(RtspData data_received, Rtsp.RtspChunkEventArgs e) {
+            Debug.WriteLine("Received a RTCP message on channel " + data_received.Channel);
 
-                int rtp_version = (e.Message.Data[0] >> 6);
-                int rtp_padding = (e.Message.Data[0] >> 5) & 0x01;
-                int rtp_extension = (e.Message.Data[0] >> 4) & 0x01;
-                int rtp_csrc_count = (e.Message.Data[0] >> 0) & 0x0F;
-                int rtp_marker = (e.Message.Data[1] >> 7) & 0x01;
-                int rtp_payload_type = (e.Message.Data[1] >> 0) & 0x7F;
-                uint rtp_sequence_number = ((uint)e.Message.Data[2] << 8) + (uint)(e.Message.Data[3]);
-                uint rtp_timestamp = ((uint)e.Message.Data[4] << 24) + (uint)(e.Message.Data[5] << 16) + (uint)(e.Message.Data[6] << 8) + (uint)(e.Message.Data[7]);
-                uint rtp_ssrc = ((uint)e.Message.Data[8] << 24) + (uint)(e.Message.Data[9] << 16) + (uint)(e.Message.Data[10] << 8) + (uint)(e.Message.Data[11]);
+            // RTCP Packet
+            // - Version, Padding and Receiver Report Count
+            // - Packet Type
+            // - Length
+            // - SSRC
+            // - payload
 
-                int rtp_payload_start = 4 // V,P,M,SEQ
-                                    + 4 // time stamp
-                                    + 4 // ssrc
-                                    + (4 * rtp_csrc_count); // zero or more csrcs
+            // There can be multiple RTCP packets transmitted together. Loop ever each one
 
-                uint rtp_extension_id = 0;
-                uint rtp_extension_size = 0;
-                if (rtp_extension == 1) {
-                    rtp_extension_id = ((uint)e.Message.Data[rtp_payload_start + 0] << 8) | (uint)e.Message.Data[rtp_payload_start + 1];
-                    // RFC 3550 §5.3.1: extension length is 16-bit big-endian and counted in 32-bit words.
-                    // Previous code had operator-precedence bug: `(hi<<8) + lo*4` instead of `((hi<<8)|lo)*4`.
-                    rtp_extension_size = (((uint)e.Message.Data[rtp_payload_start + 2] << 8) | (uint)e.Message.Data[rtp_payload_start + 3]) * 4u;
-                    rtp_payload_start += 4 + (int)rtp_extension_size;  // extension header and extension payload
-                }
+            long packetIndex = 0;
+            while (packetIndex < e.Message.Data.Length) {
 
-                //Debug.WriteLine("RTP Data"
-                //                   + " V=" + rtp_version
-                //                   + " P=" + rtp_padding
-                //                   + " X=" + rtp_extension
-                //                   + " CC=" + rtp_csrc_count
-                //                   + " M=" + rtp_marker
-                //                   + " PT=" + rtp_payload_type
-                //                   + " Seq=" + rtp_sequence_number
-                //                   + " Time (MS)=" + rtp_timestamp / 90 // convert from 90kHZ clock to ms
-                //                   + " SSRC=" + rtp_ssrc
-                //                   + " Size=" + e.Message.Data.Length);
+                int rtcp_version = (e.Message.Data[packetIndex + 0] >> 6);
+                int rtcp_padding = (e.Message.Data[packetIndex + 0] >> 5) & 0x01;
+                int rtcp_reception_report_count = (e.Message.Data[packetIndex + 0] & 0x1F);
+                byte rtcp_packet_type = e.Message.Data[packetIndex + 1]; // Values from 200 to 207
+                uint rtcp_length = (uint)(e.Message.Data[packetIndex + 2] << 8) + (uint)(e.Message.Data[packetIndex + 3]); // number of 32 bit words
+                uint rtcp_ssrc = (uint)(e.Message.Data[packetIndex + 4] << 24) + (uint)(e.Message.Data[packetIndex + 5] << 16)
+                    + (uint)(e.Message.Data[packetIndex + 6] << 8) + (uint)(e.Message.Data[packetIndex + 7]);
 
-                //Debug.WriteLine("RTP Data"
-                //                       + " PT=" + rtp_payload_type
-                //                       + " Seq=" + rtp_sequence_number
-                //                       + " Timestamp=" + rtp_timestamp
-                //                       + " SSRC=" + rtp_ssrc);
+                // 200 = SR = Sender Report
+                // 201 = RR = Receiver Report
+                // 202 = SDES = Source Description
+                // 203 = Bye = Goodbye
+                // 204 = APP = Application Specific Method
+                // 207 = XR = Extended Reports
 
-                // RFC 3550 §5.1: when the P bit is set, the LAST byte of the packet contains the
-                // padding count (including the count byte itself), and those bytes are NOT payload.
-                // Trim before handing to the depacketizer; otherwise stray bytes leak past BF1.
-                int rtp_payload_end = e.Message.Data.Length;
-                if (rtp_padding == 1) {
-                    int padCount = e.Message.Data[rtp_payload_end - 1];
-                    if (padCount > 0 && rtp_payload_end - padCount >= rtp_payload_start)
-                        rtp_payload_end -= padCount;
-                }
-                int rtp_payload_len = rtp_payload_end - rtp_payload_start;
+                System.Diagnostics.Debug.WriteLine("RTCP Data. PacketType=" + rtcp_packet_type
+                                  + " SSRC=" + rtcp_ssrc);
 
-                // Handle Video with X-WMF-PF Payload
-                if (data_received.Channel == video_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
-                    CommitVideoPipelineForWireCodec("X-WMF-PF");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: false, (ushort)rtp_sequence_number);
-                    // Marker bit propagated for cross-checking F-field fragmentation completion
-                    // (WMRTP spec line 643).
-                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
-                    return;
-                }
+                if (rtcp_packet_type == 200) {
+                    // SR (Sender Report). Carries the per-stream NTP↔RTP
+                    // anchor we need for absolute A/V timing.
+                    //
+                    //  off 4..7   sender SSRC
+                    //  off 8..15  NTP timestamp (64-bit fixed-point)
+                    //  off 16..19 RTP timestamp paired with above NTP
 
-                // Handle Audio with X-WMF-PF Payload
-                if (data_received.Channel == audio_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
-                    CommitAudioPipelineForWireCodec("X-WMF-PF");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
-                    return;
-                }
+                    UInt32 ntp_msw_seconds =
+                        (uint)(e.Message.Data[packetIndex + 8] << 24) |
+                        (uint)(e.Message.Data[packetIndex + 9] << 16) |
+                        (uint)(e.Message.Data[packetIndex + 10] << 8) |
+                        (uint)(e.Message.Data[packetIndex + 11]);
+                    UInt32 ntp_lsw_fractions =
+                        (uint)(e.Message.Data[packetIndex + 12] << 24) |
+                        (uint)(e.Message.Data[packetIndex + 13] << 16) |
+                        (uint)(e.Message.Data[packetIndex + 14] << 8) |
+                        (uint)(e.Message.Data[packetIndex + 15]);
+                    UInt32 rtp_timestamp_sr =
+                        (uint)(e.Message.Data[packetIndex + 16] << 24) |
+                        (uint)(e.Message.Data[packetIndex + 17] << 16) |
+                        (uint)(e.Message.Data[packetIndex + 18] << 8) |
+                        (uint)(e.Message.Data[packetIndex + 19]);
 
-                // Handle Audio with VND.MS.WM-MPA Payload (WMRTP-wrapped MPEG
-                // audio — MPEG-1/2 Layer I/II/III, used by WMC recorded-TV
-                // MPEG-ES profiles like WMDRMND_MPEG_ES_NTSC_XAC3). The WMRTP
-                // wrapper is parsed by audioDepacketizer; the resulting MAU is
-                // a clean run of MPEG audio frame bytes (no RFC 2250 sub-
-                // header). The AudioDataReady handler picks the routing:
-                // PS muxer (if combined pipeline is up) > NAudio MP3 sink.
-                // Dispatch is therefore gated purely on the SDP codec match —
-                // NOT on the sink fields — so the PS pipeline gets to see
-                // audio MAUs even though _mpaAudioSink is intentionally null
-                // there.
-                if (data_received.Channel == audio_data_channel && wmfPayloadDataDict.ContainsKey(rtp_payload_type) && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec, "VND.MS.WM-MPA", StringComparison.OrdinalIgnoreCase)) {
-                    CommitAudioPipelineForWireCodec("VND.MS.WM-MPA");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
-                    return;
-                }
+                    ulong ntp_full = ((ulong)ntp_msw_seconds << 32) | ntp_lsw_fractions;
 
-                // Handle Video with VND.MS.WM-MPV Payload (WMRTP-wrapped MPEG
-                // video — MPEG-1/2 ES, same recorded-TV profile). The
-                // resulting MAU is one MPEG video access unit (start-code
-                // prefixed). videoDepacketizer.NalUnitReady is hooked to push
-                // bytes into the MPEG-ES producer when one is set up.
-                if (data_received.Channel == video_data_channel && wmfPayloadDataDict.ContainsKey(rtp_payload_type) && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec, "VND.MS.WM-MPV", StringComparison.OrdinalIgnoreCase)) {
-                    CommitVideoPipelineForWireCodec("VND.MS.WM-MPV");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: false, (ushort)rtp_sequence_number);
-                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
-                    return;
-                }
+                    // Plant the SR-derived anchor on the matching
+                    // per-stream clock (Layer 4e(iv)). The PTS monitor
+                    // (Layer 4f) reads this when committing each sample
+                    // to detect the MS-DMCT >200ms-behind / >2000ms-ahead
+                    // thresholds.
+                    ApplyRtcpSenderReport(rtcp_ssrc, ntp_full, rtp_timestamp_sr);
 
-                // Handle Audio with MPA (MPEG Audio over RTP, RFC 2250) Payload.
-                // WMPNss negotiates this for plain .mp3 source files — no
-                // WMRTP wrapper, 4-byte MBZ/Frag sub-header per packet.
-                // Strip the sub-header and push to whichever pipeline is
-                // active: FFME (preferred) or NAudio sink (legacy fallback).
-                if (data_received.Channel == audio_data_channel && wmfPayloadDataDict.ContainsKey(rtp_payload_type) && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec, "MPA", StringComparison.OrdinalIgnoreCase)) {
-                    // Commit the wire codec on FIRST packet — without
-                    // this, TrySetupMp3FfmePipeline never runs, the
-                    // producer stays null, and every MAU below
-                    // silently drops. The matching X-WMF-PF /
-                    // VND.MS.WM-MPA branches all call this; the
-                    // original RFC 2250 branch was missing it (audio-
-                    // only MP3 sessions produced no audio as a result).
-                    CommitAudioPipelineForWireCodec("MPA");
-                    UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                    if (rtp_payload_len <= 4) return;
-                    // RFC 2250 §3.5: skip [16 bits MBZ][16 bits Frag_offset].
-                    int frameLen = rtp_payload_len - 4;
-                    byte[] frame = new byte[frameLen];
-                    Array.Copy(e.Message.Data, rtp_payload_start + 4, frame, 0, frameLen);
-
-                    // External-audio consumer (Phase 1 FFME-bypass).
-                    // When ExternalSyncMediaController is the active
-                    // controller it owns audio decoding + rendering
-                    // directly via libav + NAudio. We hand it the
-                    // raw MP3 frame; the muxer / FFME producers
-                    // below are skipped.
-                    if (_externalAudioMauArrived != null) {
-                        if (!_externalAudioCodecFired) {
-                            _externalAudioCodecFired = true;
-                            try { _externalAudioCodecCommit?.Invoke(BuildExternalAudioFormat("MPA")); } catch (Exception ex) {
-                                Debug.WriteLine($"[ext-audio] codecCommit threw: {ex.Message}");
-                            }
-                        }
-                        try { _externalAudioMauArrived(frame, rtp_timestamp); } catch (Exception ex) {
-                            Debug.WriteLine($"[ext-audio] mauArrived threw: {ex.Message}");
-                        }
-                        return;
+                    // Periodic RR is already paced by StartRtcpReceiverReports
+                    // (~2 Hz timer in _rtcpTimer) for both UDP and TCP transports,
+                    // so we no longer ad-hoc send an extra RR per inbound SR.
+                } else if (rtcp_packet_type == 203) {
+                    // BYE — RFC 3550 §6.6. Server is dropping the stream
+                    // for the SSRCs listed in the packet. Log and (for
+                    // a stream we depend on) surface as Disconnected
+                    // so AVCTRL can emit RTSP_DISCONNECT.
+                    bool dropsAudio = (rtcp_ssrc == _audioServerDataSsrc && _audioServerDataSsrc != 0);
+                    bool dropsVideo = (rtcp_ssrc == _videoServerDataSsrc && _videoServerDataSsrc != 0);
+                    if (dropsAudio || dropsVideo) {
+                        RaiseDisconnected(new System.IO.IOException( $"RTCP BYE for {(dropsAudio ? "audio" : "video")} stream ssrc=0x{rtcp_ssrc:X8}"));
+                    } else {
+                        Debug.WriteLine($"[rtcp] BYE for unrelated ssrc=0x{rtcp_ssrc:X8}");
                     }
+                }
+                // PT 201 RR / 202 SDES / 204 APP / 207 XR — log-only.
 
-                    // No external audio consumer attached — drop the frame.
-                    // Audio is always owned by the external controller, which
-                    // wires the consumer before PLAY.
+                packetIndex = packetIndex + ((rtcp_length + 1) * 4);
+            }
+            return;
+        }
+
+        private void Rtp_HandleData(RtspData data_received, Rtsp.RtspChunkEventArgs e) {
+
+            // RTP Packet Header
+            // 0 - Version, P, X, CC, M, PT and Sequence Number
+            //32 - Timestamp
+            //64 - SSRC
+            //96 - CSRCs (optional)
+            //nn - Extension ID and Length
+            //nn - Extension header
+
+            int rtp_version = (e.Message.Data[0] >> 6);
+            int rtp_padding = (e.Message.Data[0] >> 5) & 0x01;
+            int rtp_extension = (e.Message.Data[0] >> 4) & 0x01;
+            int rtp_csrc_count = (e.Message.Data[0] >> 0) & 0x0F;
+            int rtp_marker = (e.Message.Data[1] >> 7) & 0x01;
+            int rtp_payload_type = (e.Message.Data[1] >> 0) & 0x7F;
+            uint rtp_sequence_number = ((uint)e.Message.Data[2] << 8) + (uint)(e.Message.Data[3]);
+            uint rtp_timestamp = ((uint)e.Message.Data[4] << 24) + (uint)(e.Message.Data[5] << 16) + (uint)(e.Message.Data[6] << 8) + (uint)(e.Message.Data[7]);
+            uint rtp_ssrc = ((uint)e.Message.Data[8] << 24) + (uint)(e.Message.Data[9] << 16) + (uint)(e.Message.Data[10] << 8) + (uint)(e.Message.Data[11]);
+
+            int rtp_payload_start = 4 // V,P,M,SEQ
+                                + 4 // time stamp
+                                + 4 // ssrc
+                                + (4 * rtp_csrc_count); // zero or more csrcs
+
+            uint rtp_extension_id = 0;
+            uint rtp_extension_size = 0;
+            if (rtp_extension == 1) {
+                rtp_extension_id = ((uint)e.Message.Data[rtp_payload_start + 0] << 8) | (uint)e.Message.Data[rtp_payload_start + 1];
+                // RFC 3550 §5.3.1: extension length is 16-bit big-endian and counted in 32-bit words.
+                // Previous code had operator-precedence bug: `(hi<<8) + lo*4` instead of `((hi<<8)|lo)*4`.
+                rtp_extension_size = (((uint)e.Message.Data[rtp_payload_start + 2] << 8) | (uint)e.Message.Data[rtp_payload_start + 3]) * 4u;
+                rtp_payload_start += 4 + (int)rtp_extension_size;  // extension header and extension payload
+            }
+
+            //Debug.WriteLine("RTP Data"
+            //                   + " V=" + rtp_version
+            //                   + " P=" + rtp_padding
+            //                   + " X=" + rtp_extension
+            //                   + " CC=" + rtp_csrc_count
+            //                   + " M=" + rtp_marker
+            //                   + " PT=" + rtp_payload_type
+            //                   + " Seq=" + rtp_sequence_number
+            //                   + " Time (MS)=" + rtp_timestamp / 90 // convert from 90kHZ clock to ms
+            //                   + " SSRC=" + rtp_ssrc
+            //                   + " Size=" + e.Message.Data.Length);
+
+            //Debug.WriteLine("RTP Data"
+            //                       + " PT=" + rtp_payload_type
+            //                       + " Seq=" + rtp_sequence_number
+            //                       + " Timestamp=" + rtp_timestamp
+            //                       + " SSRC=" + rtp_ssrc);
+
+            // RFC 3550 §5.1: when the P bit is set, the LAST byte of the packet contains the
+            // padding count (including the count byte itself), and those bytes are NOT payload.
+            // Trim before handing to the depacketizer; otherwise stray bytes leak past BF1.
+            int rtp_payload_end = e.Message.Data.Length;
+            if (rtp_padding == 1) {
+                int padCount = e.Message.Data[rtp_payload_end - 1];
+                if (padCount > 0 && rtp_payload_end - padCount >= rtp_payload_start)
+                    rtp_payload_end -= padCount;
+            }
+            int rtp_payload_len = rtp_payload_end - rtp_payload_start;
+
+            // Handle Video with X-WMF-PF Payload
+            if (data_received.Channel == video_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
+                CommitVideoPipelineForWireCodec("X-WMF-PF");
+                byte[] rtp_payload = new byte[rtp_payload_len];
+                Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
+                UpdateRtcpSeqTracking(isAudio: false, (ushort)rtp_sequence_number);
+                // Marker bit propagated for cross-checking F-field fragmentation completion
+                // (WMRTP spec line 643).
+                videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
+                return;
+            }
+
+            // Handle Audio with X-WMF-PF Payload
+            if (data_received.Channel == audio_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
+                CommitAudioPipelineForWireCodec("X-WMF-PF");
+                byte[] rtp_payload = new byte[rtp_payload_len];
+                Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
+                UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
+                audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
+                return;
+            }
+
+            // Handle Audio with VND.MS.WM-MPA Payload (WMRTP-wrapped MPEG
+            // audio — MPEG-1/2 Layer I/II/III, used by WMC recorded-TV
+            // MPEG-ES profiles like WMDRMND_MPEG_ES_NTSC_XAC3). The WMRTP
+            // wrapper is parsed by audioDepacketizer; the resulting MAU is
+            // a clean run of MPEG audio frame bytes (no RFC 2250 sub-
+            // header). The AudioDataReady handler picks the routing:
+            // PS muxer (if combined pipeline is up) > NAudio MP3 sink.
+            // Dispatch is therefore gated purely on the SDP codec match —
+            // NOT on the sink fields — so the PS pipeline gets to see
+            // audio MAUs even though _mpaAudioSink is intentionally null
+            // there.
+            if (data_received.Channel == audio_data_channel && wmfPayloadDataDict.ContainsKey(rtp_payload_type) && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec, "VND.MS.WM-MPA", StringComparison.OrdinalIgnoreCase)) {
+                CommitAudioPipelineForWireCodec("VND.MS.WM-MPA");
+                byte[] rtp_payload = new byte[rtp_payload_len];
+                Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
+                UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
+                audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
+                return;
+            }
+
+            // Handle Video with VND.MS.WM-MPV Payload (WMRTP-wrapped MPEG
+            // video — MPEG-1/2 ES, same recorded-TV profile). The
+            // resulting MAU is one MPEG video access unit (start-code
+            // prefixed). videoDepacketizer.NalUnitReady is hooked to push
+            // bytes into the MPEG-ES producer when one is set up.
+            if (data_received.Channel == video_data_channel && wmfPayloadDataDict.ContainsKey(rtp_payload_type) && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec, "VND.MS.WM-MPV", StringComparison.OrdinalIgnoreCase)) {
+                CommitVideoPipelineForWireCodec("VND.MS.WM-MPV");
+                byte[] rtp_payload = new byte[rtp_payload_len];
+                Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
+                UpdateRtcpSeqTracking(isAudio: false, (ushort)rtp_sequence_number);
+                videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
+                return;
+            }
+
+            // Handle Audio with MPA (MPEG Audio over RTP, RFC 2250) Payload.
+            // WMPNss negotiates this for plain .mp3 source files — no
+            // WMRTP wrapper, 4-byte MBZ/Frag sub-header per packet.
+            // Strip the sub-header and push to whichever pipeline is
+            // active: FFME (preferred) or NAudio sink (legacy fallback).
+            if (data_received.Channel == audio_data_channel && wmfPayloadDataDict.ContainsKey(rtp_payload_type) && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec, "MPA", StringComparison.OrdinalIgnoreCase)) {
+                // Commit the wire codec on FIRST packet — without
+                // this, TrySetupMp3FfmePipeline never runs, the
+                // producer stays null, and every MAU below
+                // silently drops. The matching X-WMF-PF /
+                // VND.MS.WM-MPA branches all call this; the
+                // original RFC 2250 branch was missing it (audio-
+                // only MP3 sessions produced no audio as a result).
+                CommitAudioPipelineForWireCodec("MPA");
+                UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
+                if (rtp_payload_len <= 4) return;
+                // RFC 2250 §3.5: skip [16 bits MBZ][16 bits Frag_offset].
+                int frameLen = rtp_payload_len - 4;
+                byte[] frame = new byte[frameLen];
+                Array.Copy(e.Message.Data, rtp_payload_start + 4, frame, 0, frameLen);
+
+                // External-audio consumer (Phase 1 FFME-bypass).
+                // When ExternalSyncMediaController is the active
+                // controller it owns audio decoding + rendering
+                // directly via libav + NAudio. We hand it the
+                // raw MP3 frame; the muxer / FFME producers
+                // below are skipped.
+                if (_externalAudioMauArrived != null) {
+                    if (!_externalAudioCodecFired) {
+                        _externalAudioCodecFired = true;
+                        try { _externalAudioCodecCommit?.Invoke(BuildExternalAudioFormat("MPA")); } catch (Exception ex) {
+                            Debug.WriteLine($"[ext-audio] codecCommit threw: {ex.Message}");
+                        }
+                    }
+                    try { _externalAudioMauArrived(frame, rtp_timestamp); } catch (Exception ex) {
+                        Debug.WriteLine($"[ext-audio] mauArrived threw: {ex.Message}");
+                    }
                     return;
                 }
-                // No Parser for this Payload Type
-                else {
-                    System.Diagnostics.Debug.WriteLine("No parser for RTP payload " + rtp_payload_type);
-                }
+
+                // No external audio consumer attached — drop the frame.
+                // Audio is always owned by the external controller, which
+                // wires the consumer before PLAY.
+                return;
+            }
+            // No Parser for this Payload Type
+            else {
+                System.Diagnostics.Debug.WriteLine("No parser for RTP payload " + rtp_payload_type);
             }
         }
 
