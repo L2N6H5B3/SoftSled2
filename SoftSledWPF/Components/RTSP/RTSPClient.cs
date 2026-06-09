@@ -2229,8 +2229,7 @@ namespace SoftSled.Components.RTSP {
 
         #region RTSP Methods ##################################################
 
-        // RTSP Messages are OPTIONS, DESCRIBE, SETUP, PLAY etc
-        // Need to handle ANNOUNCE messages
+        // RTSP Messages are OPTIONS, DESCRIBE, SETUP, PLAY, ANNOUNCE, etc
         /// <summary>
         /// Handle a server-initiated RTSP request (server→client). RTSP allows
         /// either peer to send requests; WMPNss/McxDMS pushes session events
@@ -2355,8 +2354,6 @@ namespace SoftSled.Components.RTSP {
                 return;
             }
 
-            //System.Diagnostics.Debug.WriteLine("Received RTSP Message " + message.OriginalRequest.ToString());
-
             if (message.IsOk == false) {
                 System.Diagnostics.Debug.WriteLine("Got Error in RTSP Reply " + message.ReturnCode + " " + message.ReturnMessage);
                 RtspMessage resend_message = message.OriginalRequest.Clone() as RtspMessage;
@@ -2391,7 +2388,6 @@ namespace SoftSled.Components.RTSP {
                     describe_message.RtspUri = new Uri(url);
                     describe_message.AddHeader(AcceptHeader);
                     describe_message.AddHeader(LanguageHeader);
-                    //describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                     describe_message.AddHeader(SupportedHeader);
                     describe_message.AddHeader(UserAgent);
                     rtsp_client.SendMessage(describe_message);
@@ -2540,12 +2536,8 @@ namespace SoftSled.Components.RTSP {
                                 foreach (string fmtpFormatParameterSegment in fmtpFormatParameterSegments) {
                                     // Split the Format Parameter Segment into Element=Data
                                     string[] fmtpFormatParameterSegmentElementData = fmtpFormatParameterSegment.Split('=');
-                                    // If this is a WMA Codec-based File
-                                    if (wmfPayloadDataDict[fmtp.PayloadNumber].Codec != "WMA") {
-                                        
-                                    }
                                     // If this is Segment is a Config Element
-                                    else if (fmtpFormatParameterSegmentElementData[0] == "config") {
+                                    if (fmtpFormatParameterSegmentElementData[0] == "config") {
                                         // Two WMA config encodings exist in the wild:
                                         //   (a) legacy slash-delimited AM_MEDIA_TYPE
                                         //       ("major/.../waveformatex-hex") — parsed
@@ -2563,7 +2555,7 @@ namespace SoftSled.Components.RTSP {
                                             try {
                                                 wmfPayloadDataDict[fmtp.PayloadNumber].AM_Media_Format = new AM_Media_Format(cfg);
                                             } catch (Exception ex) {
-                                                Debug.WriteLine($"[sdp] WMA AM_Media_Format parse failed: {ex.Message}");
+                                                Debug.WriteLine($"[sdp] AM_Media_Format parse failed: {ex.Message}");
                                             }
                                         }
                                     }
