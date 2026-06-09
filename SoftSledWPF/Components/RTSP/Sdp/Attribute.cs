@@ -6,12 +6,12 @@ using System.Diagnostics.Contracts;
 
 namespace Rtsp.Sdp
 {
-    public class Attribut
+    public class Attribute
     {
         private static readonly Dictionary<string, Type> attributMap = new Dictionary<string, Type>()
         {
-            {AttributRtpMap.NAME,typeof(AttributRtpMap)},
-            {AttributFmtp.NAME,typeof(AttributFmtp)},
+            {AttributeRtpMap.NAME,typeof(AttributeRtpMap)},
+            {AttributeFmtp.NAME,typeof(AttributeFmtp)},
         };
 
 
@@ -20,7 +20,7 @@ namespace Rtsp.Sdp
 
         public static void RegisterNewAttributeType(string key, Type attributType)
         {
-            if(!attributType.IsSubclassOf(typeof(Attribut)))
+            if(!attributType.IsSubclassOf(typeof(Attribute)))
                 throw new ArgumentException("Type must be subclass of Rtsp.Sdp.Attribut","attributType");
 
             attributMap[key] = attributType;
@@ -28,17 +28,17 @@ namespace Rtsp.Sdp
 
         
 
-        public Attribut()
+        public Attribute()
         {
         }
 
-        public Attribut(string key)
+        public Attribute(string key)
         {
             Key = key;
         }
 
 
-        public static Attribut ParseInvariant(string value)
+        public static Attribute ParseInvariant(string value)
         {
             if(value == null)
                 throw new ArgumentNullException("value");
@@ -48,7 +48,7 @@ namespace Rtsp.Sdp
             var listValues = value.Split(new char[] {':'}, 2);
             
 
-            Attribut returnValue;
+            Attribute returnValue;
 
             // Call parser of child type
             Type childType;
@@ -56,11 +56,11 @@ namespace Rtsp.Sdp
             if (childType != null)
             {
                 var defaultContructor = childType.GetConstructor(Type.EmptyTypes);
-                returnValue = defaultContructor.Invoke(Type.EmptyTypes) as Attribut;
+                returnValue = defaultContructor.Invoke(Type.EmptyTypes) as Attribute;
             }
             else
             {
-                returnValue = new Attribut(listValues[0]);
+                returnValue = new Attribute(listValues[0]);
             }
             // Parse the value. Note most attributes have a value but recvonly does not have a value
             if (listValues.Count() > 1) returnValue.ParseValue(listValues[1]);

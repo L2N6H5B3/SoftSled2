@@ -1752,7 +1752,9 @@ namespace SoftSled.Components.RTSP {
         /// Returns 0 if no matching SDP entry is found.
         /// </summary>
         private uint ClockHzForWireCodec(MediaType type, string codec) {
+            // Return 0 if Codec not provided
             if (string.IsNullOrEmpty(codec)) return 0;
+            // Iterate over WMFPayloadData Dict
             foreach (var kv in wmfPayloadDataDict) {
                 var entry = kv.Value;
                 if (entry == null || entry.Type != type) continue;
@@ -2143,10 +2145,42 @@ namespace SoftSled.Components.RTSP {
                 // wires the consumer before PLAY.
                 return;
             }
-            // No Parser for this Payload Type
-            else {
-                System.Diagnostics.Debug.WriteLine("No parser for RTP payload " + rtp_payload_type);
+
+            // Handle Audio with WMA (WMA Audio over RTP, RFC 2250) Payload.
+            if (data_received.Channel == audio_data_channel && wmfPayloadDataDict.ContainsKey(rtp_payload_type) && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec, "WMA", StringComparison.OrdinalIgnoreCase)) {
+                // Commit the wire codec on FIRST packet — without
+                // this, TrySetupMp3FfmePipeline never runs, the
+                // producer stays null, and every MAU below
+                // silently drops. 
+                CommitAudioPipelineForWireCodec("WMA");
+                UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
+                if (rtp_payload_len <= 4) return;
+                // RFC 2250 §3.5: skip [16 bits MBZ][16 bits Frag_offset].
+                int frameLen = rtp_payload_len - 4;
+                byte[] frame = new byte[frameLen];
+                Array.Copy(e.Message.Data, rtp_payload_start + 4, frame, 0, frameLen);
+
+                if (_externalAudioMauArrived != null) {
+                    if (!_externalAudioCodecFired) {
+                        _externalAudioCodecFired = true;
+                        try { _externalAudioCodecCommit?.Invoke(BuildExternalAudioFormat("MPA")); } catch (Exception ex) {
+                            Debug.WriteLine($"[ext-audio] codecCommit threw: {ex.Message}");
+                        }
+                    }
+                    try { _externalAudioMauArrived(frame, rtp_timestamp); } catch (Exception ex) {
+                        Debug.WriteLine($"[ext-audio] mauArrived threw: {ex.Message}");
+                    }
+                    return;
+                }
+
+                // No external audio consumer attached — drop the frame.
+                // Audio is always owned by the external controller, which
+                // wires the consumer before PLAY.
+                return;
             }
+
+            // If we get here, there is no Parser for this Payload Type
+            System.Diagnostics.Debug.WriteLine("No parser for RTP payload " + rtp_payload_type);
         }
 
         #endregion ############################################################
@@ -2155,6 +2189,7 @@ namespace SoftSled.Components.RTSP {
         #region RTSP Methods ##################################################
 
         // RTSP Messages are OPTIONS, DESCRIBE, SETUP, PLAY etc
+        // Need to handle ANNOUNCE messages
         private void Rtsp_MessageReceived(object sender, Rtsp.RtspChunkEventArgs e) {
             RtspResponse message = e.Message as RtspResponse;
 
@@ -2215,9 +2250,7 @@ namespace SoftSled.Components.RTSP {
                     return;
                 }
 
-
-                // ADDED TEMPORARILY //
-
+                // If Keepalive Timer hasn't been configured
                 if (keepalive_timer == null) {
                     // Start a Timer to send an Keepalive RTSP command every 20 seconds
                     keepalive_timer = new System.Timers.Timer();
@@ -2226,22 +2259,14 @@ namespace SoftSled.Components.RTSP {
                     keepalive_timer.Enabled = true;
                 }
 
-                // END ADDED TEMPORARILY //
-
-
-
-
-                // Examine the SDP
-
-                //System.Diagnostics.Debug.WriteLine(System.Text.Encoding.UTF8.GetString(message.Data));
-
+                // Get the SDP Data
                 Rtsp.Sdp.SdpFile sdp_data;
                 String control = "";  // the "track" or "stream id"
                 using (StreamReader sdp_stream = new StreamReader(new MemoryStream(message.Data))) {
                     sdp_data = Rtsp.Sdp.SdpFile.Read(sdp_stream);
 
                     // Find the base RTSP Server URL
-                    foreach (Rtsp.Sdp.Attribut attrib in sdp_data.Attributs) {
+                    foreach (Rtsp.Sdp.Attribute attrib in sdp_data.Attributs) {
                         // If this is the Control attribute
                         if (attrib.Key.Equals("control")) {
                             string sdp_control = attrib.Value;
@@ -2267,7 +2292,7 @@ namespace SoftSled.Components.RTSP {
                         sdp_data = Rtsp.Sdp.SdpFile.Read(sdp_stream);
 
                         // Find the base RTSP Server URL
-                        foreach (Rtsp.Sdp.Attribut attrib in sdp_data.Attributs) {
+                        foreach (Rtsp.Sdp.Attribute attrib in sdp_data.Attributs) {
                             // If this is the Control attribute
                             if (attrib.Key.Equals("control")) {
                                 string sdp_control = attrib.Value;
@@ -2283,8 +2308,8 @@ namespace SoftSled.Components.RTSP {
                     bool audio = (sdp_data.Medias[x].MediaType == Rtsp.Sdp.Media.MediaTypes.audio);
                     bool video = (sdp_data.Medias[x].MediaType == Rtsp.Sdp.Media.MediaTypes.video);
 
-                    if (video && video_payload != -1) continue; // have already matched a video payload. don't match another
-                    if (audio && audio_payload != -1) continue; // have already matched an audio payload. don't match another
+                    if (video && video_payload != -1) continue; // have already matched video payload, don't match another
+                    if (audio && audio_payload != -1) continue; // have already matched audio payload, don't match another
 
                     if (audio && (client_wants_audio == false)) continue; // client does not want audio from the RTSP server
                     if (video && (client_wants_video == false)) continue; // client does not want video from the RTSP server
@@ -2296,8 +2321,8 @@ namespace SoftSled.Components.RTSP {
 
                         // search the attributes for control, rtpmap and fmtp
                         // (fmtp only applies to video)
-                        Rtsp.Sdp.AttributFmtp fmtp = null; // holds SPS and PPS in base64 (h264 video)
-                        foreach (Rtsp.Sdp.Attribut attrib in sdp_data.Medias[x].Attributs) {
+                        Rtsp.Sdp.AttributeFmtp fmtp = null;
+                        foreach (Rtsp.Sdp.Attribute attrib in sdp_data.Medias[x].Attributs) {
                             if (attrib.Key.Equals("control")) {
                                 String sdp_control = attrib.Value;
                                 if (sdp_control.ToLower().StartsWith("rtsp://")) {
@@ -2335,49 +2360,42 @@ namespace SoftSled.Components.RTSP {
                                 }
                             }
                             if (attrib.Key.Equals("fmtp")) {
-                                fmtp = attrib as Rtsp.Sdp.AttributFmtp;
+                                fmtp = attrib as Rtsp.Sdp.AttributeFmtp;
                                 if (wmfPayloadDataDict.ContainsKey(fmtp.PayloadNumber)) {
                                     // Set the Format Parameter in the Payload Data Dictionary
                                     wmfPayloadDataDict[fmtp.PayloadNumber].FormatParameter = fmtp.FormatParameter;
-                                    // Split the Format Parameter into Individual Segments
-                                    string[] fmtpFormatParameterSegments = fmtp.FormatParameter.Split(';');
-                                    // Iterate over all Format Parameter Segments
-                                    foreach (string fmtpFormatParameterSegment in fmtpFormatParameterSegments) {
-                                        // Split the Format Parameter Segment into Element=Data
-                                        string[] fmtpFormatParameterSegmentElementData = fmtpFormatParameterSegment.Split('=');
-                                        // If this is Segment is a Config Element
-                                        if (fmtpFormatParameterSegmentElementData[0] == "config") {
-                                            // Set the AM_MEDIA_FORMAT with this Segment Data
-                                            wmfPayloadDataDict[fmtp.PayloadNumber].AM_Media_Format = new AM_Media_Format(fmtpFormatParameterSegmentElementData[1]);
-                                        }
-
-                                    }
                                 } else {
+                                    // Add the Payload Data Dictionary with Format Parameter
                                     wmfPayloadDataDict.Add(fmtp.PayloadNumber, new WMFPayloadData {
                                         PayloadNumber = fmtp.PayloadNumber,
                                         FormatParameter = fmtp.FormatParameter
                                     });
-                                    // Split the Format Parameter into Individual Segments
-                                    string[] fmtpFormatParameterSegments = fmtp.FormatParameter.Split(';');
-                                    // Iterate over all Format Parameter Segments
-                                    foreach (string fmtpFormatParameterSegment in fmtpFormatParameterSegments) {
-                                        // Split the Format Parameter Segment into Element=Data
-                                        string[] fmtpFormatParameterSegmentElementData = fmtpFormatParameterSegment.Split('=');
-                                        // If this is Segment is a Config Element
-                                        if (fmtpFormatParameterSegmentElementData[0] == "config") {
-                                            // Set the AM_MEDIA_FORMAT with this Segment Data
-                                            wmfPayloadDataDict[fmtp.PayloadNumber].AM_Media_Format = new AM_Media_Format(fmtpFormatParameterSegmentElementData[1]);
-                                        }
+                                }
 
+                                // Split the Format Parameter into Individual Segments
+                                string[] fmtpFormatParameterSegments = fmtp.FormatParameter.Split(';');
+                                // Iterate over all Format Parameter Segments
+                                foreach (string fmtpFormatParameterSegment in fmtpFormatParameterSegments) {
+                                    // Split the Format Parameter Segment into Element=Data
+                                    string[] fmtpFormatParameterSegmentElementData = fmtpFormatParameterSegment.Split('=');
+                                    // If this is a WMA Codec-based File
+                                    if (wmfPayloadDataDict[fmtp.PayloadNumber].Codec != "WMA") {
+                                        
                                     }
+                                    // If this is Segment is a Config Element
+                                    else if (fmtpFormatParameterSegmentElementData[0] == "config") {
+                                        // Set the AM_MEDIA_FORMAT with this Segment Data
+                                        wmfPayloadDataDict[fmtp.PayloadNumber].AM_Media_Format = new AM_Media_Format(fmtpFormatParameterSegmentElementData[1]);
+                                    }
+
                                 }
                             }
                             if (attrib.Key.Equals("rtpmap")) {
-                                Rtsp.Sdp.AttributRtpMap rtpmap = attrib as Rtsp.Sdp.AttributRtpMap;
+                                Rtsp.Sdp.AttributeRtpMap rtpmap = attrib as Rtsp.Sdp.AttributeRtpMap;
 
                                 // Check if the Codec Used (EncodingName) is one we support
                                 string[] valid_video_codecs = { "H264", "H265", "VND.MS.WM-MPV", "X-WMF-PF" };
-                                string[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "VND.MS.WM-MPA", "VND.MS.WM-AC3", "X-WMF-PF" /* for aac */}; // Note some are "mpeg4-generic" lower case
+                                string[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "VND.MS.WM-MPA", "VND.MS.WM-AC3", "X-WMF-PF", "WMA" /* for aac */}; // Note some are "mpeg4-generic" lower case
 
                                 int rtpClockHz = 90000;
                                 if (!string.IsNullOrEmpty(rtpmap.ClockRate)

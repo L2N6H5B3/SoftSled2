@@ -5,13 +5,13 @@ using System.Text;
 
 namespace Rtsp.Sdp
 {
-    public class AttributFmtp : Attribut
+    public class AttributeFmtp : Attribute
     {
         public const string NAME = "fmtp";
 
         private Dictionary<String, String> parameters = new Dictionary<string, string>();
 
-        public AttributFmtp()
+        public AttributeFmtp()
         {
         }
 

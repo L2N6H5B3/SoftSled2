@@ -146,7 +146,7 @@ namespace Rtsp.Sdp
             //Attribute optional multiple
             while (value.Key == "a")
             {
-                returnValue.Attributs.Add(Attribut.ParseInvariant(value.Value));
+                returnValue.Attributs.Add(Attribute.ParseInvariant(value.Value));
                 value = GetKeyValue(sdpStream);
             }
 
@@ -203,7 +203,7 @@ namespace Rtsp.Sdp
             //Attribut optional multiple
             while (value.Key == "a")
             {
-                returnValue.Attributs.Add(Attribut.ParseInvariant(value.Value));
+                returnValue.Attributs.Add(Attribute.ParseInvariant(value.Value));
                 value = GetKeyValue(sdpStream);
             }
 
@@ -244,9 +244,9 @@ namespace Rtsp.Sdp
 
         public EncriptionKey EncriptionKey { get; set; }
 
-        private readonly List<Attribut> attributs = new List<Attribut>();
+        private readonly List<Attribute> attributs = new List<Attribute>();
 
-        public IList<Attribut> Attributs
+        public IList<Attribute> Attributs
         {
             get
             {

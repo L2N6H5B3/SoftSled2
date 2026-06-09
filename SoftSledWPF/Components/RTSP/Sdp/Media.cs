@@ -50,9 +50,9 @@ namespace Rtsp.Sdp
 
         public int PayloadType { get; set; }
 
-        private readonly List<Attribut> attributs = new List<Attribut>();
+        private readonly List<Attribute> attributs = new List<Attribute>();
 
-        public IList<Attribut> Attributs
+        public IList<Attribute> Attributs
         {
             get
             {

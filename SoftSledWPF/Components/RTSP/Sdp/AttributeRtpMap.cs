@@ -5,7 +5,7 @@ using System.Text;
 
 namespace Rtsp.Sdp
 {
-    public class AttributRtpMap : Attribut
+    public class AttributeRtpMap : Attribute
     {
         // Format
         //   rtpmap:<payload type> <encoding name>/<clock rate> [/<encoding parameters>] 
@@ -15,7 +15,7 @@ namespace Rtsp.Sdp
 
         public const string NAME = "rtpmap";
 
-        public AttributRtpMap()
+        public AttributeRtpMap()
         {
         }
 
