@@ -280,8 +280,8 @@
     <Compile Include="Components\RTSP\RTSPMessageEventArgs.cs" />
     <Compile Include="Components\RTSP\RTSPTCPTransport.cs" />
     <Compile Include="Components\RTSP\RTSPUtils.cs" />
-    <Compile Include="Components\RTSP\Sdp\Attribut.cs" />
-    <Compile Include="Components\RTSP\Sdp\AttributFmtp.cs" />
+    <Compile Include="Components\RTSP\Sdp\Attribute.cs" />
+    <Compile Include="Components\RTSP\Sdp\AttributeFmtp.cs" />
     <Compile Include="Components\RTSP\Sdp\AttributeRtpMap.cs" />
     <Compile Include="Components\RTSP\Sdp\Bandwidth.cs" />
     <Compile Include="Components\RTSP\Sdp\Connection.cs" />
