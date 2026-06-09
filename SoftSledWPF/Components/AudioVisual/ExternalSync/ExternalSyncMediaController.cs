@@ -131,6 +131,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 _rtsp.Disconnected      -= OnRtspDisconnected;
                 _rtsp.PtsError          -= OnRtspPtsError;
                 _rtsp.UnrecoverableSkew -= OnRtspUnrecoverableSkew;
+                _rtsp.EndOfStream       -= OnRtspEndOfStream;
                 _rtsp.CorrespondenceOffsetReady -= OnCorrespondenceOffset;
                 try { _rtsp.SetExternalAudioConsumer(null, null); } catch { }
                 try { _rtsp.SetExternalVideoConsumer(null, null); } catch { }
@@ -150,6 +151,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 _rtsp.Disconnected      += OnRtspDisconnected;
                 _rtsp.PtsError          += OnRtspPtsError;
                 _rtsp.UnrecoverableSkew += OnRtspUnrecoverableSkew;
+                _rtsp.EndOfStream       += OnRtspEndOfStream;
                 _rtsp.CorrespondenceOffsetReady += OnCorrespondenceOffset;
                 try {
                     _rtsp.SetExternalAudioConsumer(OnAudioCodecCommitted, OnAudioMau);
@@ -176,10 +178,11 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             }
             AVCodecID codecId;
             string wc = (fmt.WireCodec ?? "").ToUpperInvariant();
-            // x-wmf-pf audio uses a 1 kHz RTP wire clock; wm-MPA / AC-3 use
-            // 90 kHz. This must match the divisor used in OnAudioMau so the
-            // wire A/V offset is computed in real milliseconds.
-            _audioClockHz = (wc == "X-WMF-PF") ? 1000 : 90000;
+            // x-wmf-pf audio uses a 1 kHz RTP wire clock; WMA uses its rtpmap
+            // clock (wma/1000/2 → 1 kHz too); wm-MPA / AC-3 use 90 kHz. This
+            // must match the divisor used in OnAudioMau so the wire A/V offset
+            // is computed in real milliseconds.
+            _audioClockHz = (wc == "X-WMF-PF" || wc == "WMA") ? 1000 : 90000;
             switch (wc) {
                 case "MPA":
                 case "VND.MS.WM-MPA":
@@ -188,6 +191,13 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                     break;
                 case "VND.MS.WM-AC3":
                     codecId = AVCodecID.AV_CODEC_ID_AC3;
+                    break;
+                case "WMA":
+                    // Windows Media Audio. profile=1 / version=STD is the
+                    // standard WMA (WMAV2); the SDP config= blob carries the
+                    // codec-private extradata libav needs, and block_align /
+                    // bit_rate / sample_rate / channels come from the fmtp.
+                    codecId = AVCodecID.AV_CODEC_ID_WMAV2;
                     break;
                 case "X-WMF-PF":
                     switch (fmt.BitsPerSampleHint) {
@@ -216,11 +226,23 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             try {
                 int hintRate = 0, hintChannels = 0;
                 bool isPcm = wc == "X-WMF-PF";
+                bool isWma = wc == "WMA";
                 if (isPcm) {
                     hintRate = fmt.SampleRateHint > 0 ? fmt.SampleRateHint : 48000;
                     hintChannels = fmt.ChannelsHint > 0 ? fmt.ChannelsHint : 2;
                 }
-                _decoder = new LibAvAudioDecoder(codecId, _log, hintRate, hintChannels);
+                if (isWma) {
+                    // WMA cannot probe rate/channels from the bitstream alone —
+                    // they MUST be set on the codec context before open, along
+                    // with block_align + the config= extradata. Pull them from
+                    // the SDP fmtp (samplerate=44100, blocksize=5945, etc).
+                    hintRate = fmt.SampleRateHint > 0 ? fmt.SampleRateHint : 44100;
+                    hintChannels = fmt.ChannelsHint > 0 ? fmt.ChannelsHint : 2;
+                    _decoder = new LibAvAudioDecoder(codecId, _log, hintRate, hintChannels,
+                                                     fmt.BlockAlign, fmt.BitRate, fmt.ExtraData);
+                } else {
+                    _decoder = new LibAvAudioDecoder(codecId, _log, hintRate, hintChannels);
+                }
                 _decoder.OnFormatReady += OnDecoderFormatReady;
                 _decoder.OnPcm         += OnDecodedPcm;
                 _decoder.Start();
@@ -660,6 +682,13 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private void OnRtspDisconnected(Exception ex) { try { RtspDisconnected?.Invoke(ex); } catch { } }
         private void OnRtspPtsError(PtsErrorInfo info) { try { PtsError?.Invoke(info); } catch { } }
         private void OnRtspUnrecoverableSkew(SkewInfo info) { try { UnrecoverableSkew?.Invoke(info); } catch { } }
+        // Server pushed an RTSP ANNOUNCE end-of-stream event (DLNA 2000).
+        // Surface it as MediaEnded; the AVCTRL handler maps that to the
+        // MS-DMCT END_OF_MEDIA event so WMC tears down / advances.
+        private void OnRtspEndOfStream() {
+            _log?.LogInfo("[ext-sync] RTSP EndOfStream → MediaEnded");
+            try { MediaEnded?.Invoke(); } catch { }
+        }
 
         // ============================================================
         //  Teardown

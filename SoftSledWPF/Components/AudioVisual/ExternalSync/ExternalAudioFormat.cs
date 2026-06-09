@@ -47,8 +47,22 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// Ignored for non-PCM codecs.</summary>
         public bool PcmBigEndian { get; set; }
 
+        /// <summary>WMA codec-private config (the SDP fmtp <c>config=</c> hex
+        /// blob decoded to bytes) — required as libav extradata to open a WMA
+        /// decoder. Null for non-WMA codecs.</summary>
+        public byte[] ExtraData { get; set; }
+
+        /// <summary>WMA compressed block size (SDP fmtp <c>blocksize=</c>) →
+        /// decoder block_align. 0 if not WMA.</summary>
+        public int BlockAlign { get; set; }
+
+        /// <summary>Nominal bitrate (SDP fmtp <c>bitrate=</c>, bits/s) →
+        /// decoder bit_rate. 0 if not specified.</summary>
+        public int BitRate { get; set; }
+
         public override string ToString() =>
             $"{WireCodec}, layer={MpegLayer}, rate={SampleRateHint}Hz, ch={ChannelsHint}" +
-            (BitsPerSampleHint > 0 ? $", bps={BitsPerSampleHint}{(PcmBigEndian ? "BE" : "LE")}" : "");
+            (BitsPerSampleHint > 0 ? $", bps={BitsPerSampleHint}{(PcmBigEndian ? "BE" : "LE")}" : "") +
+            (BlockAlign > 0 ? $", blockAlign={BlockAlign}, bitRate={BitRate}, extra={(ExtraData?.Length ?? 0)}B" : "");
     }
 }

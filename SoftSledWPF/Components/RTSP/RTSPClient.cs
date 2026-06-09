@@ -155,6 +155,7 @@ namespace SoftSled.Components.RTSP {
         // Initialise Variables to hold Depacketizers
         WmrptVideoDepacketizer videoDepacketizer = null;
         WmrptAudioDepacketizer audioDepacketizer = null;
+        private bool _wmaFirstPayloadLogged;   // one-shot WMA payload dump (framing diagnostic)
 
         int rtp_count = 0; // used for statistics
         private int _vidRecvLoggedOnce;
@@ -477,6 +478,12 @@ namespace SoftSled.Components.RTSP {
                     else if (k == "samplerate" && int.TryParse(v, out int sr)) fmt.SampleRateHint = sr;
                     else if (k == "channels" && int.TryParse(v, out int ch)) fmt.ChannelsHint = ch;
                     else if (k == "bitspersample" && int.TryParse(v, out int bps)) fmt.BitsPerSampleHint = bps;
+                    // WMA fmtp: blocksize→block_align, bitrate→bit_rate,
+                    // config→codec extradata (hex). samplesize is the PCM
+                    // bits/sample of the SOURCE (not the wire) — informational.
+                    else if (k == "blocksize" && int.TryParse(v, out int ba)) fmt.BlockAlign = ba;
+                    else if (k == "bitrate" && int.TryParse(v, out int br)) fmt.BitRate = br;
+                    else if (k == "config") fmt.ExtraData = HexToBytes(v);
                     else if (k == "codec") {
                         // For PCM the codec hint usually carries
                         // endianness: pcm_s16be vs pcm_s16le.
@@ -520,11 +527,38 @@ namespace SoftSled.Components.RTSP {
                 // from the frame header anyway).
                 if (fmt.SampleRateHint == 0 && entry.ClockHz > 0) {
                     bool isXWmfPf = string.Equals(wireCodec, "X-WMF-PF", StringComparison.OrdinalIgnoreCase);
-                    if (!isXWmfPf) fmt.SampleRateHint = entry.ClockHz;
+                    bool isWma    = string.Equals(wireCodec, "WMA", StringComparison.OrdinalIgnoreCase);
+                    // WMA rtpmap clock is 1000 (a 1ms tick, NOT the audio rate),
+                    // same trap as X-WMF-PF — don't use ClockHz as the rate.
+                    if (!isXWmfPf && !isWma) fmt.SampleRateHint = entry.ClockHz;
+                }
+                // WMA channels come from the rtpmap "wma/1000/<ch>" encoding
+                // parameter (e.g. "2") when the fmtp didn't carry channels=.
+                if (fmt.ChannelsHint == 0
+                    && string.Equals(wireCodec, "WMA", StringComparison.OrdinalIgnoreCase)
+                    && int.TryParse((entry.EncodingParameters ?? "").Trim(), out int wch) && wch > 0) {
+                    fmt.ChannelsHint = wch;
                 }
                 break;
             }
             return fmt;
+        }
+
+        /// <summary>Decode an even-length hex string (e.g. the WMA fmtp
+        /// <c>config=</c> blob "008800000f00e55c0000") to bytes. Returns null
+        /// on malformed input.</summary>
+        private static byte[] HexToBytes(string hex) {
+            if (string.IsNullOrEmpty(hex)) return null;
+            hex = hex.Trim();
+            if ((hex.Length & 1) != 0) return null;
+            var b = new byte[hex.Length / 2];
+            for (int i = 0; i < b.Length; i++) {
+                if (!byte.TryParse(hex.Substring(i * 2, 2),
+                                   System.Globalization.NumberStyles.HexNumber,
+                                   System.Globalization.CultureInfo.InvariantCulture, out b[i]))
+                    return null;
+            }
+            return b;
         }
 
         #endregion ############################################################
@@ -1007,6 +1041,15 @@ namespace SoftSled.Components.RTSP {
         /// first-sample PTS skew exceeds 3500ms.</summary>
         public event Action<SkewInfo> UnrecoverableSkew;
 
+        /// <summary>Fires when the server pushes an RTSP ANNOUNCE carrying a
+        /// DLNA end-of-stream event (<c>Event-Type.dlna.org: 2000</c>), i.e.
+        /// the content reached its natural end. This is the WMC
+        /// <c>com.microsoft.wm.eosmsg</c> feature surfaced over RTSP. The
+        /// controller re-raises this as <c>MediaEnded</c>, which the AVCTRL
+        /// virtual-channel handler maps to the MS-DMCT END_OF_MEDIA event so
+        /// WMC tears the session down / advances the playlist.</summary>
+        public event Action EndOfStream;
+
         // --- internal helpers used by 4d-4g of the playback plan ------------
         internal void RaiseDisconnected(Exception ex) {
             try { Disconnected?.Invoke(ex); } catch (Exception subEx) {
@@ -1021,6 +1064,11 @@ namespace SoftSled.Components.RTSP {
         internal void RaiseUnrecoverableSkew(SkewInfo info) {
             try { UnrecoverableSkew?.Invoke(info); } catch (Exception subEx) {
                 Debug.WriteLine($"[rtsp] UnrecoverableSkew handler threw: {subEx.Message}");
+            }
+        }
+        internal void RaiseEndOfStream() {
+            try { EndOfStream?.Invoke(); } catch (Exception subEx) {
+                Debug.WriteLine($"[rtsp] EndOfStream handler threw: {subEx.Message}");
             }
         }
 
@@ -2146,36 +2194,29 @@ namespace SoftSled.Components.RTSP {
                 return;
             }
 
-            // Handle Audio with WMA (WMA Audio over RTP, RFC 2250) Payload.
+            // Handle Audio with WMA (Windows Media Audio). Same WMRTP payload
+            // framing (BF1/BF2/BF3) as the other WM codecs (X-WMF-PF,
+            // VND.MS.WM-MPA) — the audio depacketizer unwraps it to a WMA
+            // data-unit MAU, which the external controller decodes via libav
+            // (AV_CODEC_ID_WMAV2 + the SDP fmtp config= as extradata). The
+            // AudioDataReady handler fires the codec commit using _wireAudioCodec
+            // (= "WMA", set by CommitAudioPipelineForWireCodec just below), so it
+            // builds the correct WMA ExternalAudioFormat. DIAGNOSTIC: dump the
+            // first payload's bytes so we can verify this WMRTP-framing
+            // assumption against a real capture if decode fails (if it's NOT
+            // WMRTP-framed, the first byte won't look like a BF1 and the WMA
+            // decoder will error — the dump tells us the real framing).
             if (data_received.Channel == audio_data_channel && wmfPayloadDataDict.ContainsKey(rtp_payload_type) && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec, "WMA", StringComparison.OrdinalIgnoreCase)) {
-                // Commit the wire codec on FIRST packet — without
-                // this, TrySetupMp3FfmePipeline never runs, the
-                // producer stays null, and every MAU below
-                // silently drops. 
                 CommitAudioPipelineForWireCodec("WMA");
-                UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                if (rtp_payload_len <= 4) return;
-                // RFC 2250 §3.5: skip [16 bits MBZ][16 bits Frag_offset].
-                int frameLen = rtp_payload_len - 4;
-                byte[] frame = new byte[frameLen];
-                Array.Copy(e.Message.Data, rtp_payload_start + 4, frame, 0, frameLen);
-
-                if (_externalAudioMauArrived != null) {
-                    if (!_externalAudioCodecFired) {
-                        _externalAudioCodecFired = true;
-                        try { _externalAudioCodecCommit?.Invoke(BuildExternalAudioFormat("MPA")); } catch (Exception ex) {
-                            Debug.WriteLine($"[ext-audio] codecCommit threw: {ex.Message}");
-                        }
-                    }
-                    try { _externalAudioMauArrived(frame, rtp_timestamp); } catch (Exception ex) {
-                        Debug.WriteLine($"[ext-audio] mauArrived threw: {ex.Message}");
-                    }
-                    return;
+                byte[] rtp_payload = new byte[rtp_payload_len];
+                Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
+                if (!_wmaFirstPayloadLogged) {
+                    _wmaFirstPayloadLogged = true;
+                    RtcpDiagLog($"wma-first-payload len={rtp_payload_len} marker={rtp_marker} " +
+                                $"firstBytes={BitConverter.ToString(rtp_payload, 0, Math.Min(24, rtp_payload_len))}");
                 }
-
-                // No external audio consumer attached — drop the frame.
-                // Audio is always owned by the external controller, which
-                // wires the consumer before PLAY.
+                UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
+                audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
                 return;
             }
 
@@ -2190,8 +2231,129 @@ namespace SoftSled.Components.RTSP {
 
         // RTSP Messages are OPTIONS, DESCRIBE, SETUP, PLAY etc
         // Need to handle ANNOUNCE messages
+        /// <summary>
+        /// Handle a server-initiated RTSP request (server→client). RTSP allows
+        /// either peer to send requests; WMPNss/McxDMS pushes session events
+        /// this way. There are two end-of-stream conventions, both observed
+        /// from WMPNss servers and BOTH documented in the specs shipped under
+        /// Tools/Documents:
+        ///
+        ///   (a) DLNA variant — an <c>ANNOUNCE</c> with the
+        ///       <c>Event-Type.dlna.org</c> header. [MS-DLNHND] §4.2 shows the
+        ///       exact message: after the DMS sends the last RTP packet it
+        ///       ANNOUNCEs with <c>Event-Type.dlna.org: 2000</c> (= end of
+        ///       stream). The full numeric enumeration is owned by the external
+        ///       [DLNA] Networked Device Interoperability Guidelines (guideline
+        ///       7.4.261); 2000 is the only value Microsoft documents/sends.
+        ///
+        ///   (b) Native Windows Media variant — a server→client
+        ///       <c>SET_PARAMETER</c> with the <c>X-Notice</c> header
+        ///       ([MS-RTSP] §2.2.7.3 "EndOfStream"): <c>X-Notice: 2101
+        ///       "End-of-Stream Reached"</c>, Content-Type
+        ///       <c>application/x-wms-extension-cmd</c>, and a self-describing
+        ///       US-ASCII body — <c>EOF: true</c> plus optionally one of
+        ///       <c>AdministrativeDisconnection</c> / <c>End-Of-Playlist-Entry</c>
+        ///       / <c>RecedingEos</c>.
+        ///
+        /// Every server request MUST be acknowledged with a 200 OK echoing the
+        /// CSeq (+ Session) or the server stalls / retransmits. We then log the
+        /// event verbosely (the body is human-readable text — see HandleAnnounce)
+        /// and, for either EOS form, raise <see cref="EndOfStream"/>.
+        /// </summary>
+        private void HandleServerRequest(RtspRequest request) {
+            string method = request.Method ?? "(none)";
+            int cseq = request.CSeq;
+            Debug.WriteLine($"[rtsp] server request: {method} CSeq={cseq}");
+            CommitDiagLog($"SERVER-REQ {method} CSeq={cseq}");
+
+            // Acknowledge with 200 OK (CreateResponse copies CSeq + Session).
+            // Send it before acting on the event so the server isn't kept
+            // waiting on the round-trip.
+            try {
+                RtspResponse ack = request.CreateResponse();
+                rtsp_client.SendMessage(ack);
+            } catch (Exception ex) {
+                Debug.WriteLine($"[rtsp] failed to ACK server request {method}: {ex.Message}");
+                CommitDiagLog($"SERVER-REQ {method} ACK FAILED: {ex.Message}");
+            }
+
+            // ANNOUNCE (DLNA) and server-initiated SET_PARAMETER (native MS-RTSP
+            // EndOfStream) both carry events; route both through the same parser.
+            if (string.Equals(method, "ANNOUNCE", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(method, "SET_PARAMETER", StringComparison.OrdinalIgnoreCase)) {
+                HandleAnnounce(request);
+            }
+        }
+
+        /// <summary>
+        /// Interpret + log a server event request (ANNOUNCE or SET_PARAMETER).
+        /// Surfaces end-of-stream (either the DLNA <c>Event-Type.dlna.org: 2000</c>
+        /// header or the MS-RTSP <c>X-Notice: 2101</c> / <c>EOF: true</c> body)
+        /// as <see cref="EndOfStream"/> → controller MediaEnded → MS-DMCT
+        /// END_OF_MEDIA. The event body is US-ASCII and self-describing, so it is
+        /// logged verbatim as TEXT (this is how unknown event types are
+        /// identified). We do NOT tear down locally — WMC drives
+        /// teardown / playlist-advance off END_OF_MEDIA.
+        /// </summary>
+        private void HandleAnnounce(RtspRequest request) {
+            string method     = request.Method ?? "(none)";
+            string eventType  = request.Headers.TryGetValue("Event-Type.dlna.org", out string et) ? et?.Trim() : null;
+            string xNotice    = request.Headers.TryGetValue("X-Notice", out string xn) ? xn?.Trim() : null;
+            string rtpInfo    = request.Headers.TryGetValue("RTP-Info", out string ri) ? ri : "(none)";
+            string contentType= request.Headers.TryGetValue("Content-Type", out string ct) ? ct : "(none)";
+
+            // The x-wms-extension-cmd body is US-ASCII text per [MS-RTSP]
+            // §2.2.7.3 (e.g. "Session: …\r\nEOF: true\r\nEnd-Of-Playlist-Entry: true").
+            // Decode + log it so any event can be identified from the log.
+            int bodyLen = request.Data?.Length ?? 0;
+            string bodyText = bodyLen > 0
+                ? System.Text.Encoding.ASCII.GetString(request.Data).Replace("\r", "\\r").Replace("\n", "\\n")
+                : "";
+
+            string summary = $"{method} event-type={eventType ?? "(none)"} x-notice={xNotice ?? "(none)"} " +
+                             $"content-type={contentType} rtp-info=[{rtpInfo}] bodyLen={bodyLen}";
+            Debug.WriteLine($"[rtsp] {summary}");
+            CommitDiagLog(summary);
+            if (bodyLen > 0) CommitDiagLog($"{method} body(text): \"{bodyText}\"");
+
+            // End-of-stream detection across both conventions:
+            //   DLNA:     Event-Type.dlna.org: 2000
+            //   MS-RTSP:  X-Notice: 2101 ...   OR body contains "EOF: true"
+            bool dlnaEos    = eventType == "2000";
+            bool noticeEos  = xNotice != null && xNotice.StartsWith("2101");
+            bool bodyEos    = bodyLen > 0 &&
+                              System.Text.Encoding.ASCII.GetString(request.Data)
+                                  .IndexOf("EOF: true", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            if (dlnaEos || noticeEos || bodyEos) {
+                string why = dlnaEos ? "DLNA Event-Type 2000"
+                           : noticeEos ? "MS-RTSP X-Notice 2101"
+                           : "body EOF: true";
+                Debug.WriteLine($"[rtsp] {method} end-of-stream ({why}) → raising EndOfStream");
+                CommitDiagLog($"{method} → EndOfStream ({why})");
+                RaiseEndOfStream();
+            }
+        }
+
         private void Rtsp_MessageReceived(object sender, Rtsp.RtspChunkEventArgs e) {
+            // RTSP lets the SERVER push requests to the client, not just
+            // respond. WMPNss/McxDMS uses ANNOUNCE for that — most importantly
+            // to push the DLNA end-of-stream event. Server-initiated requests
+            // arrive here as RtspRequest (RtspRequestAnnounce etc.), NOT
+            // RtspResponse, so the "as RtspResponse" cast below would yield
+            // null and NRE on message.IsOk. Handle (and acknowledge) them
+            // first, then return.
+            if (e.Message is RtspRequest serverRequest) {
+                HandleServerRequest(serverRequest);
+                return;
+            }
+
             RtspResponse message = e.Message as RtspResponse;
+            if (message == null) {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[rtsp] ignoring unrecognised message: {e.Message?.GetType().Name ?? "(null)"}");
+                return;
+            }
 
             //System.Diagnostics.Debug.WriteLine("Received RTSP Message " + message.OriginalRequest.ToString());
 
@@ -2384,8 +2546,26 @@ namespace SoftSled.Components.RTSP {
                                     }
                                     // If this is Segment is a Config Element
                                     else if (fmtpFormatParameterSegmentElementData[0] == "config") {
-                                        // Set the AM_MEDIA_FORMAT with this Segment Data
-                                        wmfPayloadDataDict[fmtp.PayloadNumber].AM_Media_Format = new AM_Media_Format(fmtpFormatParameterSegmentElementData[1]);
+                                        // Two WMA config encodings exist in the wild:
+                                        //   (a) legacy slash-delimited AM_MEDIA_TYPE
+                                        //       ("major/.../waveformatex-hex") — parsed
+                                        //       into AM_Media_Format.
+                                        //   (b) plain codec-private hex blob, e.g.
+                                        //       "008800000f00e55c0000" — NOT slash
+                                        //       delimited; AM_Media_Format would throw
+                                        //       (formatSegments[1] out of range). This
+                                        //       case is handled later as libav extradata
+                                        //       via BuildExternalAudioFormat/HexToBytes,
+                                        //       so just skip AM_Media_Format here.
+                                        string cfg = fmtpFormatParameterSegmentElementData.Length > 1
+                                                     ? fmtpFormatParameterSegmentElementData[1] : "";
+                                        if (cfg.Contains("/")) {
+                                            try {
+                                                wmfPayloadDataDict[fmtp.PayloadNumber].AM_Media_Format = new AM_Media_Format(cfg);
+                                            } catch (Exception ex) {
+                                                Debug.WriteLine($"[sdp] WMA AM_Media_Format parse failed: {ex.Message}");
+                                            }
+                                        }
                                     }
 
                                 }

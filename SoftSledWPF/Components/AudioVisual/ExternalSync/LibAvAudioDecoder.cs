@@ -41,6 +41,13 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         // the values from the first frame's header.
         private readonly int _hintSampleRate;
         private readonly int _hintChannels;
+        // WMA (and other codecs that carry no in-band config) need these set
+        // BEFORE avcodec_open2: extradata is the codec-private config (from the
+        // SDP fmtp config= blob), block_align the compressed frame size, and
+        // bit_rate the nominal rate. 0/null = not a WMA-style codec.
+        private readonly int _blockAlign;
+        private readonly int _bitRate;
+        private readonly byte[] _extradata;
         private readonly BlockingCollection<QueuedPacket> _queue
             = new BlockingCollection<QueuedPacket>(boundedCapacity: 256);
 
@@ -71,11 +78,24 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             : this(codecId, log, hintSampleRate: 0, hintChannels: 0) { }
 
         public LibAvAudioDecoder(AVCodecID codecId, Logger log,
-                                 int hintSampleRate, int hintChannels) {
+                                 int hintSampleRate, int hintChannels)
+            : this(codecId, log, hintSampleRate, hintChannels,
+                   blockAlign: 0, bitRate: 0, extradata: null) { }
+
+        /// <summary>Full ctor for codecs that need pre-open config — notably
+        /// WMA, which requires extradata (the SDP fmtp <c>config=</c> blob),
+        /// block_align (compressed frame size) and sample_rate/channels set
+        /// before <c>avcodec_open2</c>.</summary>
+        public LibAvAudioDecoder(AVCodecID codecId, Logger log,
+                                 int hintSampleRate, int hintChannels,
+                                 int blockAlign, int bitRate, byte[] extradata) {
             _codecId = codecId;
             _log = log;
             _hintSampleRate = hintSampleRate;
             _hintChannels = hintChannels;
+            _blockAlign = blockAlign;
+            _bitRate = bitRate;
+            _extradata = extradata;
         }
 
         public void Start() {
@@ -102,6 +122,27 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             if (_hintChannels > 0) {
                 _ctx->channels = _hintChannels;
                 _ctx->channel_layout = (ulong)ffmpeg.av_get_default_channel_layout(_hintChannels);
+            }
+
+            // WMA: block_align (compressed frame size), bit_rate and the
+            // codec-private extradata MUST be set before open or the decoder
+            // can't initialise its frame layout. extradata must live in
+            // av_malloc'd memory (libav takes ownership / frees it) with
+            // AV_INPUT_BUFFER_PADDING_SIZE trailing zero bytes.
+            if (_blockAlign > 0) _ctx->block_align = _blockAlign;
+            if (_bitRate > 0) _ctx->bit_rate = _bitRate;
+            if (_extradata != null && _extradata.Length > 0) {
+                int extLen = _extradata.Length;
+                byte* buf = (byte*)ffmpeg.av_mallocz(
+                    (ulong)(extLen + ffmpeg.AV_INPUT_BUFFER_PADDING_SIZE));
+                if (buf != null) {
+                    System.Runtime.InteropServices.Marshal.Copy(_extradata, 0, (IntPtr)buf, extLen);
+                    _ctx->extradata = buf;
+                    _ctx->extradata_size = extLen;
+                    _log?.LogInfo($"[libav-audio] {_codecId}: extradata={extLen}B " +
+                                  $"blockAlign={_blockAlign} bitRate={_bitRate} " +
+                                  $"rate={_hintSampleRate} ch={_hintChannels}");
+                }
             }
 
             int ret = ffmpeg.avcodec_open2(_ctx, codec, null);
