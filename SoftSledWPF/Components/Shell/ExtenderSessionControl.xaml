@@ -34,9 +34,16 @@
                  GPU presenter (libav decode → D3D9Ex surface). The RDP layer
                  (rdpDisplay) composites over this with per-pixel alpha, same
                  as it did over the old FFME element. -->
+            <!-- Stretch defaults to Uniform (preserve source aspect) — the
+                 correct neutral state before WMC sends an explicit zoom mode
+                 over the fastpath channel. OnZoomModeChanged overrides it per
+                 WMC's selection (Normal→Uniform, StretchSides→Fill,
+                 StretchTopBottom→UniformToFill). The old "Fill" default
+                 distorted fullscreen video whenever WMC never sent a zoom
+                 message (the common case for default playback). -->
             <Image x:Name="VideoImage"
                    Canvas.Left="0" Canvas.Top="0"
-                   Stretch="Fill"
+                   Stretch="None"
                    Visibility="Collapsed"/>
         </Canvas>
 

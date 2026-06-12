@@ -40,6 +40,12 @@ namespace SoftSled.Components.AudioVisual {
         private readonly Logger _logger;
         private readonly Dispatcher _dispatcher;
         private readonly bool _pipRoutingEnabled;
+        // GDI-mode only: returns the on-screen rect (canvas coords) the RDP
+        // framebuffer actually occupies (Uniform letterbox-fit). The video
+        // plane is constrained to this so it never spills into the black bars
+        // / beyond the WMC desktop. Null return → framebuffer not ready yet,
+        // fall back to full canvas. Null provider → behave as before.
+        private readonly Func<Rect?> _gdiDisplayRectProvider;
 
         private int _currentSurfaceId = -1;
         private bool _subscribed;
@@ -56,7 +62,8 @@ namespace SoftSled.Components.AudioVisual {
                              FrameworkElement primary,
                              SplashController splashController,
                              Logger logger,
-                             bool pipRoutingEnabled = true) {
+                             bool pipRoutingEnabled = true,
+                             Func<Rect?> gdiDisplayRectProvider = null) {
             _mode    = mode;
             _canvas  = canvas ?? throw new ArgumentNullException(nameof(canvas));
             _primary = primary ?? throw new ArgumentNullException(nameof(primary));
@@ -64,6 +71,7 @@ namespace SoftSled.Components.AudioVisual {
             _logger  = logger;
             _dispatcher = canvas.Dispatcher;
             _pipRoutingEnabled = pipRoutingEnabled;
+            _gdiDisplayRectProvider = gdiDisplayRectProvider;
             if (!pipRoutingEnabled) {
                 _logger?.LogInfo("[surface-router] PiP routing DISABLED by config — video stays at the full surface rect.");
             }
@@ -263,6 +271,21 @@ namespace SoftSled.Components.AudioVisual {
                 _logger?.LogInfo("[surface-router] SizeToCanvas skipped — canvas has zero size (layout not run yet)");
                 return;
             }
+
+            // GDI mode: constrain the video plane to the RDP display's
+            // letterboxed rect (the rdpDisplay Image is Stretch="Uniform" over
+            // the same cell). Without this the plane fills the whole window and
+            // spills into the black bars beyond the WMC desktop area.
+            if (_mode == WMCRenderMode.GDI && _gdiDisplayRectProvider != null) {
+                var r = _gdiDisplayRectProvider();
+                if (r.HasValue && r.Value.Width > 0 && r.Value.Height > 0) {
+                    ApplyRect(r.Value);
+                    _logger?.LogDebug($"[surface-router] SizeToCanvas (GDI) → constrained to RDP display rect " +
+                                      $"({r.Value.X:F0},{r.Value.Y:F0} {r.Value.Width:F0}x{r.Value.Height:F0})");
+                    return;
+                }
+            }
+
             Canvas.SetLeft(_primary, 0);
             Canvas.SetTop(_primary, 0);
             _primary.Width  = _canvas.ActualWidth;

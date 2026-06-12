@@ -186,6 +186,56 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             }
         }
 
+        /// <summary>
+        /// Paint the presenter surface opaque black, discarding the last
+        /// decoded frame. Called when media closes so a stale frame doesn't
+        /// linger behind the WMC menu (the presenter is reused across media —
+        /// it isn't disposed until the whole session ends). Safe from any
+        /// thread; marshals to the UI thread. No-op if no surface exists yet
+        /// (nothing has been presented), or after Dispose.
+        /// </summary>
+        public void Blank() {
+            if (_disposed) return;
+            if (_dispatcher.CheckAccess()) DoBlank();
+            else {
+                try { _dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(DoBlank)); }
+                catch { /* dispatcher shutting down — nothing to blank */ }
+            }
+        }
+
+        private void DoBlank() {
+            if (_disposed || _surface == null) return;
+            try {
+                // Drop any pending/queued frame so a late DoPresent can't repaint
+                // the old image after we've blanked.
+                lock (_gate) { _frameDirty = false; _staging = null; _w = _h = _stride = 0; }
+
+                var dr = _surface.LockRectangle(LockFlags.None);
+                try {
+                    // A8R8G8B8 opaque black: B=G=R=0, A=0xFF. Alpha is the 4th
+                    // byte of each BGRA pixel. Build one row (full pitch) and
+                    // copy it to every scanline.
+                    int pitch = dr.Pitch;
+                    byte[] row = new byte[pitch];
+                    for (int i = 3; i < pitch; i += 4) row[i] = 0xFF;
+                    for (int y = 0; y < _surfaceH; y++) {
+                        Marshal.Copy(row, 0, IntPtr.Add(dr.DataPointer, y * pitch), pitch);
+                    }
+                } finally {
+                    _surface.UnlockRectangle();
+                }
+
+                if (Image.IsFrontBufferAvailable) {
+                    Image.Lock();
+                    try { Image.AddDirtyRect(new Int32Rect(0, 0, _surfaceW, _surfaceH)); }
+                    finally { Image.Unlock(); }
+                }
+                _log?.LogInfo("[d3dimg] surface blanked to black (media closed)");
+            } catch (Exception ex) {
+                _log?.LogError($"[d3dimg] blank failed: {ex.Message}");
+            }
+        }
+
         public void Dispose() {
             if (_disposed) return;
             _disposed = true;

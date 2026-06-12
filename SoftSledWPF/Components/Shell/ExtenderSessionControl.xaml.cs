@@ -79,6 +79,18 @@ namespace SoftSledWPF.Components.Shell {
         // the D3D9Ex device + D3DImage; it's bound to VideoImage.Source.
         private SoftSled.Components.AudioVisual.ExternalSync.ExternalSyncMediaController _extSyncController;
         private SoftSled.Components.AudioVisual.VideoFpsLab.D3DImagePresenter _videoPresenter;
+        // Render mode (GDI vs RUI), resolved once at session start. GDI mode
+        // letterboxes the RDP framebuffer (rdpDisplay, Stretch=Uniform) inside
+        // the window, so the video plane must be constrained to that same
+        // letterboxed rect rather than the full MediaCanvas.
+        private SoftSled.Components.Extender.WMCRenderMode _renderMode =
+            SoftSled.Components.Extender.WMCRenderMode.GDI;
+        // Current video zoom (WPF Stretch) requested by WMC's zoom mode. Held
+        // so it can be re-asserted whenever the video plane is (re)sized and
+        // applied to new media. Defaults to Uniform (preserve aspect) — the
+        // correct neutral state before WMC sends an explicit zoom mode.
+        private System.Windows.Media.Stretch _currentZoomStretch =
+            System.Windows.Media.Stretch.Uniform;
 
         private System.IO.StreamWriter _ffmeLogWriter;
         private System.Threading.Timer _ffmeLogFlushTimer;
@@ -536,6 +548,7 @@ namespace SoftSledWPF.Components.Shell {
             // VideoSurfaceRequested → SurfaceRouter.RouteVideoToSurface.
             var renderMode = m_capabilities?.GetRenderMode()
                              ?? SoftSled.Components.Extender.WMCRenderMode.GDI;
+            _renderMode = renderMode;
             // Read the PiP routing toggle here rather than carrying the
             // whole config through to SurfaceRouter — keeps the
             // SurfaceRouter API surface lean and lets the user disable
@@ -544,7 +557,8 @@ namespace SoftSledWPF.Components.Shell {
             var routerCfg = SoftSledConfigManager.ReadConfig();
             _surfaceRouter = new SoftSled.Components.AudioVisual.SurfaceRouter(
                 renderMode, MediaCanvas, VideoImage, _splashController, m_logger,
-                pipRoutingEnabled: routerCfg.EnableSplashPipRouting);
+                pipRoutingEnabled: routerCfg.EnableSplashPipRouting,
+                gdiDisplayRectProvider: ComputeGdiVideoRect);
             AvCtrlHandler.VideoSurfaceRequested += sid => _surfaceRouter.RouteVideoToSurface(sid);
             AvCtrlHandler.VideoPipelineClosed += () => _surfaceRouter.ReleaseSurface();
 
@@ -558,6 +572,15 @@ namespace SoftSledWPF.Components.Shell {
             }));
             AvCtrlHandler.VideoPipelineClosed += () =>
                 Dispatcher.BeginInvoke(new Action(() => { _lastOverlay = null; }));
+            // Blank the video plane to opaque black on media close so the last
+            // decoded frame doesn't linger behind the WMC menu (the controller
+            // is reused across media, so the D3DImage keeps its last backbuffer
+            // until the next media's frames overwrite it). The next OpenMedia's
+            // frames replace the black automatically.
+            AvCtrlHandler.VideoPipelineClosed += () =>
+                Dispatcher.BeginInvoke(new Action(() => {
+                    try { _videoPresenter?.Blank(); } catch { }
+                }));
 
             McxSessHandler.StatusChanged += McxSessHandler_StatusChanged;
 
@@ -654,7 +677,16 @@ namespace SoftSledWPF.Components.Shell {
         }
 
         private void MediaCanvas_SizeChanged(object sender, SizeChangedEventArgs sizeEv) {
-            if (_lastOverlay != null) ApplyOverlayMapping(_lastOverlay);
+            if (_lastOverlay != null) {
+                // WMC is actively driving the video position via fastpath
+                // overlay updates — re-map the last one into the new canvas.
+                ApplyOverlayMapping(_lastOverlay);
+            } else {
+                // No fastpath positioning yet — re-fit the video plane. In GDI
+                // mode this re-letterboxes it to the RDP display rect so it
+                // tracks the window resize without exceeding the RDP bounds.
+                SizeMediaToCanvasFill();
+            }
         }
 
         // ---- Connecting overlay ---------------------------------------
@@ -777,6 +809,7 @@ namespace SoftSledWPF.Components.Shell {
                     default:
                         stretch = System.Windows.Media.Stretch.Uniform; break;
                 }
+                _currentZoomStretch = stretch;
                 VideoImage.Stretch = stretch;
                 _avLogger?.LogInfo($"[zoom] WMC mode {mode} → VideoImage.Stretch={stretch}");
             }));
@@ -817,6 +850,9 @@ namespace SoftSledWPF.Components.Shell {
             Canvas.SetTop(VideoImage, wpfY);
             VideoImage.Width = wpfW;
             VideoImage.Height = wpfH;
+            // Re-assert the current zoom stretch — sizing the box must not
+            // silently leave the plane in a stale stretch state.
+            VideoImage.Stretch = _currentZoomStretch;
 
             // Promoted from Debug to Info (under _avLogger) so the user
             // can see — at a glance, without enabling raw fastpath log —
@@ -830,15 +866,74 @@ namespace SoftSledWPF.Components.Shell {
 
         private void SizeMediaToCanvasFill() {
             if (MediaCanvas == null) return;
+
+            // GDI mode: the RDP framebuffer (rdpDisplay, Stretch=Uniform) is
+            // letterboxed inside the window when the window aspect differs from
+            // the RDP session aspect. The video plane must be constrained to
+            // that same displayed rect, otherwise it spills into the black bars
+            // and beyond the WMC desktop area. Compute the Uniform-fit rect of
+            // the framebuffer within MediaCanvas and size the plane to it.
+            if (_renderMode == SoftSled.Components.Extender.WMCRenderMode.GDI) {
+                var r = ComputeGdiVideoRect();
+                if (r.HasValue) {
+                    ApplyVideoRect(r.Value);
+                    return;
+                }
+                // No framebuffer / canvas yet — fall through to full-canvas
+                // fill; the next MediaCanvas/FrameReady event re-runs this with
+                // the framebuffer available and constrains it properly.
+            }
+
             Canvas.SetLeft(VideoImage, 0);
             Canvas.SetTop(VideoImage, 0);
             VideoImage.Width = double.IsNaN(MediaCanvas.ActualWidth) ? 0 : MediaCanvas.ActualWidth;
             VideoImage.Height = double.IsNaN(MediaCanvas.ActualHeight) ? 0 : MediaCanvas.ActualHeight;
+            VideoImage.Stretch = _currentZoomStretch;
+        }
+
+        /// <summary>
+        /// Compute the on-screen rectangle (in MediaCanvas coordinates) that the
+        /// RDP framebuffer actually occupies — i.e. the Uniform letterbox-fit of
+        /// the framebuffer pixels inside MediaCanvas. This is the bound the GDI
+        /// video plane must not exceed (rdpDisplay uses Stretch="Uniform" over
+        /// the same Grid cell). Returns null if the framebuffer or canvas size
+        /// isn't known yet.
+        /// </summary>
+        private Rect? ComputeGdiVideoRect() {
+            var bmp = freeRdpClient?.Bitmap;
+            if (bmp == null || bmp.PixelWidth <= 0 || bmp.PixelHeight <= 0) return null;
+            if (MediaCanvas == null) return null;
+            double cellW = MediaCanvas.ActualWidth;
+            double cellH = MediaCanvas.ActualHeight;
+            if (cellW <= 0 || cellH <= 0) return null;
+
+            double scale = Math.Min(cellW / bmp.PixelWidth, cellH / bmp.PixelHeight);
+            double w = bmp.PixelWidth * scale;
+            double h = bmp.PixelHeight * scale;
+            return new Rect((cellW - w) / 2.0, (cellH - h) / 2.0, w, h);
+        }
+
+        /// <summary>Position + size VideoImage to a MediaCanvas-space rect and
+        /// re-assert the current zoom stretch.</summary>
+        private void ApplyVideoRect(Rect r) {
+            Canvas.SetLeft(VideoImage, r.X);
+            Canvas.SetTop(VideoImage, r.Y);
+            VideoImage.Width = r.Width;
+            VideoImage.Height = r.Height;
+            VideoImage.Stretch = _currentZoomStretch;
         }
 
         private void FreeRdpClient_FrameReady(object sender, EventArgs e) {
+            bool firstFrame = rdpDisplay.Source == null;
             rdpDisplay.Source = freeRdpClient.Bitmap;
             m_logger.LogInfo($"RDP framebuffer ready: {freeRdpClient.Bitmap.PixelWidth}x{freeRdpClient.Bitmap.PixelHeight}");
+            // The GDI video letterbox rect depends on the framebuffer size,
+            // which isn't known until the first frame. Re-fit once it arrives
+            // (only when WMC isn't already positioning via fastpath overlay).
+            if (firstFrame && _renderMode == SoftSled.Components.Extender.WMCRenderMode.GDI
+                && _lastOverlay == null) {
+                SizeMediaToCanvasFill();
+            }
         }
 
         void InitialiseLogger() {
