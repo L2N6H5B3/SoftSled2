@@ -47,16 +47,76 @@ namespace SoftSledWPF {
             var cfg = SoftSledConfigManager.ReadConfig();
             ApplyFullScreen(cfg.RunFullScreen);
 
-            ShowLanding();
+            // First launch: run the setup wizard before anything else. It
+            // replaces itself with the landing page on finish/skip.
+            if (!cfg.InitialSetupComplete) {
+                ShowFirstRunSetup(firstRun: true);
+                return;
+            }
 
-            // Auto-start path: if the user has both paired AND ticked the
-            // auto-start preference, jump straight into the live session.
-            // Done after ShowLanding so a failed auto-start naturally
-            // returns to a populated landing page.
+            ProceedToLandingWithAutoStart();
+        }
+
+        /// <summary>
+        /// Show the landing page and, when paired + auto-start is on, jump
+        /// straight into the live session. Done after ShowLanding so a failed
+        /// auto-start naturally returns to a populated landing page.
+        /// </summary>
+        private void ProceedToLandingWithAutoStart() {
+            ShowLanding();
+            var cfg = SoftSledConfigManager.ReadConfig();
             if (cfg.IsPaired && cfg.AutoStartWmcOnOpen) {
                 Dispatcher.BeginInvoke(new Action(StartExtenderSession),
                                         System.Windows.Threading.DispatcherPriority.Background);
             }
+        }
+
+        /// <summary>
+        /// Show the first-run setup wizard. <paramref name="firstRun"/> true =
+        /// launched at startup (replaces the stack, marks setup complete on
+        /// skip so it doesn't nag every launch); false = re-run from Settings
+        /// (pushed over the config page, pops back when done).
+        /// </summary>
+        private void ShowFirstRunSetup(bool firstRun) {
+            var wizard = new FirstRunSetupPage();
+            // Live full-screen preview while the wizard is open (transient,
+            // like F11). The final value is persisted on Finish below and
+            // reverted from config on Cancel.
+            wizard.FullScreenToggled += on => ApplyFullScreen(on);
+            wizard.Completed += (s, _) => {
+                // The wizard can change the full-screen preference — apply it now.
+                try { ApplyFullScreen(SoftSledConfigManager.ReadConfig().RunFullScreen); } catch { }
+                if (firstRun) {
+                    ProceedToLandingWithAutoStart();
+                } else {
+                    PopPage();
+                    (CurrentPage as ConfigPage)?.RefreshFromConfig();
+                }
+            };
+            wizard.Cancelled += (s, _) => {
+                // Undo any live full-screen preview — config wasn't written.
+                try { ApplyFullScreen(SoftSledConfigManager.ReadConfig().RunFullScreen); } catch { }
+                if (firstRun) {
+                    // Don't re-prompt on every launch — mark complete with
+                    // whatever defaults are in place. Re-runnable from Settings.
+                    MarkInitialSetupComplete();
+                    ProceedToLandingWithAutoStart();
+                } else {
+                    PopPage();
+                }
+            };
+            if (firstRun) ReplacePage(wizard);
+            else PushPage(wizard);
+        }
+
+        private void MarkInitialSetupComplete() {
+            try {
+                var cfg = SoftSledConfigManager.ReadConfig();
+                if (!cfg.InitialSetupComplete) {
+                    cfg.InitialSetupComplete = true;
+                    SoftSledConfigManager.WriteConfig(cfg);
+                }
+            } catch { /* best-effort — worst case the wizard shows again */ }
         }
 
         // ---- Fullscreen / windowed toggle -----------------------------
@@ -188,6 +248,10 @@ namespace SoftSledWPF {
         }
 
         private bool HandleBack() {
+            if (CurrentPage is FirstRunSetupPage wizard) {
+                // Wizard handles its own back (step back, or cancel on step 1).
+                return wizard.HandleBack();
+            }
             if (CurrentPage is ConfigPage cfg) {
                 // ConfigPage decides whether the back pops a sub-view or
                 // raises CloseRequested so the shell pops the page.
@@ -272,6 +336,7 @@ namespace SoftSledWPF {
             cfgPage.CloseRequested        += (s, _) => PopPage();
             cfgPage.ConfigChanged         += (s, _) => { /* future hook */ };
             cfgPage.RunFullScreenChanged  += (s, full) => ApplyFullScreen(full);
+            cfgPage.SetupRequested        += (s, _) => ShowFirstRunSetup(firstRun: false);
             PushPage(cfgPage);
         }
 

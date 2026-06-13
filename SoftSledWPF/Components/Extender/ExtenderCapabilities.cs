@@ -135,7 +135,7 @@ namespace SoftSled.Components.Extender {
             Capabilities.Add(new DeviceCapability("SOU", "Is UI sound supported?", "UI", config.EnableUiSounds));
             Capabilities.Add(new DeviceCapability("TBA", "Is a Toolbar allowed?", "UI", config.EnableToolbar));
             Capabilities.Add(new DeviceCapability("TBP", "Is Toolbar persistent?", "UI", false));
-            Capabilities.Add(new DeviceCapability("TVS", "Is a TV skin used?", "UI", false));
+            Capabilities.Add(new DeviceCapability("TVS", "Is a TV skin used?", "UI", config.UseTvSkin));
 
 
             #endregion ########################################################
@@ -161,8 +161,6 @@ namespace SoftSled.Components.Extender {
             Capabilities.Add(new DeviceCapability("SUP", "Is RDP super blt allowed?", "Rendering", true));
             Capabilities.Add(new DeviceCapability("GDI", "Is GDI renderer used?", "Rendering", !config.EnableRemoteRendering));
             Capabilities.Add(new DeviceCapability("RUI", "Is remote UI rendering supported?", "Rendering", config.EnableRemoteRendering));
-            //Capabilities.Add(new DeviceCapability("BIG", "Is remote UI renderer big-endian?", "Rendering", false));
-            // BIG NOTE: WMC seems to revert to a middle (non-GDI but not quite RUI) mode. May need to be enabled to receive data over 'splash' VC, but may break fastpath [0x0d] video playback movement updates too
             Capabilities.Add(new DeviceCapability("BIG", "Is remote UI renderer big-endian?", "Rendering", config.EnableRemoteRendering));
 
             #endregion ########################################################

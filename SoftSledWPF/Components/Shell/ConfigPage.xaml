@@ -37,7 +37,8 @@
                          VerticalAlignment="Top"
                          KeyDown="RootMenu_KeyDown"
                          MouseLeftButtonUp="RootMenu_MouseLeftButtonUp">
-                    <ListBoxItem x:Name="ItemGeneral"   Content="General"  IsSelected="True"/>
+                    <ListBoxItem x:Name="ItemSetup"     Content="First-Time Setup" IsSelected="True"/>
+                    <ListBoxItem x:Name="ItemGeneral"   Content="General"/>
                     <ListBoxItem x:Name="ItemPairing"   Content="Pairing"/>
                     <ListBoxItem x:Name="ItemVideo"     Content="Video"/>
                     <ListBoxItem x:Name="ItemAudio"     Content="Audio"/>
@@ -271,21 +272,6 @@
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Include A/V (FFME / sync) logs"
                               Click="OnConfigChanged"/>
-
-                    <!-- Heuristic PiP routing toggle. Disabled when WMC's
-                         chrome false-positives on the bottom-left 16:9
-                         filter (e.g. some Home-screen carousels match
-                         the same shape signature). -->
-                    <CheckBox x:Name="ChkEnableSplashPipRouting"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Auto-shrink video to splash PiP placeholder (heuristic)"
-                              Margin="0,16,0,0"
-                              Click="OnConfigChanged"/>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="10,4,0,8"
-                               TextWrapping="Wrap"
-                               Text="WMC's wire protocol doesn't actually tell us where to draw the video plane (Xbox uses a hardware overlay we can't replicate). When ON, the splash controller sniffs for a 16:9 gradient-only Visual in the bottom-left quadrant and routes the video element there. Turn OFF if the video shrinks on screens that don't actually have a PiP."/>
 
                     <!-- File logging — survives a crash so release-build
                          hangs on remote machines can still be diagnosed. -->

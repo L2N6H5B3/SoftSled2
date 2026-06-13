@@ -35,6 +35,14 @@ namespace SoftSledWPF.Components.Shell {
         /// the shell can re-apply window state without waiting for restart.</summary>
         public event EventHandler<bool> RunFullScreenChanged;
 
+        /// <summary>Raised when the user picks the "Setup" item — the shell
+        /// shows the first-run setup wizard over this page.</summary>
+        public event EventHandler SetupRequested;
+
+        /// <summary>Re-read config into the UI. Called by the shell after the
+        /// setup wizard returns so any changes it made are reflected here.</summary>
+        public void RefreshFromConfig() => ReloadConfigIntoUi();
+
         /// <summary>One row in the resolution picker.</summary>
         private struct Resolution {
             public int Width, Height;
@@ -123,7 +131,6 @@ namespace SoftSledWPF.Components.Shell {
                 ChkLogAvCtrl.IsChecked         = _config.LogAvCtrlChannel;
                 ChkLogRdpFastpath.IsChecked    = _config.LogRdpFastpath;
                 ChkLogAvPlayback.IsChecked     = _config.LogAvPlayback;
-                ChkEnableSplashPipRouting.IsChecked = _config.EnableSplashPipRouting;
                 ChkLogToFile.IsChecked         = _config.LogToFile;
                 LogFolderPath.Text             = SoftSledWPF.Components.Shell
                                                           .ExtenderSessionControl
@@ -223,7 +230,8 @@ namespace SoftSledWPF.Components.Shell {
         }
 
         private void ActivateRoot(ListBoxItem item) {
-            if (item == ItemGeneral)         ShowView(View.General);
+            if (item == ItemSetup)           SetupRequested?.Invoke(this, EventArgs.Empty);
+            else if (item == ItemGeneral)    ShowView(View.General);
             else if (item == ItemPairing)    ShowView(View.Pairing);
             else if (item == ItemVideo)      ShowView(View.Video);
             else if (item == ItemAudio)      ShowView(View.Audio);
@@ -257,7 +265,6 @@ namespace SoftSledWPF.Components.Shell {
             _config.LogAvCtrlChannel        = ChkLogAvCtrl.IsChecked == true;
             _config.LogRdpFastpath          = ChkLogRdpFastpath.IsChecked == true;
             _config.LogAvPlayback           = ChkLogAvPlayback.IsChecked == true;
-            _config.EnableSplashPipRouting  = ChkEnableSplashPipRouting.IsChecked == true;
             _config.LogToFile               = ChkLogToFile.IsChecked == true;
             _config.EnableSplashRawDump     = ChkDumpSplashRaw.IsChecked == true;
             _config.EnableFastpathRawDump   = ChkDumpFastpathRaw.IsChecked == true;

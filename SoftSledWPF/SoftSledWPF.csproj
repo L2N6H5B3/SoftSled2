@@ -194,6 +194,10 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
+    <Page Include="Components\Shell\FirstRunSetupPage.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
     <Page Include="Components\Shell\PairingPage.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
@@ -325,6 +329,11 @@
       <DependentUpon>ConfigPage.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="Components\Shell\FirstRunSetupPage.xaml.cs">
+      <DependentUpon>FirstRunSetupPage.xaml</DependentUpon>
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="Components\Configuration\ScreenResolution.cs" />
     <Compile Include="Components\Shell\PairingPage.xaml.cs">
       <DependentUpon>PairingPage.xaml</DependentUpon>
       <SubType>Code</SubType>

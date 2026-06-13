@@ -549,18 +549,22 @@ namespace SoftSledWPF.Components.Shell {
             var renderMode = m_capabilities?.GetRenderMode()
                              ?? SoftSled.Components.Extender.WMCRenderMode.GDI;
             _renderMode = renderMode;
-            // Read the PiP routing toggle here rather than carrying the
-            // whole config through to SurfaceRouter — keeps the
-            // SurfaceRouter API surface lean and lets the user disable
-            // the heuristic without touching the router itself when
-            // it false-positives at their resolution.
-            var routerCfg = SoftSledConfigManager.ReadConfig();
             _surfaceRouter = new SoftSled.Components.AudioVisual.SurfaceRouter(
                 renderMode, MediaCanvas, VideoImage, _splashController, m_logger,
-                pipRoutingEnabled: routerCfg.EnableSplashPipRouting,
                 gdiDisplayRectProvider: ComputeGdiVideoRect);
             AvCtrlHandler.VideoSurfaceRequested += sid => _surfaceRouter.RouteVideoToSurface(sid);
             AvCtrlHandler.VideoPipelineClosed += () => _surfaceRouter.ReleaseSurface();
+            // PiP z-order: the video plane normally sits BELOW the splash UI so
+            // fullscreen chrome (seek bar) overlays it. For a PiP sub-rect WMC
+            // paints an opaque placeholder in the splash layer that would cover
+            // the video, so raise the plane ABOVE the UI for PiP only. VideoImage
+            // is clipped to its rect (MediaCanvas ClipToBounds=True), so only the
+            // small PiP box is over the UI — the rest stays untouched.
+            _surfaceRouter.VideoAboveUiChanged += OnVideoAboveUiChanged;
+            // The video plane never needs hit-testing — input goes to
+            // MouseInputLayer. Disable it so a raised PiP box can't swallow
+            // mouse events meant for the UI beneath it.
+            MediaCanvas.IsHitTestVisible = false;
 
             // Video now flows through the controller's libav decoder +
             // D3DImage presenter (via RTSPClient.SetExternalVideoConsumer), so
@@ -791,6 +795,21 @@ namespace SoftSledWPF.Components.Shell {
                 _lastOverlay = region;
                 ApplyOverlayMapping(region);
             }));
+        }
+
+        // Swap the video plane's z-order relative to the splash UI. PiP →
+        // above (so WMC's placeholder gradient doesn't cover the video);
+        // fullscreen → below (so the UI overlays the video as normal).
+        // MediaCanvas defaults to ZIndex 0 (below splashHost via document
+        // order); raising it to 1 puts it above. Clipping keeps it to the
+        // PiP rect.
+        private void OnVideoAboveUiChanged(bool above) {
+            if (!Dispatcher.CheckAccess()) {
+                Dispatcher.BeginInvoke(new Action(() => OnVideoAboveUiChanged(above)));
+                return;
+            }
+            System.Windows.Controls.Panel.SetZIndex(MediaCanvas, above ? 1 : 0);
+            _avLogger?.LogInfo($"[video] PiP z-order: video plane {(above ? "ABOVE" : "below")} the UI");
         }
 
         private void OnZoomModeChanged(object sender,

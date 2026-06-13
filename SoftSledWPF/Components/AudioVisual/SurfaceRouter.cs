@@ -39,7 +39,6 @@ namespace SoftSled.Components.AudioVisual {
         private readonly SplashController _splash;    // may be null in GDI mode
         private readonly Logger _logger;
         private readonly Dispatcher _dispatcher;
-        private readonly bool _pipRoutingEnabled;
         // GDI-mode only: returns the on-screen rect (canvas coords) the RDP
         // framebuffer actually occupies (Uniform letterbox-fit). The video
         // plane is constrained to this so it never spills into the black bars
@@ -49,6 +48,21 @@ namespace SoftSled.Components.AudioVisual {
 
         private int _currentSurfaceId = -1;
         private bool _subscribed;
+        // Raised when the video should sit ABOVE the UI (true) vs below it
+        // (false). The video plane normally composites BELOW the splash UI so
+        // fullscreen UI (seek bar, etc.) overlays the video. But for a PiP
+        // sub-rect, WMC paints an (opaque) placeholder in the splash layer that
+        // would cover the video — so for PiP the video plane is raised above
+        // the UI, clipped to its rect, leaving the rest of the UI untouched.
+        // Tracks last state to fire only on change.
+        public event Action<bool> VideoAboveUiChanged;
+        private bool? _videoAboveUi;
+        private void RaiseVideoAboveUi(bool above) {
+            if (_videoAboveUi == above) return;
+            _videoAboveUi = above;
+            try { VideoAboveUiChanged?.Invoke(above); }
+            catch (Exception ex) { _logger?.LogError($"[surface-router] VideoAboveUiChanged threw: {ex.Message}"); }
+        }
         // Latest PiP rectangle reported by SplashController.
         // Empty = no PiP, route video to the full host bounds.
         // Populated = strict PIP-CAND match (see SplashController's
@@ -62,7 +76,6 @@ namespace SoftSled.Components.AudioVisual {
                              FrameworkElement primary,
                              SplashController splashController,
                              Logger logger,
-                             bool pipRoutingEnabled = true,
                              Func<Rect?> gdiDisplayRectProvider = null) {
             _mode    = mode;
             _canvas  = canvas ?? throw new ArgumentNullException(nameof(canvas));
@@ -70,11 +83,7 @@ namespace SoftSled.Components.AudioVisual {
             _splash  = splashController;
             _logger  = logger;
             _dispatcher = canvas.Dispatcher;
-            _pipRoutingEnabled = pipRoutingEnabled;
             _gdiDisplayRectProvider = gdiDisplayRectProvider;
-            if (!pipRoutingEnabled) {
-                _logger?.LogInfo("[surface-router] PiP routing DISABLED by config — video stays at the full surface rect.");
-            }
         }
 
         /// <summary>
@@ -141,11 +150,10 @@ namespace SoftSled.Components.AudioVisual {
             }
             _currentSurfaceId = -1;
             _currentPipRect = Rect.Empty;
+            RaiseVideoAboveUi(false);   // media closed → restore below-UI default
             if (_subscribed && _splash != null) {
                 _splash.SurfaceScreenRectChanged   -= OnSplashSurfaceRectChanged;
-                if (_pipRoutingEnabled) {
-                    _splash.VideoPipCandidateChanged -= OnSplashPipCandidateChanged;
-                }
+                _splash.VideoPipCandidateChanged   -= OnSplashPipCandidateChanged;
                 _subscribed = false;
             }
         }
@@ -155,12 +163,10 @@ namespace SoftSled.Components.AudioVisual {
         private void EnsureSubscribed() {
             if (_subscribed || _splash == null) return;
             _splash.SurfaceScreenRectChanged   += OnSplashSurfaceRectChanged;
-            // PiP routing is a heuristic — gate the subscription so a
-            // user can disable it without the controller still re-
-            // arranging the video element.
-            if (_pipRoutingEnabled) {
-                _splash.VideoPipCandidateChanged += OnSplashPipCandidateChanged;
-            }
+            // PiP routing follows the deterministic PIP-CORNER-BIND in
+            // SplashController (the recorded-TV now-playing window), tracked
+            // per-frame so the video follows the box through animations.
+            _splash.VideoPipCandidateChanged   += OnSplashPipCandidateChanged;
             _subscribed = true;
         }
 
@@ -291,6 +297,7 @@ namespace SoftSled.Components.AudioVisual {
             _primary.Width  = _canvas.ActualWidth;
             _primary.Height = _canvas.ActualHeight;
             _logger?.LogDebug($"[surface-router] SizeToCanvas → video element at (0,0) {_canvas.ActualWidth:F0}x{_canvas.ActualHeight:F0}");
+            RaiseVideoAboveUi(false);   // fullscreen → below the UI (UI overlays)
         }
 
         private void ApplyRect(Rect rect) {
@@ -303,6 +310,14 @@ namespace SoftSled.Components.AudioVisual {
             _primary.Width  = rect.Width;
             _primary.Height = rect.Height;
             _logger?.LogDebug($"[surface-router] ApplyRect → video element at ({rect.X:F0},{rect.Y:F0}) {rect.Width:F0}x{rect.Height:F0}");
+
+            // A genuine PiP box is small in BOTH dimensions (letterbox bars
+            // shrink only one). Raise the video above the UI for PiP so the
+            // splash placeholder doesn't cover it; keep it below otherwise.
+            bool isPip = _canvas.ActualWidth > 0 && _canvas.ActualHeight > 0
+                         && rect.Width  < _canvas.ActualWidth  * 0.70
+                         && rect.Height < _canvas.ActualHeight * 0.70;
+            RaiseVideoAboveUi(isPip);
         }
     }
 }

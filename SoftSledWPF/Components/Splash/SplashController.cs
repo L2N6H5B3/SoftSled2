@@ -246,6 +246,15 @@ namespace SoftSled.Components.Splash {
         private uint _videoBoundPoolHandle;     // diagnostic — which pool primed the RB
         private int  _videoBoundUid;            // diagnostic — which DSF uid this came from
         private Rect _videoBoundLastRect;       // change-detection so unchanged rects don't spam
+        // Per-frame rect polling. WMC moves/resizes the PiP box via
+        // AnimationManager position/size animations, which update the visual's
+        // transform WITHOUT sending discrete SetPosition/SetSize messages — so
+        // RefreshVideoRectIfRelevant alone misses the motion and the video gets
+        // stranded at its bind-time rect. While bound we poll the bound visual's
+        // rendered rect on CompositionTarget.Rendering and re-route on change so
+        // the video follows the box through animations and layout shifts.
+        private bool _videoRectPollHooked;
+        private EventHandler _videoRectPollHandler;
 
         // ============================================================
         //  PiP-candidate lifespan tracking
@@ -444,6 +453,7 @@ namespace SoftSled.Components.Splash {
             _videoBoundUid          = uid;
             _videoBoundLastRect     = Rect.Empty;  // force a change on first refresh
             RefreshVideoRectIfRelevant(v, "[PIP-BINDING new]");
+            StartVideoRectPolling();   // follow animated moves/resizes of the box
         }
 
         /// <summary>
@@ -454,6 +464,7 @@ namespace SoftSled.Components.Splash {
             if (_videoBoundVisualHandle == 0) return;
             _dumper?.OnEvent($"    [VIDEO-UNBOUND] vis=0x{_videoBoundVisualHandle:X8} reason={reason}");
             _logger?.LogInfo($"[splash] VIDEO-UNBOUND vis=0x{_videoBoundVisualHandle:X8} ({reason}) — video routing reverts to full canvas");
+            StopVideoRectPolling();
             _videoBoundVisualHandle = 0;
             _videoBoundPoolHandle   = 0;
             _videoBoundUid          = 0;
@@ -461,6 +472,50 @@ namespace SoftSled.Components.Splash {
             // Route an empty rect so SurfaceRouter reverts to the full
             // canvas / host bounds.
             RaiseVideoPipCandidateChanged(0, Rect.Empty);
+        }
+
+        // ---- Per-frame PiP rect polling (follows animated box moves) ----
+        private void StartVideoRectPolling() {
+            Action hook = () => {
+                if (_videoRectPollHooked) return;
+                _videoRectPollHandler = (s, e) => PollVideoRectTick();
+                System.Windows.Media.CompositionTarget.Rendering += _videoRectPollHandler;
+                _videoRectPollHooked = true;
+            };
+            if (_uiDispatcher.CheckAccess()) hook();
+            else { try { _uiDispatcher.BeginInvoke(hook); } catch { } }
+        }
+
+        private void StopVideoRectPolling() {
+            Action unhook = () => {
+                if (!_videoRectPollHooked) return;
+                if (_videoRectPollHandler != null)
+                    System.Windows.Media.CompositionTarget.Rendering -= _videoRectPollHandler;
+                _videoRectPollHandler = null;
+                _videoRectPollHooked = false;
+            };
+            if (_uiDispatcher.CheckAccess()) unhook();
+            else { try { _uiDispatcher.BeginInvoke(unhook); } catch { } }
+        }
+
+        // Runs on the UI thread (CompositionTarget.Rendering, ~per frame).
+        // Re-resolves the bound visual's rendered rect — which reflects the
+        // CURRENT animated transform — and re-routes when it changes, so the
+        // video tracks the PiP box smoothly through WMC's move/resize
+        // animations that send no discrete SetPosition/SetSize.
+        private void PollVideoRectTick() {
+            if (_videoBoundVisualHandle == 0) return;
+            if (!_registry.TryGetObject(_videoBoundVisualHandle, out var obj) || !(obj is SplashVisual bound)) return;
+            if (!TryComputeVisualRenderedRect(bound, out var r)) return;
+            const double EPS = 1.0;
+            if (Math.Abs(r.X - _videoBoundLastRect.X) < EPS
+                && Math.Abs(r.Y - _videoBoundLastRect.Y) < EPS
+                && Math.Abs(r.Width  - _videoBoundLastRect.Width)  < EPS
+                && Math.Abs(r.Height - _videoBoundLastRect.Height) < EPS) return;
+            _videoBoundLastRect     = r;
+            _currentPipVisualHandle = _videoBoundVisualHandle;
+            _currentPipRect         = r;
+            RaiseVideoPipCandidateChanged(_videoBoundVisualHandle, r);
         }
 
         private void RaiseVideoPipCandidateChanged(uint visualHandle, Rect rect) {
@@ -698,6 +753,10 @@ namespace SoftSled.Components.Splash {
                 }
                 _playingAnimations.Clear();
                 _animClock.Reset(); // re-zero so the next session's StartTimeMs is 0
+
+                StopVideoRectPolling();   // drop the per-frame PiP rect hook
+                _videoBoundVisualHandle = 0;
+                _videoBoundLastRect = Rect.Empty;
 
                 _registry.Clear();
                 _host?.ClearAll();
@@ -1772,11 +1831,21 @@ namespace SoftSled.Components.Splash {
                                 && pendingGradients.Count > 0
                                 && v.SizeX > 96 && v.SizeY > 54) {
                                 double aspect = v.SizeX / (double)v.SizeY;
-                                if (aspect >= 1.55 && aspect <= 1.95) {
+                                // Widened 2026-06-12: the Recorded-TV video-window
+                                // placeholder is a ~4:3 gradient-only box (user-
+                                // confirmed: empty box, lighter-blue gradient,
+                                // bottom-left), NOT 16:9 — the old 1.55 lower bound
+                                // rejected it outright. Accept 4:3..16:9 so it gets
+                                // logged. DIAGNOSTIC ONLY — nothing routes off this.
+                                if (aspect >= 1.15 && aspect <= 1.95) {
                                     uint parentH = v.Parent?.Handle ?? 0u;
                                     var  lastGrad = pendingGradients[pendingGradients.Count - 1];
                                     double lbFit  = lastGrad?.FitScoreForVisual(v.SizeX, v.SizeY) ?? 0.0;
                                     bool   isVert = lastGrad?.Direction == Objects.SplashGradient.Orientation.Vertical;
+                                    uint   gradColor = lastGrad?.ColorMask ?? 0u;
+                                    int    gradStops = lastGrad?.Stops.Count ?? 0;
+                                    string aspectClass = (aspect >= 1.2 && aspect <= 1.45) ? "4:3"
+                                                       : (aspect >= 1.6 && aspect <= 1.95) ? "16:9" : "other";
 
                                     // Compute absolute rect for diagnosis
                                     // — wanted even on non-locking
@@ -1790,8 +1859,8 @@ namespace SoftSled.Components.Splash {
                                         : "abs=unresolved";
 
                                     _dumper?.OnEvent($"    [PIP-CAND] vis=0x{v.Handle:X8} size=({v.SizeX:F0}x{v.SizeY:F0}) pos=({v.PosX:F0},{v.PosY:F0}) " +
-                                                     $"{absTag} aspect={aspect:F2} bits=0x{v.DataBits:X8} alpha={v.AlphaByte} parent=0x{parentH:X8} " +
-                                                     $"grad=({(isVert ? "V" : "H")},LBfit={lbFit:F2}) vfam={(IsVideoFamilyHandle(v.Handle) ? "Y" : "N")}");
+                                                     $"{absTag} aspect={aspect:F2}({aspectClass}) bits=0x{v.DataBits:X8} alpha={v.AlphaByte} parent=0x{parentH:X8} " +
+                                                     $"grad=({(isVert ? "V" : "H")},color=0x{gradColor:X8},stops={gradStops},LBfit={lbFit:F2}) vfam={(IsVideoFamilyHandle(v.Handle) ? "Y" : "N")}");
 
                                     // ---- Strict locking ----
                                     //
@@ -1841,8 +1910,9 @@ namespace SoftSled.Components.Splash {
                                     bool aspectIs16x9 = aspect >= 1.76 && aspect <= 1.80;
                                     bool inBottomLeft = false;
                                     bool mostlyOnScreen = false;
+                                    bool inCorner = false;
                                     double hostW = 0, hostH = 0;
-                                    if (gotAbs && _host != null) {
+                                    if (_host != null) {
                                         if (_uiDispatcher.CheckAccess()) {
                                             hostW = _host.ActualWidth;
                                             hostH = _host.ActualHeight;
@@ -1857,14 +1927,24 @@ namespace SoftSled.Components.Splash {
                                             hostW = capW;
                                             hostH = capH;
                                         }
-                                        if (hostW > 0 && hostH > 0) {
-                                            inBottomLeft = candAbs.Y >= hostH * 0.5
-                                                           && candAbs.X <  hostW * 0.5;
-                                            mostlyOnScreen = candAbs.Y >= -8
-                                                             && candAbs.Y + candAbs.Height <= hostH + 8
-                                                             && candAbs.X >= -8
-                                                             && candAbs.X + candAbs.Width <= hostW + 8;
-                                        }
+                                    }
+                                    // Geometry tests use the RENDERED rect (WPF
+                                    // coords via TransformToAncestor) vs the host's
+                                    // WPF size — consistent units. The earlier code
+                                    // mixed LOGICAL abs coords with WPF host dims,
+                                    // which mis-judged "on-screen" and made the
+                                    // suspect fire on a carousel tile.
+                                    bool gotRen = TryComputeVisualRenderedRect(v, out var renRect);
+                                    if (gotRen && hostW > 0 && hostH > 0) {
+                                        inBottomLeft = renRect.Y >= hostH * 0.5 && renRect.X < hostW * 0.5;
+                                        mostlyOnScreen = renRect.Y >= -8 && renRect.Y + renRect.Height <= hostH + 8
+                                                         && renRect.X >= -8 && renRect.X + renRect.Width <= hostW + 8;
+                                        // PiP video window = extreme bottom-LEFT
+                                        // CORNER, left portion only — excludes the
+                                        // recorded-TV carousel tiles (~17% from the
+                                        // left, arriving as a stepping column).
+                                        inCorner = renRect.X < hostW * 0.10 && renRect.Y > hostH * 0.55
+                                                   && renRect.X + renRect.Width < hostW * 0.55;
                                     }
                                     // Strict criteria: aspect 16:9, visible,
                                     // in bottom-left quadrant of screen,
@@ -1902,13 +1982,50 @@ namespace SoftSled.Components.Splash {
                                     // heuristic match, which means no
                                     // mis-routing during this exploratory
                                     // phase.
+                                    // Track lifespan for EVERY gradient-only
+                                    // candidate now (not just 16:9). The real
+                                    // video window lives the whole time on the
+                                    // page and never receives image content, so
+                                    // its [PIP-CAND-DEATH] lifespan will read
+                                    // LONG-LIVED — distinguishing it from transient
+                                    // tiles / selector rings.
+                                    RecordPipCandidateBirth(v.Handle, gotAbs ? candAbs : Rect.Empty, isVert, lbFit, aspect);
+
+                                    // ---- PiP video-window BIND (2026-06-12) ----
+                                    // The persistent PiP container is a gradient-only
+                                    // box in the bottom-left CORNER. Binding it routes
+                                    // the video plane to its rendered rect
+                                    // (SetVideoBoundVisual -> RefreshVideoRectIfRelevant
+                                    // -> VideoPipCandidateChanged -> SurfaceRouter).
+                                    // Binds only when nothing is bound yet; the bound
+                                    // visual's destroy (Broker_DestroyObject) reverts
+                                    // to fullscreen. Always active (no config gate).
+                                    if (_videoBoundVisualHandle == 0
+                                        && v.AlphaByte > 0
+                                        && aspect >= 1.2 && aspect <= 1.95
+                                        && gotRen && inCorner
+                                        && renRect.Width > 48 && renRect.Height > 32) {
+                                        _logger?.LogInfo($"[splash] PIP-CORNER-BIND vis=0x{v.Handle:X8} " +
+                                                         $"rendered=({renRect.X:F0},{renRect.Y:F0} {renRect.Width:F0}x{renRect.Height:F0}) " +
+                                                         $"aspect={aspect:F2} grad=0x{gradColor:X8} -- routing video to bottom-left PiP window");
+                                        _dumper?.OnEvent($"      [PIP-CORNER-BIND] vis=0x{v.Handle:X8} rendered=({renRect.X:F0},{renRect.Y:F0} {renRect.Width:F0}x{renRect.Height:F0})");
+                                        SetVideoBoundVisual(v, 0u, 0);
+                                    } else if (aspectClass == "4:3" && v.AlphaByte > 0
+                                               && inBottomLeft && mostlyOnScreen && gotRen) {
+                                        // Broader bottom-left 4:3 box that ISN'T the
+                                        // corner — log as diagnostic so we can tune
+                                        // the filter if the bind ever misses.
+                                        _logger?.LogInfo($"[splash] PIP-4x3-SUSPECT vis=0x{v.Handle:X8} " +
+                                                         $"rendered=({renRect.X:F0},{renRect.Y:F0} {renRect.Width:F0}x{renRect.Height:F0}) " +
+                                                         $"aspect={aspect:F2} grad=0x{gradColor:X8} inCorner={inCorner} " +
+                                                         $"parent=0x{parentH:X8} vfam={(IsVideoFamilyHandle(v.Handle) ? "Y" : "N")} (diagnostic)");
+                                        _dumper?.OnEvent($"      [PIP-4x3-SUSPECT] vis=0x{v.Handle:X8} rendered=({renRect.X:F0},{renRect.Y:F0} {renRect.Width:F0}x{renRect.Height:F0}) grad=0x{gradColor:X8} inCorner={inCorner}");
+                                    }
+
+                                    // Legacy 16:9 strict-match diagnostic (kept for
+                                    // continuity with the earlier captures).
                                     if (isStrict) {
-                                        _dumper?.OnEvent($"      [PIP-STRICT-MATCH] vis=0x{v.Handle:X8} absRect=({candAbs.X:F0},{candAbs.Y:F0} {candAbs.Width:F0}x{candAbs.Height:F0}) aspect={aspect:F2} grad={(isVert ? "V" : "H")} host=({hostW:F0}x{hostH:F0}) (NO LOCK — known selector-ring shape)");
-                                        // Record birth for lifespan tracing
-                                        // — see Broker_DestroyObject for
-                                        // the matching [PIP-CAND-DEATH]
-                                        // log line.
-                                        RecordPipCandidateBirth(v.Handle, candAbs, isVert, lbFit, aspect);
+                                        _dumper?.OnEvent($"      [PIP-STRICT-MATCH] vis=0x{v.Handle:X8} absRect=({candAbs.X:F0},{candAbs.Y:F0} {candAbs.Width:F0}x{candAbs.Height:F0}) aspect={aspect:F2} grad={(isVert ? "V" : "H")} host=({hostW:F0}x{hostH:F0}) (NO LOCK — diagnostic)");
                                     }
                                 }
                             }
@@ -2296,6 +2413,33 @@ namespace SoftSled.Components.Splash {
             }
         }
 
+        /// <summary>
+        /// True if <paramref name="surfaceHandle"/> is the display surface
+        /// (<c>surScene</c>) of an active VIDEO DynamicSurface instance — and
+        /// returns its DMCT uid + content pool. This is the crux of WMC's
+        /// pull-style video placement: CreateVideoInstance (§2.2.4.18.2) names
+        /// <c>surScene</c> as "the surface to display", and WMC places it on
+        /// screen through the ordinary scene-graph path — a <c>Surface_Draw</c>
+        /// of <c>surScene</c> into a RenderBuilder, which a later
+        /// <c>Visual_SetContent</c> binds to a Visual whose composed transform
+        /// IS the video's screen rectangle. (WMC does NOT issue VideoPool_Draw
+        /// for this — the pool only holds content; the surface is what gets
+        /// drawn.) Matching here lets us prime <see cref="_videoDrawByRb"/> off
+        /// the message WMC actually sends.
+        /// </summary>
+        private bool TryGetVideoSurfaceUid(uint surfaceHandle, out int uid, out uint poolHandle) {
+            foreach (var kv in _dynamicSurfaceByUid) {
+                if (kv.Value.IsVideo && kv.Value.SurfaceHandle == surfaceHandle) {
+                    uid = kv.Key;
+                    poolHandle = kv.Value.PoolHandle;
+                    return true;
+                }
+            }
+            uid = -1;
+            poolHandle = 0;
+            return false;
+        }
+
         // msgid table for Surface (spec section 2.2.4.11):
         //   0 = DrawGrid          (rb, flX1..flY2, rcfDest)
         //   1 = Draw              (rb, rcfSrc, rcfDest, fNeverStretch)
@@ -2335,6 +2479,20 @@ namespace SoftSled.Components.Splash {
                                 gridDst, gridStretch);
                         }
                         _dumper?.OnEvent($"  Surface_DrawGrid surf=0x{surf.Handle:X8} rb=0x{rbH:X8} grid=({x1},{x2},{y1},{y2}) dst=({dx},{dy},{dw},{dh})");
+
+                        // Same video-placement priming as Surface_Draw, in case
+                        // WMC ever draws the video surScene 9-slice. Unlikely
+                        // for a video surface, but harmless and self-documenting.
+                        if (TryGetVideoSurfaceUid(surf.Handle, out int vGridUid, out uint vGridPool)) {
+                            _videoDrawByRb[rbH] = new VideoDrawBinding {
+                                PoolHandle = vGridPool,
+                                VideoUid   = vGridUid,
+                                DstX = dx, DstY = dy, DstW = dw, DstH = dh,
+                            };
+                            _logger?.LogInfo($"[splash] VIDEO-SURFACE-DRAWGRID uid={vGridUid} surScene=0x{surf.Handle:X8} " +
+                                             $"rb=0x{rbH:X8} dst=({dx:F1},{dy:F1},{dw:F1},{dh:F1})");
+                            _dumper?.OnEvent($"    [VIDEO-SURFACE-DRAWGRID] uid={vGridUid} surScene=0x{surf.Handle:X8} rb=0x{rbH:X8}");
+                        }
                     }
                     break;
                 case 1: // Surface_Draw
@@ -2383,6 +2541,29 @@ namespace SoftSled.Components.Splash {
                             _dumper?.OnEvent($"    (surface 0x{surf.Handle:X8} has bitmap but ContentValid=false — Surface_Draw skipped)");
                         }
                         _dumper?.OnEvent($"  Surface_Draw surf=0x{surf.Handle:X8} rb=0x{rbH:X8} src=({sx},{sy},{sw},{sh}) dst=({dx},{dy},{dw},{dh}) noStretch={fNeverStretch} stretchToVisual={stretchToVisual}");
+
+                        // ---- THE missing video-placement signal ----
+                        // If this surface is a video instance's surScene, THIS
+                        // Surface_Draw is what places the video on screen (the
+                        // surface has no CPU bitmap — it's live video on our D3D
+                        // plane — so the render above is correctly skipped; we
+                        // only need the rb→Visual binding). Prime _videoDrawByRb
+                        // exactly like the VideoPool_Draw path so the following
+                        // Visual_SetContent fires [PIP-BINDING] and hands the
+                        // bound Visual (its composed transform = the video rect)
+                        // to the geometry tracker → SurfaceRouter.
+                        if (TryGetVideoSurfaceUid(surf.Handle, out int vSurfUid, out uint vSurfPool)) {
+                            _videoDrawByRb[rbH] = new VideoDrawBinding {
+                                PoolHandle = vSurfPool,
+                                VideoUid   = vSurfUid,
+                                DstX = dx, DstY = dy, DstW = dw, DstH = dh,
+                            };
+                            _logger?.LogInfo($"[splash] VIDEO-SURFACE-DRAW uid={vSurfUid} surScene=0x{surf.Handle:X8} " +
+                                             $"rb=0x{rbH:X8} dst=({dx:F1},{dy:F1},{dw:F1},{dh:F1}) " +
+                                             $"— video placement via Surface_Draw; next Visual_SetContent pins the rect");
+                            _dumper?.OnEvent($"    [VIDEO-SURFACE-DRAW] uid={vSurfUid} surScene=0x{surf.Handle:X8} " +
+                                             $"rb=0x{rbH:X8} dst=({dx:F1},{dy:F1},{dw:F1},{dh:F1})");
+                        }
                     }
                     break;
                 case 2: // Surface_RemapContainer

@@ -215,4 +215,63 @@
         </Setter>
     </Style>
 
+    <!-- WMC-ish radio button: a circle outline that fills with an accent
+         dot when selected. Same focus-row highlight as the checkbox so
+         remote navigation reads consistently. Used by the setup wizard. -->
+    <Style x:Key="WmcRadioButtonStyle" TargetType="RadioButton">
+        <Setter Property="Foreground" Value="{StaticResource WmcTextBrush}"/>
+        <Setter Property="FontSize"   Value="20"/>
+        <Setter Property="FontFamily" Value="Segoe UI"/>
+        <Setter Property="Margin"     Value="0,2"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="VerticalContentAlignment"   Value="Center"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="RowBorder"
+                            Background="Transparent"
+                            BorderBrush="Transparent"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="10,10"
+                            Margin="0,0,0,4">
+                        <StackPanel Orientation="Horizontal">
+                            <Grid Width="30" Height="30" VerticalAlignment="Center">
+                                <Ellipse x:Name="OuterRing"
+                                         Stroke="#A0FFFFFF"
+                                         StrokeThickness="2"
+                                         Fill="#20000000"/>
+                                <Ellipse x:Name="Dot"
+                                         Width="14" Height="14"
+                                         Fill="{StaticResource WmcAccentBrush}"
+                                         Visibility="Collapsed"/>
+                            </Grid>
+                            <ContentPresenter Margin="14,0,0,0"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </StackPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Dot"       Property="Visibility" Value="Visible"/>
+                            <Setter TargetName="OuterRing" Property="Stroke"     Value="{StaticResource WmcAccentBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsFocused" Value="True">
+                            <Setter TargetName="RowBorder" Property="BorderBrush" Value="{StaticResource WmcSelectionBorderBrush}"/>
+                            <Setter TargetName="RowBorder" Property="Background"  Value="{StaticResource WmcSelectionFillBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="RowBorder" Property="BorderBrush" Value="{StaticResource WmcSelectionBorderBrush}"/>
+                            <Setter TargetName="RowBorder" Property="Background"  Value="{StaticResource WmcSelectionFillBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="RowBorder" Property="BorderBrush" Value="#40FFFFFF"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
 </ResourceDictionary>

@@ -10,7 +10,22 @@ namespace SoftSled.Components.Configuration {
         public bool EnableRemoteRendering = true;
         public bool EnableOverscanMargin = false;
         public bool Enable2DAnimations = true;
-        public bool EnableIntenseAnimations = true;
+        // Default OFF: intense animations are only used when Remote Rendering
+        // is off (GDI), where every animation frame streams over RDP and can
+        // overwhelm the link. "Minimal" (2D on, Intense off) is the safer
+        // default and what the setup wizard recommends.
+        public bool EnableIntenseAnimations = false;
+
+        // True once the first-run setup wizard (FirstRunSetupPage) has been
+        // completed or skipped. The shell shows the wizard on launch while
+        // this is false; the wizard sets it true on finish. Re-runnable any
+        // time from the first item in Settings.
+        public bool InitialSetupComplete = false;
+
+        // Drives the MS-MCCAP "TVS" capability ("Is a TV skin used?") in
+        // ExtenderCapabilities — tells WMC to present its 10-foot TV skin.
+        // Set by the setup wizard when the user says they're on a TV.
+        public bool UseTvSkin = false;
 
         // Shell-level UI preferences (read by ShellWindow at startup).
         // RunFullScreen: launch the shell maximized with no window
@@ -20,7 +35,7 @@ namespace SoftSled.Components.Configuration {
         // landing page into the Extender session on launch (skips the
         // 'Start Extender' menu click). Has no effect when unpaired —
         // the user always has to confirm the pairing flow.
-        public bool RunFullScreen = false;
+        public bool RunFullScreen = true;
         public bool AutoStartWmcOnOpen = false;
 
         // When true, shutting down the WMC session (host-initiated
@@ -155,41 +170,6 @@ namespace SoftSled.Components.Configuration {
         // page.
         public int SessionWidth  = 1280;
         public int SessionHeight = 720;
-
-        // Heuristic PiP routing: when active video is playing, the
-        // splash controller sniffs for gradient-only ~16:9 Visuals in
-        // the bottom-left of the screen and routes the video element
-        // onto the first match. Works because WMC's MS-RRSP2 wire does
-        // NOT actually emit VideoPool_Draw (spec §2.2.4.13.1, msgid 0)
-        // on this corpus — WMC relies on the Xbox hardware-overlay
-        // convention which we can't replicate. The heuristic
-        // approximates the result by finding the placeholder Visual the
-        // overlay WOULD have landed on.
-        //
-        // ---- DEFAULTED OFF — known-broken in two ways ----
-        //   1. The right candidate often isn't what the heuristic
-        //      catches. Captured corpus has THREE PiP-shaped Visuals
-        //      per chrome rebuild: a 258×145 horizontal-gradient
-        //      selector ring (the actually-visible focused tile) and
-        //      a pair of 256×144 / 256×148 vertical-gradient
-        //      placeholders in scrolled-off carousel rows whose
-        //      parent-chain accumulates to negative Y. The Vertical-
-        //      gradient filter targets the wrong tree.
-        //   2. Z-order: the WPF Grid in ExtenderSessionControl.xaml
-        //      puts splashHost ABOVE MediaCanvas, so the splash
-        //      scene-graph's placeholder gradient is drawn ON TOP
-        //      of the video element. Even if (1) were fixed, the
-        //      user would see the gradient, not the video. Needs
-        //      either alpha=0 on the locked Visual or a ZIndex
-        //      promotion of MediaCanvas while a PIP is locked.
-        //
-        // The diagnostic events ([PIP-CAND], [PIP-LOCK], [PIP-UNLOCK])
-        // and the VideoPipCandidateChanged hook stay live so future
-        // work can iterate on a better discriminator without rewiring
-        // the plumbing. Flip ON via the Debugging page to test new
-        // heuristics; expect false-positive shrinks until both issues
-        // above are addressed.
-        public bool EnableSplashPipRouting = false;
 
         // Manual A/V sync offset, in milliseconds. Applied by the
         // (Phase 2) sync controller to compensate for downstream
