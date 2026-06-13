@@ -1,16 +1,16 @@
 # SoftSled2
 A revival of the old SoftSled Project, an open source Windows Media Center Extender
 
-![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development-ffme/Screenshots/Screenshot%20(1).png)
-![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development-ffme/Screenshots/Screenshot%20(2).png)
-![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development-ffme/Screenshots/Screenshot%20(3).png)
-![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development-ffme/Screenshots/Screenshot%20(4).png)
-![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development-ffme/Screenshots/Screenshot%20(5).png)
-![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development-ffme/Screenshots/Screenshot%20(6).png)
-![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development-ffme/Screenshots/Screenshot%20(7).png)
+![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development/Screenshots/Screenshot%20(1).png)
+![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development/Screenshots/Screenshot%20(2).png)
+![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development/Screenshots/Screenshot%20(3).png)
+![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development/Screenshots/Screenshot%20(4).png)
+![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development/Screenshots/Screenshot%20(5).png)
+![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development/Screenshots/Screenshot%20(6).png)
+![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development/Screenshots/Screenshot%20(7).png)
 
 ## Current Progress
-* Remote Rendering Video PIP / Zoom broken - not able to figure out where the instruction comes from to move / scale a video surface while in Remote Rendering mode.
+* Continued work on A/V Sync.
 
 ## Finished Elements
 * Full Pairing Configuration (Including on-the-fly Extender Certificate Generation)
@@ -52,14 +52,12 @@ A patched version of Mcx2Prov.exe is required to enable pairing with the SoftSle
 
 
 ### Configuration
-(If using Linksys2200.cer)
 1. Copy SoftSledCA.cer to the Host Machine and install the certificate into the Local Machine Trusted Root store.
 2. Copy and replace Mcx2Prov.exe with the patched version - this patched version removes the CRL check which otherwise fails the Extender setup.
 3. Start SoftSled > Setup.
 4. Go to your Media Center PC and Navigate to **Settings** > **Extenders**.
 5. Find SoftSled in the list.
 6. Click Configure.
-7. In the key type in the provided key, and WMC will try to pair the Extender.
+7. Enter the provided key.
 8. Windows Media Center will go through the configuration steps and will pair the Extender.
-9. When the Extender shows that it has received the user details, select Connect.
-10. If you're lucky you'll get to the WMC home screen through RDP.
+9. The Extender should automatically connect, and you should be presented with the WMC home screen through RDP.
