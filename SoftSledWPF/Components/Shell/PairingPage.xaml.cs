@@ -44,14 +44,18 @@ namespace SoftSledWPF.Components.Shell {
             }
 
             try {
+                _logger.LogInfo($"[PairingPage] Creating ExtenderDevice - Logger Null: '{_logger == null}'");
                 _device = new ExtenderDevice(_logger);
+                _logger.LogInfo("[PairingPage] Starting ExtenderDevice");
                 _device.Start();
+                _logger.LogInfo("[PairingPage] Getting Pairing Code");
                 PinText.Text = _device.GetPairingCode();
+                _logger.LogInfo("[PairingPage] Setting Pairing Status");
                 StatusText.Text = "Waiting for Windows Media Center to pair...";
             } catch (Exception ex) {
-                _logger.LogError($"Pairing start failed: {ex.Message}");
+                _logger.LogError($"[PairingPage] Pairing start failed: {ex.Message}: {ex.StackTrace}");
                 StatusText.Text = "Failed to start pairing — see log.";
-                MessageBox.Show("Failed to start pairing: " + ex.Message);
+                MessageBox.Show($"Failed to start pairing: {ex.Message}: { ex.StackTrace}");
                 return;
             }
 

@@ -75,6 +75,9 @@ namespace SoftSled.Components.Extender {
                 }
                 // Save Output Certificates
                 generated.SaveTo(certificatePath, certificateBaseName);
+                m_logger.LogInfo($"[ExtenderDevice] Successfully Generated Extender Certificate under {certificatePath}\\{certificateBaseName}.cer");
+            } else {
+                m_logger.LogInfo($"[ExtenderDevice] Successfully Found Extender Certificate under {certificatePath}\\{certificateBaseName}.cer");
             }
 
             _DeviceCertificatePath = certificatePath + $"\\{certificateBaseName}.cer";
@@ -90,7 +93,7 @@ namespace SoftSled.Components.Extender {
             foreach (X509Extension certExtension in deviceCert.Extensions) {
                 if (certExtension.Oid.FriendlyName != null && certExtension.Oid.FriendlyName.Equals("Subject Alternative Name")) {
                     certDeviceId = Encoding.ASCII.GetString(certExtension.RawData).Remove(0, 9);
-                    m_logger.LogInfo("UUID from cert: " + certDeviceId);
+                    m_logger.LogInfo("[ExtenderDevice] UUID from Extender Certificate: " + certDeviceId);
                     break;
                 }
             }
@@ -194,18 +197,20 @@ namespace SoftSled.Components.Extender {
             _DeviceUDN = "uuid:" + device.UniqueDeviceName;
 
             // Setting the initial value of evented variables
+            m_logger.LogInfo($"[ExtenderDevice] Successfully Configured Extender with UDN '{_DeviceUDN}'");
+
         }
 
         public void Start() {
             device.StartDevice(3391);
 
-            m_logger.LogInfo("Started Device Broadcasting");
+            m_logger.LogInfo("[ExtenderDevice] Started Device Broadcasting");
         }
 
         public void Stop() {
             device.StopDevice();
 
-            m_logger.LogInfo("Stopped Device Broadcasting");
+            m_logger.LogInfo("[ExtenderDevice] Stopped Device Broadcasting");
         }
 
         #region SOAP RXAD Procedures ##########################################

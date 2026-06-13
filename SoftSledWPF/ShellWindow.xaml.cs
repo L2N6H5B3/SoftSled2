@@ -22,11 +22,14 @@ namespace SoftSledWPF {
         private readonly System.Collections.Generic.Stack<UserControl> _pageStack
             = new System.Collections.Generic.Stack<UserControl>();
 
-        // Shared logger so the pairing page can plumb into the same log
-        // surface the live session uses. A NullLogger wrapper would be
-        // tidier but we don't have one — TextBoxLogger needs a TextBox so
-        // we use the lightweight DummyLogger for shell-time logging.
-        private readonly Logger _logger = new ShellLogger();
+        // Shared logger handed to pre-session pages (e.g. PairingPage). A
+        // CompositeLogger fanning out to the Debug sink (ShellLogger) AND the
+        // app-lifetime file logger (App.AppLog, created in App.OnStartup) so
+        // shell- and pairing-time diagnostics are captured to the logfile from
+        // the outset — not only once a live session opens its own
+        // TextBoxLogger. App.AppLog is null when file logging is disabled, and
+        // CompositeLogger skips null children, so this is safe either way.
+        private readonly Logger _logger = new CompositeLogger(new ShellLogger(), App.AppLog);
 
         // True when the window is currently in "fullscreen" presentation
         // (WindowStyle=None, Maximized). Toggled by F11 and by the
