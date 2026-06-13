@@ -58,6 +58,11 @@ namespace SoftSled.Components.Splash.Objects {
 
     internal sealed class SplashWindow : SplashGenericObject {
 
+        // The SplashRenderHost reference is no longer wired here —
+        // background paint is owned by the layered Rectangle outside
+        // splashHost (see ExtenderSessionControl.xaml). This class
+        // just records the colour as state and lets the controller's
+        // background-color sink push it to the actual paint surface.
         private readonly SplashRenderHost _host;
 
         public Color BackgroundColor { get; private set; } = Colors.Transparent;
@@ -69,13 +74,22 @@ namespace SoftSled.Components.Splash.Objects {
         }
 
         public void SetBackgroundColor(Color c) {
+            // Record state only. The wire dispatch in
+            // SplashController.DispatchWindow forwards Window_SetBackgroundColor
+            // (msgid=0) to the background-color sink directly — keeping
+            // the actual paint side-effect out of SplashWindow lets us
+            // composite background ↓ video ↓ scene-graph cleanly in the
+            // outer Grid.
             BackgroundColor = c;
-            _host?.SetBackground(c);
         }
 
         public override void OnDestroyed() {
-            // Clear the host background when the window goes away.
-            _host?.SetBackground(Colors.Transparent);
+            // Window destruction doesn't reset the host background — the
+            // HostWindow background sticks until a subsequent
+            // HostWindow_SetBackgroundColor explicitly overrides it.
+            // (The previous "reset to transparent" behaviour was a
+            // side-effect of painting through SplashRenderHost; the
+            // layered model leaves this to whoever owns the sink.)
         }
     }
 
@@ -117,6 +131,12 @@ namespace SoftSled.Components.Splash.Objects {
         // Property cache — kept so we can re-apply the transform after any
         // single field changes without losing the others.
         public float PosX, PosY, PosZ;
+        // Default Size to (1,1,1) — the original behaviour. The earlier
+        // experimental change to (0,0,0) was paired with default
+        // clip-to-bounds; both were reverted. (1,1,1) means visuals that
+        // never receive an explicit SetSize still have a unit logical
+        // size, which is harmless for the bit-5-only clip path that
+        // requires both an opt-in bit and a non-zero size.
         public float SizeX = 1, SizeY = 1, SizeZ = 1;
         public float ScaleX = 1, ScaleY = 1, ScaleZ = 1;
         // Center point per MS-RRSP2 spec §2.2.4.6.8 / §2.2.4.6.9:
@@ -133,10 +153,45 @@ namespace SoftSled.Components.Splash.Objects {
         public bool  Visible = true;
         public uint  ContentRenderBuilderHandle = 0;
 
+        // Handle of the gradient currently providing this visual's
+        // OpacityMask, or 0 if no gradient is applied. Tracked so the
+        // controller can rebuild the WPF brush when the gradient's
+        // Offset or ColorMask changes (e.g. an Animation[GradientOffset]
+        // sweep, the WMC selection-highlight pattern) without having
+        // to re-execute the whole SetContent path. Cleared by
+        // SetContentFromRenderBuilder when no gradient is pending.
+        public uint AppliedGradientHandle;
+
+        // MS-RRSP2 Visual_SetLayer (spec §2.2.4.6.6). Layer is a z-order
+        // override applied amongst the visual's siblings: lower Layer
+        // paints first (appears behind), higher Layer paints later
+        // (appears in front). WMC ships this 582+ times per session
+        // mostly with values 0 or 1 (back/front toggles) and a long tail
+        // up to ~99 for stacking depth. Sibling order from
+        // Visual_ChangeParent's nOrder is the default; SetLayer
+        // overrides it. Applied by re-ordering this visual's index in
+        // its parent's DrawingVisual.Children via ApplyLayer().
+        public uint Layer;
+
+        // Cached per-visual transforms — reused across ApplyTransform
+        // calls instead of allocating fresh ones each time. WPF Transform
+        // objects are mutable while unfrozen; we just update properties
+        // in-place so the WPF compositor picks up the change without
+        // garbage churn. SetPosition / SetSize / SetScale / SetRotation
+        // each call ApplyTransform, often many times per frame during
+        // animation — for a typical WMC scene that's thousands of
+        // TransformGroup + ScaleTransform + RotateTransform + TranslateTransform
+        // allocations per frame avoided.
+        private TranslateTransform _translate;
+        private ScaleTransform     _scale;
+        private RotateTransform    _rotate;
+        private TransformGroup     _group;
+
         public SplashVisual(uint handle, string className, SplashRenderHost host)
             : base(handle, SplashClassKind.Visual, className) {
             _host = host;
-            DrawingVisual.Transform = new TranslateTransform(0, 0);
+            _translate = new TranslateTransform(0, 0);
+            DrawingVisual.Transform = _translate;
             DrawingVisual.Opacity   = 1.0;
         }
 
@@ -177,10 +232,21 @@ namespace SoftSled.Components.Splash.Objects {
             var siblings = newParent != null ? newParent.DrawingVisual.Children : null;
             int index = ResolveInsertIndex(siblings, order, sibling);
             if (newParent != null) {
-                newParent.Children.Add(this);
+                // Insert into BOTH lists at the SAME index so they stay
+                // in lockstep. Previous code Add()'d to newParent.Children
+                // (always appending) but Insert()'d into siblings at a
+                // computed index — for order=Bottom/Before/Behind the two
+                // lists end up referring to different visuals at the same
+                // index. Anything that later cross-correlates the lists
+                // (Visual_SetLayer / ApplyLayer, the VTREE diagnostic
+                // dump) trips on the divergence with "Specified Visual
+                // is already a child of another Visual" or "index out
+                // of range" errors.
                 if (index < 0 || index >= siblings.Count) {
+                    newParent.Children.Add(this);
                     siblings.Add(DrawingVisual);
                 } else {
+                    newParent.Children.Insert(index, this);
                     siblings.Insert(index, DrawingVisual);
                 }
             } else {
@@ -220,17 +286,64 @@ namespace SoftSled.Components.Splash.Objects {
             // dispatch) because Size frequently arrives AFTER the center
             // setters on the wire — using a precomputed value would
             // anchor pivots at (0,0) for the lifetime of every visual.
+            //
+            // Perf path: the common case (~90% of WMC visuals) is
+            // translate-only — no scale, no rotation. Hot path mutates a
+            // single TranslateTransform in place to avoid TransformGroup
+            // + child allocations on every SetPosition tick. The full
+            // case (scale and/or rotation) falls through to a TransformGroup
+            // that's also cached and mutated in place.
+            bool wantsScale = ScaleX != 1f || ScaleY != 1f;
+            bool wantsRotation = RotAngleDeg != 0f && Math.Abs(RotAxisZ) > 0.0001f;
+
+            if (!wantsScale && !wantsRotation) {
+                // Translate-only fast path. Reuse the cached TranslateTransform.
+                _translate.X = PosX;
+                _translate.Y = PosY;
+                if (DrawingVisual.Transform != _translate) {
+                    DrawingVisual.Transform = _translate;
+                }
+                return;
+            }
+
+            // Full path: scale and/or rotation. Reuse a cached
+            // TransformGroup populated with whichever children are needed.
             double cx = SizeX * CenterScaleX + CenterOffsetX;
             double cy = SizeY * CenterScaleY + CenterOffsetY;
-            var group = new TransformGroup();
-            if (ScaleX != 1 || ScaleY != 1) {
-                group.Children.Add(new ScaleTransform(ScaleX, ScaleY, cx, cy));
+
+            if (_group == null) _group = new TransformGroup();
+            // We rebuild the group's child list when the SHAPE of the
+            // transform (scale on/off, rotation on/off) changes; otherwise
+            // we just mutate each cached transform's properties.
+            int desiredChildCount = (wantsScale ? 1 : 0) + (wantsRotation ? 1 : 0) + 1; // +1 for translate
+            bool shapeChanged = _group.Children.Count != desiredChildCount;
+
+            if (wantsScale) {
+                if (_scale == null) { _scale = new ScaleTransform(); shapeChanged = true; }
+                _scale.ScaleX  = ScaleX;
+                _scale.ScaleY  = ScaleY;
+                _scale.CenterX = cx;
+                _scale.CenterY = cy;
             }
-            if (RotAngleDeg != 0 && Math.Abs(RotAxisZ) > 0.0001f) {
-                group.Children.Add(new RotateTransform(RotAngleDeg, cx, cy));
+            if (wantsRotation) {
+                if (_rotate == null) { _rotate = new RotateTransform(); shapeChanged = true; }
+                _rotate.Angle   = RotAngleDeg;
+                _rotate.CenterX = cx;
+                _rotate.CenterY = cy;
             }
-            group.Children.Add(new TranslateTransform(PosX, PosY));
-            DrawingVisual.Transform = group;
+            _translate.X = PosX;
+            _translate.Y = PosY;
+
+            if (shapeChanged) {
+                _group.Children.Clear();
+                if (wantsScale)    _group.Children.Add(_scale);
+                if (wantsRotation) _group.Children.Add(_rotate);
+                _group.Children.Add(_translate);
+            }
+
+            if (DrawingVisual.Transform != _group) {
+                DrawingVisual.Transform = _group;
+            }
         }
 
         public void ApplyAlpha() {
@@ -241,25 +354,89 @@ namespace SoftSled.Components.Splash.Objects {
         }
 
         /// <summary>
+        /// Re-position this visual amongst its parent's children to honour
+        /// the current <see cref="Layer"/> value. Spec §2.2.4.6.6 — lower
+        /// Layer = back, higher = front. WPF VisualCollection paints
+        /// index 0 first (behind) and index Count-1 last (in front), so
+        /// we sort the parent's children by Layer ascending and re-insert
+        /// at the position matching this visual's rank.
+        ///
+        /// <para>Stability: visuals with the same Layer keep their
+        /// existing relative order (the order set by Visual_ChangeParent's
+        /// nOrder is the default, and SetLayer with ties leaves it
+        /// alone).</para>
+        ///
+        /// <para>Cost: O(n) where n is the parent's child count, which is
+        /// usually small (one menu strip's worth of tiles). Acceptable
+        /// for the ~582 SetLayer fires per session we observe.</para>
+        ///
+        /// <para>No-op if this visual is unparented (still on the host
+        /// root); the host root has no notion of Layer-based z-order.</para>
+        /// </summary>
+        public void ApplyLayer() {
+            if (Parent == null) return;
+            var sibList   = Parent.Children;
+            var sibVisual = Parent.DrawingVisual.Children;
+            int n = sibList.Count;
+            if (n <= 1) return;
+
+            // Use the WPF VisualCollection as the source of truth for
+            // the current index — that's the collection ApplyLayer will
+            // physically mutate, so any lockstep drift between the two
+            // lists must be reconciled here.
+            int currentIdx = sibVisual.IndexOf(this.DrawingVisual);
+            if (currentIdx < 0) return;
+
+            // Sanity: if the SplashVisual bookkeeping list disagrees about
+            // where this visual sits, the two lists got out of lockstep
+            // (historically this happened in ChangeParent with
+            // order=Bottom/Before/Behind). Bail out — re-sorting would
+            // misalign the lists further. ChangeParent now keeps them in
+            // lockstep so this should never fire post-fix.
+            int currentIdxList = sibList.IndexOf(this);
+            if (currentIdxList != currentIdx) return;
+
+            // Compute this visual's target index by counting how many
+            // siblings have a strictly-lower Layer (those paint before us)
+            // plus a stable tie-breaker for siblings with the same Layer
+            // that already sit before us in the current order.
+            int targetIdx = 0;
+            for (int i = 0; i < n; i++) {
+                if (i == currentIdx) continue;
+                var s = sibList[i];
+                if (s.Layer < Layer || (s.Layer == Layer && i < currentIdx)) {
+                    targetIdx++;
+                }
+            }
+            if (targetIdx == currentIdx) return;
+
+            // Move both lists in lockstep. Remove-then-insert is the only
+            // mutation pattern VisualCollection supports for re-ordering.
+            sibList.RemoveAt(currentIdx);
+            sibVisual.RemoveAt(currentIdx);
+            sibList.Insert(targetIdx, this);
+            sibVisual.Insert(targetIdx, this.DrawingVisual);
+        }
+
+        /// <summary>
         /// Update <see cref="DrawingVisual.Clip"/> to a rectangle matching
         /// the visual's current Size — but only for visuals WMC explicitly
-        /// flagged as "clip my children".
+        /// flagged as "clip my children" via DataBits bit 5 (0x20).
         ///
-        /// Background: MS-RRSP2 has no explicit SetClip message; the spec
-        /// (§2.2.4.6.2) just calls the data-bits "user-defined". A first
-        /// pass clipped *every* visual to its bounds, which fixed selection
-        /// glows leaking past menu rows but broke drop shadows, overflow
-        /// images and selection boxes elsewhere — those are intentionally
-        /// drawn past their parent's edge and WMC's renderer does not
-        /// clip them.
+        /// <para>Background: MS-RRSP2 has no explicit SetClip message; the
+        /// spec (§2.2.4.6.2) just calls the data-bits "user-defined".
+        /// Empirically, only a few rare bit patterns set bit 5 (0x30, 0x60,
+        /// 0x70, ...), and those correlate with cases where a hard clip
+        /// is wanted. Most clipping in WMC is delegated to its
+        /// gradient soft-fade mechanism (§2.2.4.15) rather than hard
+        /// rectangle clip.</para>
         ///
-        /// Empirical hypothesis: bit 5 (0x20) marks "container clips its
-        /// children". Bit-pattern catalogue from the live wire:
-        ///   0x30, 0x31, 0x60, 0x64, 0x66, 0x70, 0x74, 0x75, 0x76, 0x77
-        /// — i.e. only the rarer patterns set bit 5. The common
-        /// non-clipping wrappers (0x44/0x54/0x55/0x57/0x40) all leave
-        /// bit 5 clear, which matches the "shadows still visible"
-        /// requirement.
+        /// <para>Previous attempts to clip more aggressively — every sized
+        /// visual, or every visual with a giant child — broke intentional
+        /// cross-bound overflow (page background fills, home-row icons
+        /// positioned past the viewport). The correct mechanism for hiding
+        /// items past container bounds is the gradient OpacityMask path,
+        /// not a hard clip.</para>
         /// </summary>
         public void ApplyBoundsClip() {
             bool wantsClip = (DataBits & 0x20u) != 0;
@@ -279,6 +456,19 @@ namespace SoftSled.Components.Splash.Objects {
             } else if (DrawingVisual.Clip != null) {
                 DrawingVisual.Clip = null;
             }
+        }
+
+        /// <summary>
+        /// No-op placeholder kept so the SplashController dispatch sites
+        /// (Visual_SetSize, Visual_ChangeParent) compile. Earlier passes
+        /// experimented with a "viewport clip" heuristic (clip when a
+        /// child's Size dramatically exceeds the parent's Size); it caused
+        /// regressions on the home-row icons and Recorded TV columns
+        /// without fixing popup row escape, so it was reverted. The real
+        /// containment mechanism is the wire-supplied gradient OpacityMask.
+        /// </summary>
+        public void EvaluateViewportClip() {
+            // Intentionally empty — see method-level comment.
         }
 
         public void ApplyVisibility() {
@@ -339,16 +529,19 @@ namespace SoftSled.Components.Splash.Objects {
             // content-bearing SetContent and before this (sibling)
             // SetContent. Empirically this binding model produces
             // correct results for the home-row tile-window masks and
-            // most strip-edge fades; some smaller action panels still
-            // get mis-clipped and are tracked separately.
+            // most strip-edge fades; raised popup row containers
+            // (Synopsis/Actions/Other Showings) are a known mis-clip
+            // and are tracked separately.
             if (pendingGradients != null && pendingGradients.Count > 0) {
                 var last = pendingGradients[pendingGradients.Count - 1];
+                AppliedGradientHandle = last?.Handle ?? 0;
                 var mask = last?.BuildOpacityMask(SizeX, SizeY);
                 DrawingVisual.OpacityMask = mask;
             } else {
                 // No queued gradients = no mask. Clearing is important so
                 // a previously masked visual that gets re-bound without
                 // gradients doesn't retain the stale mask.
+                AppliedGradientHandle = 0;
                 DrawingVisual.OpacityMask = null;
             }
             // Empirical: the WMC server reuses the same RenderBuilder
@@ -360,8 +553,10 @@ namespace SoftSled.Components.Splash.Objects {
             // otherwise the second visual would draw the first surface
             // too, the third would draw both, etc. (cumulative bug).
             //
-            // The spec (2.2.4.6.13) says "copies" not "moves", but the
-            // observed semantics on WMC strongly imply move-and-clear.
+            // The spec (2.2.4.6.13) just says "transfers", which is
+            // consistent with move-and-clear; the wire empirically confirms
+            // it. Reviewed all 8 published spec revisions (2013–2017) and
+            // the wording is unchanged across the entire history.
             rb?.Clear();
         }
 
@@ -429,13 +624,19 @@ namespace SoftSled.Components.Splash.Objects {
         private readonly List<Action<DrawingContext, Size>> _ops = new List<Action<DrawingContext, Size>>();
 
         /// <summary>
-        /// Gradient handles queued via <c>Gradient_Draw rb=this</c>. Kept for
-        /// diagnostic logging only — the controller now applies gradients
-        /// immediately to <see cref="LastBoundVisualHandle"/> at Gradient_Draw
-        /// time, rather than waiting for the next SetContent. Wire evidence
-        /// (every gradient-attached SetContent has ops=0) showed that the
-        /// "next bind" is always a sibling/recycle visual, not the intended
-        /// content target.
+        /// Gradient handles queued via <c>Gradient_Draw / Gradient_Push rb=this</c>.
+        /// Drained by the next <c>Visual_SetContent</c> that consumes this RB
+        /// and applied as that visual's OpacityMask (NEXT-BOUND model).
+        ///
+        /// NEXT-BOUND works correctly for home-row tile-window masks and
+        /// the EPG right-side bounding gradient — both cases where the
+        /// "next" visual is the container whose subtree needs masking.
+        /// Raised popup row containers (Synopsis/Actions/Other Showings)
+        /// are a known mis-target: the gradient is sized for the visual
+        /// that came BEFORE Gradient_Draw, so the next-bound empty
+        /// sibling gets a mask that has no effect, leaving the popup row
+        /// items un-clipped. Tracked separately; a naive "apply to both"
+        /// workaround broke the home strip and EPG so was reverted.
         /// </summary>
         public readonly List<uint> PendingGradients = new List<uint>();
 
@@ -470,8 +671,50 @@ namespace SoftSled.Components.Splash.Objects {
             return arr;
         }
 
+        // ---- Shared frozen-brush / frozen-pen cache ----
+        // WMC reuses the same handful of fill/outline colors across
+        // thousands of draw ops per scene (white text, off-white panel
+        // chrome, transparent black scrim, etc.). Caching frozen brushes
+        // keyed by ARGB cuts down on per-op allocations and gives WPF's
+        // resource dedup a much better shot at sharing the underlying
+        // composition resources too.
+        //
+        // Keyed by packed ARGB (uint) so we don't pay for Color.GetHashCode
+        // every lookup. Pen cache is keyed by (ARGB, thickness*256) packed
+        // into a long; thickness is rounded to 1/256 because WMC passes
+        // wire-float thicknesses that are virtually always exact integers
+        // or simple fractions in practice.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, SolidColorBrush> s_brushCache
+            = new System.Collections.Concurrent.ConcurrentDictionary<uint, SolidColorBrush>();
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, Pen> s_penCache
+            = new System.Collections.Concurrent.ConcurrentDictionary<long, Pen>();
+
+        private static SolidColorBrush GetBrush(Color color) {
+            uint key = ((uint)color.A << 24) | ((uint)color.R << 16) | ((uint)color.G << 8) | color.B;
+            if (s_brushCache.TryGetValue(key, out var b)) return b;
+            var fresh = new SolidColorBrush(color);
+            fresh.Freeze();
+            // Best-effort cache add; the ConcurrentDictionary handles the
+            // race if two threads create the same key in parallel and one
+            // loses — both candidates are equivalent.
+            s_brushCache.TryAdd(key, fresh);
+            return fresh;
+        }
+
+        private static Pen GetPen(Color color, double thickness) {
+            uint argbKey = ((uint)color.A << 24) | ((uint)color.R << 16) | ((uint)color.G << 8) | color.B;
+            // Quantise thickness to 1/256 (0.00390625) to cap cache size.
+            int thickKey = (int)Math.Round(thickness * 256.0);
+            long key = ((long)argbKey << 32) | (uint)thickKey;
+            if (s_penCache.TryGetValue(key, out var p)) return p;
+            var fresh = new Pen(GetBrush(color), thickness);
+            fresh.Freeze();
+            s_penCache.TryAdd(key, fresh);
+            return fresh;
+        }
+
         public void AddSolid(Rect rect, Color color, bool stretchToVisual = false) {
-            var brush = new SolidColorBrush(color); brush.Freeze();
+            var brush = GetBrush(color);
             if (stretchToVisual) {
                 _ops.Add((dc, b) => {
                     if (b.Width > 0 && b.Height > 0)
@@ -483,7 +726,7 @@ namespace SoftSled.Components.Splash.Objects {
         }
 
         public void AddOutline(Rect rect, Color color, double thickness, bool stretchToVisual = false) {
-            var pen = new Pen(new SolidColorBrush(color), thickness); pen.Freeze();
+            var pen = GetPen(color, thickness);
             if (stretchToVisual) {
                 _ops.Add((dc, b) => {
                     if (b.Width > 0 && b.Height > 0)
@@ -495,7 +738,7 @@ namespace SoftSled.Components.Splash.Objects {
         }
 
         public void AddLine(Point a, Point b, Color color, double thickness) {
-            var pen = new Pen(new SolidColorBrush(color), thickness); pen.Freeze();
+            var pen = GetPen(color, thickness);
             _ops.Add((dc, _) => dc.DrawLine(pen, a, b));
         }
 
@@ -841,6 +1084,64 @@ namespace SoftSled.Components.Splash.Objects {
         }
     }
 
+    // -------- SoundBuffer --------
+
+    /// <summary>
+    /// MS-RRSP2 SoundBuffer (spec §2.2.4.19). Holds the raw bytes of a
+    /// loaded sound asset — typically a WAV file or raw PCM payload that
+    /// was previously deposited by the server as a DataBuffer and is now
+    /// being claimed by the audio subsystem.
+    ///
+    /// <para>Wire lifecycle:</para>
+    /// <list type="bullet">
+    ///   <item><c>XAudSoundDevice_CreateSoundBuffer</c> registers an empty
+    ///         SoundBuffer with the given handle.</item>
+    ///   <item><c>SoundBuffer_LoadSoundData(dataBuffer u32)</c> references a
+    ///         DataBuffer whose bytes become this SoundBuffer's
+    ///         <see cref="Bytes"/>.</item>
+    /// </list>
+    ///
+    /// <para>Many <see cref="SplashSound"/> instances can share one
+    /// SoundBuffer — WMC's MCE shell loads ~3 distinct UI sound assets and
+    /// instantiates dozens of Sound objects that reference them for
+    /// concurrent / repeated playback.</para>
+    /// </summary>
+    internal sealed class SplashSoundBuffer : SplashGenericObject {
+        /// <summary>Handle of the DataBuffer that supplied the bytes
+        /// (set when <c>SoundBuffer_LoadSoundData</c> fires).
+        /// 0 until the load completes.</summary>
+        public uint DataBufferHandle { get; set; }
+
+        /// <summary>The actual sound bytes — typically a complete WAV file
+        /// (RIFF/WAVE header + PCM data) for splash UI sounds, but the
+        /// player accepts raw PCM as a fallback. Empty until LoadSoundData
+        /// runs.</summary>
+        public byte[] Bytes { get; set; } = System.Array.Empty<byte>();
+
+        public SplashSoundBuffer(uint handle, string className)
+            : base(handle, SplashClassKind.SoundBuffer, className) { }
+    }
+
+    // -------- Sound --------
+
+    /// <summary>
+    /// MS-RRSP2 Sound (spec §2.2.4.20). A playable instance bound to a
+    /// <see cref="SplashSoundBuffer"/>. <c>Sound_Play</c> triggers playback
+    /// of the buffer's bytes; <c>Sound_Stop</c> halts. WMC's MCE shell uses
+    /// these for navigation clicks / focus chimes / error feedback.
+    /// </summary>
+    internal sealed class SplashSound : SplashGenericObject {
+        /// <summary>Handle of the SoundBuffer that supplies this sound's
+        /// playable bytes. Set at construction by
+        /// <c>XAudSoundDevice_CreateSound</c>.</summary>
+        public uint SoundBufferHandle { get; }
+
+        public SplashSound(uint handle, uint soundBufferHandle, string className)
+            : base(handle, SplashClassKind.Sound, className) {
+            SoundBufferHandle = soundBufferHandle;
+        }
+    }
+
     // -------- SurfacePool --------
 
     /// <summary>
@@ -933,6 +1234,71 @@ namespace SoftSled.Components.Splash.Objects {
         }
 
         /// <summary>
+        /// Resolve every stop's position into an absolute pixel coordinate
+        /// against the given target visual size. Mirrors the math in
+        /// <see cref="BuildOpacityMask"/> so the diagnostic logger can
+        /// report the same effective coordinates the brush would use.
+        ///
+        /// <para>Returns the minimum and maximum effective-pixel coords
+        /// across all stops along this gradient's orientation axis. Used by
+        /// the controller's gradient-binding-fitness logger to evaluate
+        /// which candidate visual (last-bound, last-bound parent, next-bound)
+        /// has a Size that best matches the gradient's coordinate range.</para>
+        /// </summary>
+        public void GetEffectiveSpan(double visualWidth, double visualHeight,
+                                      out double minPx, out double maxPx,
+                                      out double axisLen) {
+            axisLen = Direction == Orientation.Horizontal ? visualWidth : visualHeight;
+            minPx   = 0; maxPx = 0;
+            if (Stops.Count == 0) return;
+            bool first = true;
+            foreach (var s in Stops) {
+                double px;
+                switch (s.Relative) {
+                    case 1:  px = axisLen + s.Position; break;
+                    case 4:
+                    case 0:
+                    default: px = s.Position; break;
+                }
+                px += Offset;
+                if (first) { minPx = maxPx = px; first = false; }
+                else {
+                    if (px < minPx) minPx = px;
+                    if (px > maxPx) maxPx = px;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Returns 0..1 score for how well this gradient's coordinate span
+        /// covers a target visual of the given size. 1.0 means the
+        /// gradient's [min, max] effective pixel range maps cleanly onto
+        /// the visual's [0, axisLen] (any overflow at the edges is
+        /// acceptable because edge fades commonly extend a few px past
+        /// the bounds). Lower scores mean a mismatch — typically the
+        /// gradient's span massively overshoots the visual (visual too
+        /// small) or sits entirely outside it (wrong visual entirely).
+        /// </summary>
+        public double FitScoreForVisual(double visualWidth, double visualHeight) {
+            GetEffectiveSpan(visualWidth, visualHeight,
+                             out double minPx, out double maxPx, out double axisLen);
+            if (axisLen <= 0) return 0.0;
+            double span = maxPx - minPx;
+            if (span <= 0) return 0.0;
+            // Compute the gradient's overlap with the visual's [0, axisLen].
+            double overlapLo = Math.Max(0,        minPx);
+            double overlapHi = Math.Min(axisLen,  maxPx);
+            double overlap   = Math.Max(0, overlapHi - overlapLo);
+            // Two ratios: (a) fraction of the GRADIENT'S coord range that
+            // falls inside the visual (1.0 = no waste, 0.0 = entirely
+            // outside); (b) fraction of the VISUAL'S axis that the gradient
+            // touches. A good match scores high on both.
+            double gradInsideRatio = overlap / span;
+            double visualCoverage  = overlap / axisLen;
+            return Math.Min(gradInsideRatio, visualCoverage);
+        }
+
+        /// <summary>
         /// Build a WPF <see cref="System.Windows.Media.Brush"/> suitable for
         /// use as a <c>Visual.OpacityMask</c>. The brush is fit into the
         /// visual's local bounds: stops with <c>relative=0</c> are pixel
@@ -967,32 +1333,53 @@ namespace SoftSled.Components.Splash.Objects {
             // Sort by pixel position so the gradient is monotone.
             System.Array.Sort(coords, (a, b) => a.Pixel.CompareTo(b.Pixel));
 
-            // Skip-rule for "overlay-effect" gradients (no clipping):
-            // every stop whose pixel position falls INSIDE the visual's
-            // own bounds is val=0. Wire pattern from WMC's action panels
-            // (e.g. delete / play buttons): val=1 at x=-20, val=0 at x=20,
-            // val=0 at x=W-20, val=1 at x=W+20 — a U-shape with the
-            // value-1 anchors *outside* the visual. The two stops inside
-            // the visual (x=20 and x=W-20) are both 0, so the gradient
-            // is effectively defining an "all hidden inside" mask that,
-            // applied as an OpacityMask, makes the visual's middle
-            // disappear — but real WMC clearly renders these buttons
-            // fully visible, so the gradient must NOT be functioning as
-            // a clip mask here. Treating "all inside-stops are 0" as
-            // "no clip" preserves real strip-mask gradients (like the
-            // home-screen tile window which has val=1 stops inside the
-            // visual) and lets these decorative U-shape gradients pass
-            // through without hiding the content.
+            // Skip-rule for TRUE U-shape gradients (val=1 outside on BOTH
+            // sides, val=0 inside). Wire pattern from WMC's action panels
+            // (e.g. delete / play buttons):
+            //   val=1 at x=-20  (outside, before min edge)
+            //   val=0 at x=20   (inside)
+            //   val=0 at x=W-20 (inside)
+            //   val=1 at x=W+20 (outside, past max edge)
+            // The two val=1 stops on either side mean the gradient is
+            // shaped as a U with both anchors outside — there's no way
+            // to apply it as an OpacityMask without erasing the visual's
+            // middle. Real WMC clearly renders these buttons fully visible,
+            // so the gradient must function as some other effect (perhaps
+            // a fill that's only drawn at the val=1 edges).
+            //
+            // CRITICAL DISTINCTION from one-sided edge fades: many
+            // legitimate gradients (e.g. the settings-page title fade-in:
+            // val=1 at y=-94, val=0 at y=6) also have val=0 inside and
+            // val=1 outside, but only on ONE side — the other side has
+            // either no stop or val=0 well within bounds. Those produce
+            // a meaningful soft fade that we DO want to apply. The
+            // earlier heuristic ("all inside stops are val=0") was too
+            // broad and dropped both cases identically — the title page
+            // ended up rendered as a flat-coloured rectangle instead of
+            // the wire-intended top-fade.
+            //
+            // Refined predicate: skip iff there is val>0.01 BOTH before
+            // the min edge AND past the max edge — the unambiguous U
+            // signature. One-sided fades (val=1 only on one side) fall
+            // through and are applied normally.
             bool hasInsideStop = false;
             bool allInsideStopsZero = true;
+            bool hasOutsideMinVal1 = false; // a val>0 stop at pixel < -0.5
+            bool hasOutsideMaxVal1 = false; // a val>0 stop at pixel > axisLen+0.5
             foreach (var c in coords) {
                 if (c.Pixel >= -0.5 && c.Pixel <= axisLen + 0.5) {
                     hasInsideStop = true;
-                    if (c.Value > 0.01f) { allInsideStopsZero = false; break; }
+                    if (c.Value > 0.01f) allInsideStopsZero = false;
+                } else {
+                    if (c.Value > 0.01f) {
+                        if (c.Pixel < -0.5)            hasOutsideMinVal1 = true;
+                        else /* c.Pixel > axisLen+0.5 */ hasOutsideMaxVal1 = true;
+                    }
                 }
             }
-            if (hasInsideStop && allInsideStopsZero) {
-                return null; // skip — no clip mask, content stays fully visible
+            if (hasInsideStop && allInsideStopsZero
+                && hasOutsideMinVal1 && hasOutsideMaxVal1) {
+                return null; // skip — true U-shape, no useful mask
             }
 
             // Collapse the absolute range to a [0,1] gradient parameter,

@@ -1,14 +1,16 @@
 # SoftSled2
 A revival of the old SoftSled Project, an open source Windows Media Center Extender
 
-![Screenshot of the Dev Shell](https://raw.githubusercontent.com/L2N6H5B3/SoftSled2/master/Screenshot_230425.png)
+![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development-ffme/Screenshots/Screenshot%20(1).png)
+![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development-ffme/Screenshots/Screenshot%20(2).png)
+![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development-ffme/Screenshots/Screenshot%20(3).png)
+![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development-ffme/Screenshots/Screenshot%20(4).png)
+![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development-ffme/Screenshots/Screenshot%20(5).png)
+![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development-ffme/Screenshots/Screenshot%20(6).png)
+![Screenshot of the Shell](https://github.com/L2N6H5B3/SoftSled2/blob/development-ffme/Screenshots/Screenshot%20(7).png)
 
 ## Current Progress
-* Audio RTSP communication needs work with ffplay and parsing RTSP / RTP packets
-* Video RTSP communication needs work with ffplay and parsing RTSP / RTP packets
-   * H.264 working
-   * MPEG2-TS underway
-   * Recorded TV and Live TV playback over H.264 is working!
+* Remote Rendering Video PIP / Zoom broken - not able to figure out where the instruction comes from to move / scale a video surface while in Remote Rendering mode.
 
 ## Finished Elements
 * Full Pairing Configuration (Including on-the-fly Extender Certificate Generation)
@@ -18,9 +20,14 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 * Extender Device Media Control (DMCT)
 * Interface Sounds
 * RDP Bitmap OR Remote Rendering capabilities
+* Audio RTSP Playback
+   * MP3
+   * PCM
+* Video RTSP Playback
+   * MPEG2
+   * H.264
 
 ## Future Requirements
-* 
 * Implement media controls (play/pause/previous/next) media from client
 * Create RC6 remote control forwarder
 

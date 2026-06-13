@@ -1,17 +1,26 @@
-﻿using FFmpeg.AutoGen;
-using Rtsp.Messages;
+﻿using Rtsp.Messages;
 using SoftSled.Components.AudioVisual;
 using SoftSled.Components.AudioVisual.FormatStructures;
+using SoftSled.Components.Communication;
+using SoftSledWPF.Components.Utility;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
-using System.Security.Cryptography;
-using System.Text;
 
 namespace SoftSled.Components.RTSP {
     class RTSPClient {
+
+        #region Enums #########################################################
+
+        public enum RTP_TRANSPORT { UDP, TCP, MULTICAST, UNKNOWN };
+        public enum MEDIA_REQUEST { VIDEO_ONLY, AUDIO_ONLY, VIDEO_AND_AUDIO };
+        private enum RTSP_STATUS { WaitingToConnect, Connecting, ConnectFailed, Connected };
+
+        #endregion ############################################################
+
+
+        #region Variables #####################################################
 
         private string UserAgent = "User-Agent: MCExtender/1.50.X.090522.00"; // Assume Xbox 360?
         //private string UserAgent = "User-Agent: MCExtender/1.50.0.0";
@@ -19,29 +28,7 @@ namespace SoftSled.Components.RTSP {
 
         private string AcceptHeader = "Accept: application/sdp";
         private string LanguageHeader = "Accept-Language: en-us, *;q=0.1";
-        //describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
         private string SupportedHeader = "Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile";
-
-
-        // Events that applications can receive
-        public event Received_SPS_PPS_Delegate Received_SPS_PPS;
-        public event Received_VPS_SPS_PPS_Delegate Received_VPS_SPS_PPS;
-        public event Received_NALs_Delegate Received_NALs;
-        public event Received_G711_Delegate Received_G711;
-        public event Received_AMR_Delegate Received_AMR;
-        public event Received_AAC_Delegate Received_AAC;
-
-        // Delegated functions (essentially the function prototype)
-        public delegate void Received_SPS_PPS_Delegate(byte[] sps, byte[] pps); // H264
-        public delegate void Received_VPS_SPS_PPS_Delegate(byte[] vps, byte[] sps, byte[] pps); // H265
-        public delegate void Received_NALs_Delegate(List<byte[]> nal_units); // H264 or H265
-        public delegate void Received_G711_Delegate(String format, List<byte[]> g711);
-        public delegate void Received_AMR_Delegate(String format, List<byte[]> amr);
-        public delegate void Received_AAC_Delegate(String format, List<byte[]> aac, uint ObjectType, uint FrequencyIndex, uint ChannelConfiguration);
-
-        public enum RTP_TRANSPORT { UDP, TCP, MULTICAST, UNKNOWN };
-        public enum MEDIA_REQUEST { VIDEO_ONLY, AUDIO_ONLY, VIDEO_AND_AUDIO };
-        private enum RTSP_STATUS { WaitingToConnect, Connecting, ConnectFailed, Connected };
 
         Rtsp.RtspTcpTransport rtsp_socket = null;               // RTSP connection
         volatile RTSP_STATUS rtsp_socket_status = RTSP_STATUS.WaitingToConnect;
@@ -50,18 +37,10 @@ namespace SoftSled.Components.RTSP {
         Rtsp.UDPSocket video_udp_pair = null;                   // Pair of UDP ports used in RTP over UDP mode or in MULTICAST mode
         Rtsp.UDPSocket audio_udp_pair = null;                   // Pair of UDP ports used in RTP over UDP mode or in MULTICAST mode
         string url = "";                                        // RTSP URL (username & password will be stripped out
-        string base_url = "";                                   // RTSP Base URL
-        string username = "";                                   // Username
-        string password = "";                                   // Password
         string hostname = "";                                   // RTSP Server hostname or IP address
         int port = 0;                                           // RTSP Server TCP Port number
         string session = "";                                    // RTSP Session
-        string auth_type = null;                                // cached from most recent WWW-Authenticate reply
-        string realm = null;                                    // cached from most recent WWW-Authenticate reply
-        string nonce = null;                                    // cached from most recent WWW-Authenticate reply
-        uint ssrc = 12345;
-        // Per-stream client SSRCs for RTCP reporter/sender fields. Xbox uses
-        // distinct SSRCs per stream (audio=0xC252C62D, video=0x6043AC81).
+        // Per-stream client SSRCs for RTCP reporter/sender fields.
         // Random per-session, but stable for the life of the session.
         private readonly uint _audioReporterSsrc = (uint)(0xC2520000u | ((uint)Guid.NewGuid().GetHashCode() & 0xFFFFu));
         private readonly uint _videoReporterSsrc = (uint)(0x60430000u | ((uint)Guid.NewGuid().GetHashCode() & 0xFFFFu));
@@ -69,72 +48,21 @@ namespace SoftSled.Components.RTSP {
         bool client_wants_audio = false;                        // Client wants to receive Audio
 
         Uri video_uri = null;                                   // URI used for the Video Track
-        int video_payload = -1;                                 // Payload Type for the Video. (often 96 which is the first dynamic payload value. Bosch use 35)
-        int video_data_channel = -1;                            // RTP Channel Number used for the video RTP stream or the UDP port number
-        int video_rtcp_channel = -1;                            // RTP Channel Number used for the video RTCP status report messages OR the UDP port number
-        bool h264_sps_pps_fired = false;                        // True if the SDP included a sprop-Parameter-Set for H264 video
-        bool h265_vps_sps_pps_fired = false;                    // True if the SDP included a sprop-vps, sprop-sps and sprop_pps for H265 video
-        string video_codec = "";                                // Codec used with Payload Types 96..127 (eg "H264")
-
         Uri audio_uri = null;                                   // URI used for the Audio Track
+        int video_payload = -1;                                 // Payload Type for the Video. (often 96 which is the first dynamic payload value. Bosch use 35)
         int audio_payload = -1;                                 // Payload Type for the Video. (often 96 which is the first dynamic payload value)
+        int video_data_channel = -1;                            // RTP Channel Number used for the video RTP stream or the UDP port number
         int audio_data_channel = -1;                            // RTP Channel Number used for the audio RTP stream or the UDP port number
+        int video_rtcp_channel = -1;                            // RTP Channel Number used for the video RTCP status report messages OR the UDP port number
         int audio_rtcp_channel = -1;                            // RTP Channel Number used for the audio RTCP status report messages OR the UDP port number
-        string audio_codec = "";                                // Codec used with Payload Types (eg "PCMA" or "AMR")
 
         bool server_supports_get_parameter = false;             // Used with RTSP keepalive
         bool server_supports_set_parameter = false;             // Used with RTSP keepalive
         System.Timers.Timer keepalive_timer = null;             // Used with RTSP keepalive
 
-        // Annex B start code (0x00 0x00 0x00 0x01)
-        private static readonly byte[] AnnexBStartCode = { 0x00, 0x00, 0x00, 0x01 };
-
-        Rtsp.H264Payload h264Payload = null;
-        Rtsp.H265Payload h265Payload = null;
-        Rtsp.G711Payload g711Payload = new Rtsp.G711Payload();
-        Rtsp.AMRPayload amrPayload = new Rtsp.AMRPayload();
-        Rtsp.AACPayload aacPayload = null;
+        List<RtspRequestSetup> setup_messages = new List<RtspRequestSetup>(); // Setup messages still to send
 
         Dictionary<int, WMFPayloadData> wmfPayloadDataDict = new Dictionary<int, WMFPayloadData>();
-
-        // Phase-0c finding: WMC's WMPNss server picks an x-wmf-pf audio PT
-        // whose fmtp config is `audio/vnd.wave;codec=1;config=...` — i.e. a
-        // raw PCM WAVEFORMATEX inside the WMRTP wrapper. The depacketizer
-        // already strips the wrapper; this sink takes the resulting PCM
-        // MAUs and feeds NAudio for actual playback. Null until SDP
-        // processing identifies a usable PT (see ProcessAudioPcmSink call
-        // after the SDP for-loop).
-        private WmrptPcmNAudioSink _pcmAudioSink;
-
-        // WMPNss also negotiates plain MPEG-Audio-over-RTP (RFC 2250) when
-        // the source is an MP3 file — rtpmap MPA/90000/N, payload type 96,
-        // with a 4-byte RFC 2250 §3.5 sub-header (MBZ+Frag_offset) preceding
-        // raw MP3 frames. NOT wrapped in WMRTP, so the depacketizer path is
-        // bypassed; we feed packets directly to this sink which strips the
-        // sub-header, peels MP3 frames, decodes via NAudio's ACM wrapper.
-        //
-        // The SAME sink is reused for WMC's recorded-TV MPEG-ES mode, which
-        // advertises `vnd.ms.wm-MPA/90000/N` instead. In that mode the MPEG
-        // audio frames are wrapped in WMRTP (so we route through the audio
-        // depacketizer first) and there is no RFC 2250 sub-header on the
-        // resulting MAU. _mpaSinkMode tracks which path is active.
-        private Mp3OverRtpAudioSink _mpaAudioSink;
-        private MpaSinkMode         _mpaSinkMode;
-
-        // WMC recorded-TV MPEG-ES video-only path (vnd.ms.wm-MPV, no
-        // matching audio). The videoDepacketizer's NalUnitReady emits one
-        // MPEG video access unit per MAU; we enqueue them into a codec-
-        // agnostic producer and hand the producer to FFME via
-        // AsfFfmeInputStream forced to "mpegvideo". Active ONLY when audio
-        // is absent or unsupported — when both wm-MPV video AND wm-MPA
-        // audio are present, the PS pipeline below takes priority.
-        private AsfStreamProducer  _mpvVideoProducer;
-        private AsfFfmeInputStream _mpvVideoInputStream;
-        private long _mpvMauCount;
-        private long _mpvBytesSubmitted;
-        private long _mpvSyncPointsSeen;
-        private System.IO.StreamWriter _mpvDiagLog;
-        private readonly Stopwatch _mpvDiagSw = new Stopwatch();
 
         // Wire-codec tracking. SDP advertises multiple PTs per direction;
         // the server picks at PLAY time. We commit to a specific pipeline
@@ -145,137 +73,6 @@ namespace SoftSled.Components.RTSP {
         private string _wireAudioCodec;       // null until first audio packet
         private string _wireVideoCodec;       // null until first video packet
         private readonly object _commitLock = new object();
-
-        // Cached RTP-Info anchoring values from the PLAY response. The
-        // PS muxer is created LATER (lazily, on first MPA+MPV wire
-        // packets observed), so we can't apply these immediately. Stored
-        // here and replayed when TrySetupMpegPsPipeline creates the
-        // muxer. uint? to distinguish "not seen" from "seen 0".
-        private uint? _pendingAudioRtptime;
-        private uint? _pendingVideoRtptime;
-
-        // Modern WMC audio path: X-WMF-PF audio/vnd.wave with raw PCM. The
-        // WMRTP depacketizer produces clean s16le samples per MAU which
-        // we pump into FFME via a separate IMediaInputStream. Replaces the
-        // NAudio-direct pipeline for media playback — user preference is
-        // to keep NAudio for the WMC UI fast-path audio only, and have all
-        // media (recorded TV, music, etc.) route through FFME for clock
-        // consistency and codec-agnostic decoding.
-        private AsfStreamProducer  _pcmFfmeProducer;
-        private AsfFfmeInputStream _pcmFfmeInputStream;
-        private long _pcmFfmeChunks;
-        private long _pcmFfmeBytesPushed;
-        private int  _pcmSampleRate;
-        private int  _pcmChannels;
-        private int  _pcmBitsPerSample;
-        private System.IO.StreamWriter _pcmFfmeDiagLog;
-        private readonly Stopwatch _pcmFfmeDiagSw = new Stopwatch();
-
-        // Modern WMC video path: X-WMF-PF video/vnd.avi with codec="H264"
-        // — used by live TV / DVR-MS captures that pair PCM audio with
-        // H.264 video. The depacketizer emits H264 NAL units (SPS/PPS/AUD
-        // are in-band so ffmpeg's H264 parser can pick them up without
-        // extradata). Push into AsfStreamProducer + AsfFfmeInputStream
-        // with forcedInputFormat="h264". Active when wmfPayloadDataDict
-        // contains an X-WMF-PF video PT whose fmtp identifies H264, in
-        // which case TrySetupMpegPsPipeline declines and we render video
-        // here while PCM sink renders audio in parallel (independent
-        // timelines — same trade-off as the original wm-MPA + wm-MPV
-        // pre-PS pipeline state).
-        private AsfStreamProducer  _h264VideoProducer;
-        private AsfFfmeInputStream _h264VideoInputStream;
-        private long _h264MauCount;
-        private long _h264BytesSubmitted;
-        private long _h264SyncPointsSeen;
-        private System.IO.StreamWriter _h264DiagLog;
-        private readonly Stopwatch _h264DiagSw = new Stopwatch();
-
-        // MPEG Program Stream pipeline (preferred path when SDP has both
-        // vnd.ms.wm-MPV video AND vnd.ms.wm-MPA audio). Muxes both streams
-        // into a single PS feed to FFME, which then handles A/V sync via
-        // its master clock — solves both the Layer-I-decode-needed problem
-        // (libav decodes via FFmpeg) and the "two independent FFME elements
-        // drift" problem (one pipeline, one clock).
-        private MpegPsMuxer        _psMuxer;
-        private AsfStreamProducer  _psProducer;
-        private AsfFfmeInputStream _psInputStream;
-        private long _psVideoMaus;
-        private long _psAudioMaus;
-        private long _psBytesPushed;
-        private System.IO.StreamWriter _psDiagLog;
-        private readonly Stopwatch _psDiagSw = new Stopwatch();
-
-        // MPEG Transport Stream pipeline. Forward-looking unified container
-        // for modern codecs (H264 + LPCM today; MPA/MPV/AC3 to follow).
-        // Single FFME input stream → single libav clock → A/V sync without
-        // the dual-MediaElement race the PCM-FFME + H264-producer path hit.
-        private MpegTsMuxer        _tsMuxer;
-        private AsfStreamProducer  _tsProducer;
-        private AsfFfmeInputStream _tsInputStream;
-        private long _tsVideoMaus;
-        private long _tsAudioMaus;
-        private long _tsBytesPushed;
-        private System.IO.StreamWriter _tsDiagLog;
-        private readonly Stopwatch _tsDiagSw = new Stopwatch();
-
-        // Audio-only MP3 pipeline through FFME. Used when SDP advertises
-        // an MPA or vnd.ms.wm-MPA audio codec WITHOUT a corresponding
-        // video codec — i.e. music-file playback. libav handles all MPEG
-        // layers (I/II/III) and FFME provides position / duration that
-        // reflect the actual track. Replaces the legacy Mp3OverRtpAudioSink
-        // → NAudio path for these sessions; the sink class itself stays
-        // around as an opt-in fallback (env var SOFTSLED_AUDIO_VIA_NAUDIO=1).
-        private AsfStreamProducer  _mp3FfmeProducer;
-        private AsfFfmeInputStream _mp3FfmeInputStream;
-        private long _mp3FfmeChunks;
-        private long _mp3FfmeBytesPushed;
-        private System.IO.StreamWriter _mp3FfmeDiagLog;
-        private readonly Stopwatch _mp3FfmeDiagSw = new Stopwatch();
-        private bool _mp3FfmeNeedsFrameStrip;  // true for RFC 2250 (4 B MBZ/Frag);
-                                                // false for WMRTP-wrapped wm-MPA.
-
-        /// <summary>
-        /// Fired once the MPEG-ES video producer + FFME input stream are
-        /// constructed and the depacketizer is wired. The handler (typically
-        /// AvCtrlHandler → MainWindow) should call
-        /// <c>Media.Open(IMediaInputStream)</c> on the WPF dispatcher.
-        /// FFME's Read will block until media data starts flowing after PLAY.
-        /// </summary>
-        public event Action<Unosquare.FFME.Common.IMediaInputStream> VideoPipelineReady;
-
-        /// <summary>
-        /// Fired once an audio-only FFME pipeline is constructed (currently
-        /// only the X-WMF-PF raw-PCM path). The host UI subscribes to it
-        /// and opens a *separate* FFME element for audio so the H264 video
-        /// element and the PCM audio element can render in parallel.
-        /// </summary>
-        public event Action<Unosquare.FFME.Common.IMediaInputStream> AudioPipelineReady;
-
-        private enum MpaSinkMode {
-            None        = 0,
-            /// <summary>rtpmap MPA — RFC 2250 with 4-byte MBZ+Frag prefix per packet.</summary>
-            Rfc2250     = 1,
-            /// <summary>rtpmap vnd.ms.wm-MPA — WMRTP-wrapped, MAU = raw MPEG frames.</summary>
-            WmrtpWrapped = 2,
-        }
-
-        // Direct-libav playback engine. When non-null, the depacketizer
-        // event handlers route MAUs straight here (and the FFME muxer
-        // cascade below is bypassed). Set by ExtenderSessionControl via
-        // SetPlaybackEngine after the engine is constructed; cleared on
-        // Stop. The engine implements IMediaController and is what
-        // AvCtrlHandler talks to for OpenMedia / Start / Pause / Stop /
-        // GetPosition / etc.
-        private SoftSled.Components.AudioVisual.Playback.SoftSledPlaybackEngine _playbackEngine;
-
-        /// <summary>
-        /// Bind (or unbind, with null) the direct-libav playback engine.
-        /// Once attached, depacketizer MAUs route to the engine instead
-        /// of the legacy FFME PS/TS muxer pipelines.
-        /// </summary>
-        public void SetPlaybackEngine(SoftSled.Components.AudioVisual.Playback.SoftSledPlaybackEngine engine) {
-            _playbackEngine = engine;
-        }
 
         // RTCP Receiver Report state. Phase-0c follow-up: WMPNss paces audio
         // at ~20% real-time. The first RR attempt (8-byte empty form) had no
@@ -302,12 +99,12 @@ namespace SoftSled.Components.RTSP {
         private long _videoPktsReceived;
         private ushort _audioBaseSeq;              // first RTP seq seen on audio (for ext-highest-seq)
         private ushort _audioHighestSeq;
-        private bool   _audioSeqInit;
-        private uint   _audioSeqCycles;            // upper 16 bits of extended highest seq
+        private bool _audioSeqInit;
+        private uint _audioSeqCycles;            // upper 16 bits of extended highest seq
         private ushort _videoBaseSeq;
         private ushort _videoHighestSeq;
-        private bool   _videoSeqInit;
-        private uint   _videoSeqCycles;
+        private bool _videoSeqInit;
+        private uint _videoSeqCycles;
         // Random CNAME (per-session) is enough for an SDES item; format is
         // typically "user@host" but raw GUID is accepted by WMPNss.
         private readonly string _rtcpCname = "softsled-" + Guid.NewGuid().ToString("N").Substring(0, 8);
@@ -330,23 +127,100 @@ namespace SoftSled.Components.RTSP {
         // t=80s" as "client is permanently broken, stop trying".
         private readonly Stopwatch _bfrRampStopwatch = new Stopwatch();
         private const int BfrRampDurationMs = 2000;     // 0 → TD over 2 s
-        private const ushort BfrTdMs        = 2000;     // matches SETUP Buffer-Info TD=2000
+        private const ushort BfrTdMs = 2000;     // matches SETUP Buffer-Info TD=2000
 
+        /// <summary>Optional provider of the REAL current audio buffer
+        /// occupancy (ms). When set, the audio BFR W3 field carries this
+        /// honest telemetry instead of the synthetic ramp-then-hold-at-TD
+        /// value. The Xbox-360 capture shows the real client reports its
+        /// genuine, dynamically-changing buffer level here (audio ramps
+        /// 0→~TD then wiggles just under it, dipping when under-fed) — that
+        /// dip is what makes WMPNss speed up to refill. Our flat value pegged
+        /// at TD never signalled a drain, so the server settled at ~94% audio
+        /// delivery. Set by ExternalSyncMediaController from the renderer.</summary>
+        private Func<int> _audioBufferMsProvider;
+        public void SetAudioBufferOccupancyProvider(Func<int> audioBufferMs) {
+            _audioBufferMsProvider = audioBufferMs;
+        }
+
+        /// <summary>Same as the audio provider but for the VIDEO BFR W3 — the
+        /// pacer's real buffered-frame span (ms). Without it the video W3 sat
+        /// flat at TD and the server under-delivered video ~3%, slowly draining
+        /// the jitter buffer until it starved (video froze mid-playback).</summary>
+        private Func<int> _videoBufferMsProvider;
+        public void SetVideoBufferOccupancyProvider(Func<int> videoBufferMs) {
+            _videoBufferMsProvider = videoBufferMs;
+        }
+
+        // Initialise Variables to hold Depacketizers
         WmrptVideoDepacketizer videoDepacketizer = null;
         WmrptAudioDepacketizer audioDepacketizer = null;
-        List<Rtsp.Messages.RtspRequestSetup> setup_messages = new List<Rtsp.Messages.RtspRequestSetup>(); // setup messages still to send
+        private bool _wmaFirstPayloadLogged;   // one-shot WMA payload dump (framing diagnostic)
 
-        // Constructor. The session has two depacketizers (audio + video) that
-        // produce MAUs; each MAU is routed by codec to one of the in-process
-        // sinks set up after SDP processing:
-        //   * x-wmf-pf audio (vnd.wave PCM)      → WmrptPcmNAudioSink
-        //   * MPA / vnd.ms.wm-MPA audio          → Mp3OverRtpAudioSink
-        //   * vnd.ms.wm-MPV video                → AsfStreamProducer → FFME
-        // No external processes are spawned. The previous external-ffmpeg /
-        // ffplay pipe path (AvPipeMuxer) has been removed.
+        int rtp_count = 0; // used for statistics
+        private int _vidRecvLoggedOnce;
+        private int _audRecvLoggedOnce;
+
+
+        // Flag set by Stop() so the keepalive miss-counter (and any other
+        // background path that observes a socket exception) knows the
+        // disconnect is user-initiated and shouldn't escalate to a
+        // Disconnected event.
+        private volatile bool _stopRequested;
+        private int _keepaliveConsecutiveFailures;
+
+
+        // First video MAU's wire-side RTP timestamp (90kHz units,
+        // stored as long so -1 can mean "not yet set" without
+        // colliding with valid 32-bit RTP values). Used by
+        // ExternalSyncMediaController in Phase 2.5 to compute the
+        // wireOffset between audio and video first-MAU times,
+        // letting it target the server's intended sync rather than
+        // the post-startup skew. Volatile-ish access via Interlocked
+        // because it's written on the depacketizer thread and read
+        // on the sync-controller dispatcher thread.
+        private long _firstVideoMauWirePtsRaw = -1L;
+
+        // Per-stream play-point RTP timestamps from the PLAY response's
+        // RTP-Info header (-1 = not seen). Each is its OWN stream's RTP clock.
+        private long _audioRtpInfoRtptime = -1L;
+        private long _videoRtpInfoRtptime = -1L;
+
+        // Incremented every time a PLAY response's RTP-Info is parsed (initial
+        // PLAY + every seek / trick-play PLAY). Lets the controller tell post-
+        // seek MAUs from pre-seek in-flight MAUs: after a seek it waits for this
+        // to advance before re-anchoring, so it doesn't latch the offset onto a
+        // stale pre-seek MAU using the old RTP-Info (which left A/V out of sync
+        // after a scrub).
+        private long _rtpInfoGeneration;
+        public long RtpInfoGeneration => System.Threading.Interlocked.Read(ref _rtpInfoGeneration);
+
+
+        // Drop counters for MAUs that arrive when no sink has been set up
+        // for the corresponding codec — log throttled at every 256 to avoid
+        // spam. Useful for telling apart "depacketizer dead" vs "no sink".
+        private long _videoDroppedNoSink;
+        private long _audioDroppedNoSink;
+
+
+        #endregion ############################################################
+
+
+        #region Constructor ###################################################
+
         public RTSPClient() {
             videoDepacketizer = new WmrptVideoDepacketizer();
             audioDepacketizer = new WmrptAudioDepacketizer();
+            // Dump the WMRTP per-MAU timing fields (header ts vs Send Time vs
+            // Correspondence NTP↔RTP vs Decode/Presentation/NPT) for the first
+            // few MAUs to the always-on diag log, so we can see which timeline
+            // THIS server populates for x-wmf-pf (the RTP header timestamp may
+            // not be the reliable presentation clock).
+            videoDepacketizer.DiagLog = msg => RtcpDiagLog(msg);
+            audioDepacketizer.DiagLog = msg => RtcpDiagLog(msg);
+            // Correspondence-offset cross-check (logged only; does NOT drive sync).
+            videoDepacketizer.TimingSample = (ntpSec, hdrRaw) => FeedCorrSample(true, ntpSec, hdrRaw);
+            audioDepacketizer.TimingSample = (ntpSec, hdrRaw) => FeedCorrSample(false, ntpSec, hdrRaw);
 
             videoDepacketizer.NalUnitReady += async (s, eventData) => {
                 // Discard encrypted MAUs — DRM is not supported.
@@ -368,119 +242,53 @@ namespace SoftSled.Components.RTSP {
                 MonitorPts(isAudio: false, rtpTs: eventData.timestamp);
                 ArmDecoderOpenStopwatch();
 
-                // Direct-libav playback engine path. Replaces the FFME
-                // PS/TS muxer cascade below — engine takes the raw MAU,
-                // converts the RTP timestamp to media-ms via the per-
-                // stream RTP clock, and submits to its libav VideoDecoder.
-                if (_playbackEngine != null) {
-                    _playbackEngine.OnDepacketizedVideo(eventData.data,
-                                                        eventData.timestamp,
-                                                        eventData.SyncPoint);
-                    return;
+                // Capture the first video MAU's wire-side RTP timestamp
+                // for the external-sync controller (Phase 2.5). It uses
+                // the difference between audioFirstWirePts and
+                // videoFirstWirePts to target the server's intended
+                // sync (which is the authoritative truth across the
+                // RTCP-SR mapping), rather than just holding whatever
+                // skew the streams happened to have at sync-baseline.
+                // Idempotent — only the first packet counts.
+                if (System.Threading.Interlocked.CompareExchange(ref _firstVideoMauWirePtsRaw, unchecked((long)(uint)eventData.timestamp), -1L) == -1L) {
+                    Debug.WriteLine($"[ext-sync-anchor] first video MAU rtpTs={eventData.timestamp}");
                 }
 
-                // MPEG-TS unified container (preferred for modern codecs).
-                // Same idea as the PS path but uses 188-byte TS packets
-                // with per-stream PIDs + PCR + PAT/PMT — supports H264 and
-                // raw-LE PCM in one stream, future-proof for everything
-                // else WMC sends.
-                if (_tsMuxer != null && _tsProducer != null) {
-                    byte[] muxed = _tsMuxer.MuxVideoAccessUnit(eventData.data,
-                                                               eventData.timestamp,
-                                                               eventData.SyncPoint);
-                    _tsProducer.SubmitChunk(muxed);
-                    _tsVideoMaus++;
-                    _tsBytesPushed += muxed.Length;
-                    if ((_tsVideoMaus % 100) == 1) {
-                        Trace.WriteLine($"[ts] vid#{_tsVideoMaus} len={eventData.data.Length} " +
-                                        $"muxed={muxed.Length} pts(rtp)={eventData.timestamp} " +
-                                        $"producerQ={_tsProducer.QueueDepth}");
-                        WriteTsDiagRow();
-                    }
-                    return;
+                // Diagnostic tap for the Video FPS Lab — forwards the video
+                // elementary stream to a libav+D3DImage benchmark consumer when
+                // one is attached. Cheap no-op (one null check) otherwise, so it
+                // stays out of the way in normal sessions.
+                if (AudioVisual.VideoFpsLab.LiveVideoTap.HasSubscribers) {
+                    AudioVisual.VideoFpsLab.LiveVideoTap.Publish(eventData.data, eventData.timestamp, _wireVideoCodec);
                 }
 
-                // MPEG-PS combined path (preferred when audio is also present).
-                // Mux video access unit into a PES packet stamped with the RTP
-                // timestamp as PTS, push into the shared producer. FFME's
-                // libav decodes both streams and syncs them on its own clock.
-                if (_psMuxer != null && _psProducer != null) {
-                    byte[] muxed = _psMuxer.MuxVideoAccessUnit(eventData.data,
-                                                               eventData.timestamp,
-                                                               eventData.SyncPoint);
-                    _psProducer.SubmitChunk(muxed);
-                    _psVideoMaus++;
-                    _psBytesPushed += muxed.Length;
-                    if ((_psVideoMaus % 100) == 1) {
-                        Trace.WriteLine($"[ps] vid#{_psVideoMaus} len={eventData.data.Length} " +
-                                        $"muxed={muxed.Length} pts(rtp)={eventData.timestamp} " +
-                                        $"producerQ={_psProducer.QueueDepth}");
-                        WritePsDiagRow();
-                    }
-                    return;
-                }
-
-                // Modern H264 video-only path (X-WMF-PF video/vnd.avi
-                // codec="H264"): the depacketizer emits H264 access units
-                // with in-band SPS/PPS/AUD NALUs. Push raw bytes — ffmpeg's
-                // H264 parser handles framing. Active in parallel with the
-                // PCM audio sink for current-WMC TV recordings.
-                if (_h264VideoProducer != null) {
-                    if (eventData.SyncPoint) _h264SyncPointsSeen++;
-                    _h264VideoProducer.SubmitChunk(eventData.data);
-                    _h264MauCount++;
-                    _h264BytesSubmitted += eventData.data.Length;
-                    if ((_h264MauCount % 100) == 1) {
-                        Trace.WriteLine($"[h264] mau#{_h264MauCount} len={eventData.data.Length} " +
-                                        $"sync={eventData.SyncPoint} producerQ={_h264VideoProducer.QueueDepth} " +
-                                        $"bytesProduced={_h264VideoProducer.BytesProduced}");
-                        if (_h264DiagLog != null) {
-                            try {
-                                _h264DiagLog.WriteLine(
-                                    $"{_h264DiagSw.Elapsed.TotalSeconds,7:F2} " +
-                                    $"{_h264MauCount,7} {_h264SyncPointsSeen,5} {_h264BytesSubmitted,10} " +
-                                    $"{_h264VideoProducer.QueueDepth,5} " +
-                                    $"{_h264VideoProducer.BytesProduced,10} " +
-                                    $"{_h264VideoProducer.BytesConsumed,10} " +
-                                    $"{_h264VideoProducer.DroppedChunks,5}");
-                            } catch { /* ignore */ }
+                // External-video consumer (the libav + D3DImage player).
+                // When attached it owns video decoding + presentation, so the
+                // FFME producer branches below are skipped. Commit the wire
+                // codec on the first MAU so the consumer can pick the decoder.
+                if (_externalVideoMauArrived != null) {
+                    if (!_externalVideoCodecFired) {
+                        _externalVideoCodecFired = true;
+                        try {
+                            _externalVideoCodecCommit?.Invoke(_wireVideoCodec ?? "VND.MS.WM-MPV");
+                        } catch (Exception ex) {
+                            Debug.WriteLine($"[ext-video] codecCommit threw: {ex.Message}");
                         }
                     }
-                    return;
-                }
-
-                // MPEG-ES video-only path: each MAU is a complete MPEG-1/2
-                // video access unit pushed into the producer feeding FFME.
-                if (_mpvVideoProducer != null) {
-                    if (eventData.SyncPoint) _mpvSyncPointsSeen++;
-                    _mpvVideoProducer.SubmitChunk(eventData.data);
-                    _mpvMauCount++;
-                    _mpvBytesSubmitted += eventData.data.Length;
-                    if ((_mpvMauCount % 100) == 1) {
-                        Trace.WriteLine($"[mpv] mau#{_mpvMauCount} len={eventData.data.Length} " +
-                                        $"sync={eventData.SyncPoint} producerQ={_mpvVideoProducer.QueueDepth} " +
-                                        $"bytesProduced={_mpvVideoProducer.BytesProduced}");
-                        if (_mpvDiagLog != null) {
-                            try {
-                                _mpvDiagLog.WriteLine(
-                                    $"{_mpvDiagSw.Elapsed.TotalSeconds,7:F2} " +
-                                    $"{_mpvMauCount,7} {_mpvSyncPointsSeen,5} {_mpvBytesSubmitted,10} " +
-                                    $"{_mpvVideoProducer.QueueDepth,5} " +
-                                    $"{_mpvVideoProducer.BytesProduced,10} " +
-                                    $"{_mpvVideoProducer.BytesConsumed,10} " +
-                                    $"{_mpvVideoProducer.DroppedChunks,5}");
-                            } catch { /* ignore */ }
-                        }
+                    try {
+                        _externalVideoMauArrived(eventData.data, eventData.timestamp);
+                    } catch (Exception ex) {
+                        Debug.WriteLine($"[ext-video] mauArrived threw: {ex.Message}");
                     }
                     return;
                 }
 
-                // No sink for this video stream — codec not yet supported.
-                // (H.264 / x-wmf-pf video MAUs land here. Wire up an FFME
-                // producer with forcedInputFormat="h264" to handle.)
+                // No external video consumer attached — drop the MAU. Video is
+                // owned by the external controller (libav + D3DImage), which
+                // wires the consumer before PLAY, so this only fires during a
+                // brief startup window (if at all).
                 if ((_videoDroppedNoSink & 0xFF) == 0) {
-                    Trace.WriteLine($"[video] MAU dropped (no sink configured): " +
-                                    $"len={eventData.data.Length}");
+                    Trace.WriteLine($"[video] MAU dropped (no external consumer yet): len={eventData.data.Length}");
                 }
                 _videoDroppedNoSink++;
             };
@@ -492,162 +300,271 @@ namespace SoftSled.Components.RTSP {
                 MonitorPts(isAudio: true, rtpTs: eventData.timestamp);
                 ArmDecoderOpenStopwatch();
 
-                // Direct-libav playback engine path (mirrors video).
-                if (_playbackEngine != null) {
-                    _playbackEngine.OnDepacketizedAudio(eventData.data,
-                                                        eventData.timestamp);
+                // External-audio consumer (Phase 2/3 of the FFME-bypass).
+                // When ExternalSyncMediaController is attached it owns
+                // audio decoding + rendering directly. The
+                // depacketized MAU here (WMRTP unwrapped: raw MP2/MP3
+                // frame bytes for VND.MS.WM-MPA, raw PCM samples for
+                // X-WMF-PF, etc.) is handed over and the muxer cascade
+                // is skipped. First MAU also commits the codec — wire
+                // codec is read from _wireAudioCodec which was set by
+                // the codec-specific path's CommitAudioPipelineForWireCodec
+                // call earlier in this same Rtp_AudioDataReceived
+                // invocation, so it's reliably populated by now.
+                if (_externalAudioMauArrived != null) {
+                    if (!_externalAudioCodecFired) {
+                        _externalAudioCodecFired = true;
+                        string wc = _wireAudioCodec ?? "VND.MS.WM-MPA";
+                        try {
+                            _externalAudioCodecCommit?.Invoke(BuildExternalAudioFormat(wc));
+                        } catch (Exception ex) {
+                            Debug.WriteLine($"[ext-audio] codecCommit threw: {ex.Message}");
+                        }
+                    }
+                    try {
+                        _externalAudioMauArrived(eventData.data, eventData.timestamp);
+                    } catch (Exception ex) {
+                        Debug.WriteLine($"[ext-audio] mauArrived threw: {ex.Message}");
+                    }
                     return;
                 }
 
-                // FFME / muxer-cascade path. The silence injector taps
-                // each real MAU so it learns the wire cadence; the MAU
-                // itself still flows into the muxer cascade below. When
-                // the wire goes quiet (server-side trick play mutes
-                // audio), the injector's timer fires synthetic MAUs
-                // into the SAME cascade via RouteAudioMauToFfmePipeline,
-                // keeping FFME's audio buffer fed and preventing the
-                // SYNC-BUFFER freeze.
-                _silenceInjector?.NoticeReal(eventData.data, eventData.timestamp);
-                RouteAudioMauToFfmePipeline(eventData.data, eventData.timestamp);
+                // No external audio consumer attached yet — drop the MAU.
+                // Audio is always owned by the external controller, which
+                // wires the consumer in AttachRtspClient before PLAY, so
+                // this only fires during a brief startup window (if at all).
+                if ((_audioDroppedNoSink & 0xFF) == 0) {
+                    Trace.WriteLine($"[audio] MAU dropped (no external consumer yet): len={eventData.data.Length}");
+                }
+                _audioDroppedNoSink++;
             };
         }
 
+        #endregion ############################################################
+
+
         /// <summary>
-        /// FFME / muxer-cascade audio routing. Shared between the wire
-        /// (real audio MAUs from the depacketizer) and the silence
-        /// injector (synthetic MAUs when the wire goes quiet). Returns
-        /// silently if no muxer/producer is configured for this stream.
+        /// Cross-stream A/V offset (ms) from the PLAY response's RTP-Info,
+        /// which gives each stream's RTP timestamp at the play point. The
+        /// offset is the video pre-play padding minus the audio pre-play
+        /// padding — each computed WITHIN one stream's clock, so it's epoch-
+        /// free and needs no RTCP SR (WMPNss doesn't send SRs). Available as
+        /// soon as both RTP-Info values + first MAUs are known (immediately,
+        /// since RTP-Info arrives with the PLAY response before any data).
+        /// Logs all inputs to the always-on RTCP debug file.
         /// </summary>
-        private void RouteAudioMauToFfmePipeline(byte[] data, uint rtpTs) {
-            if (data == null || data.Length == 0) return;
+        public bool TryGetRtpInfoAvOffsetMs(uint firstAudioRtp, uint firstVideoRtp, out long offsetMs) {
+            offsetMs = 0;
+            long aInfo = System.Threading.Interlocked.Read(ref _audioRtpInfoRtptime);
+            long vInfo = System.Threading.Interlocked.Read(ref _videoRtpInfoRtptime);
+            if (aInfo < 0 || vInfo < 0) return false;
+            long aClk = _audioClockHz > 0 ? _audioClockHz : 90000L;
+            long vClk = _videoClockHz > 0 ? _videoClockHz : 90000L;
+            // Wrap-safe signed deltas within each stream's own RTP clock.
+            long vPadTicks = (int)((uint)vInfo - firstVideoRtp);   // video frames before play point
+            long aPadTicks = (int)((uint)aInfo - firstAudioRtp);   // audio before play point
+            long vPadMs = vPadTicks * 1000L / vClk;
+            long aPadMs = aPadTicks * 1000L / aClk;
+            offsetMs = vPadMs - aPadMs;
+            RtcpDiagLog($"rtpinfo-offset vInfo={vInfo} V0={firstVideoRtp} vPad={vPadMs}ms " +
+                        $"aInfo={aInfo} A0={firstAudioRtp} aPad={aPadMs}ms vClk={vClk} aClk={aClk} " +
+                        $"→ offset={offsetMs}ms");
+            return true;
+        }
 
-            // MPEG-TS unified path (preferred for modern codecs).
-            // PCM samples go in as raw LE bytes; muxer applies any
-            // codec-specific framing (Blu-ray LPCM header etc.) and
-            // wraps into PES then TS packets on the audio PID.
-            if (_tsMuxer != null && _tsProducer != null) {
-                byte[] muxed = _tsMuxer.MuxAudioFrame(data, rtpTs);
-                _tsProducer.SubmitChunk(muxed);
-                _tsAudioMaus++;
-                _tsBytesPushed += muxed.Length;
-                if ((_tsAudioMaus % 100) == 1) {
-                    Trace.WriteLine($"[ts] aud#{_tsAudioMaus} len={data.Length} " +
-                                    $"muxed={muxed.Length} pts(rtp)={rtpTs} " +
-                                    $"producerQ={_tsProducer.QueueDepth}");
-                    WriteTsDiagRow();
-                }
-                return;
-            }
 
-            // MPEG-PS combined path (takes priority): mux audio frames
-            // into a PES packet with PTS = RTP timestamp, push into the
-            // shared producer. FFME's libav handles Layer I/II/III alike,
-            // and the shared PS clock gives us A/V sync.
-            if (_psMuxer != null && _psProducer != null) {
-                byte[] muxed = _psMuxer.MuxAudioFrame(data, rtpTs);
-                _psProducer.SubmitChunk(muxed);
-                _psAudioMaus++;
-                _psBytesPushed += muxed.Length;
-                if ((_psAudioMaus % 100) == 1) {
-                    Trace.WriteLine($"[ps] aud#{_psAudioMaus} len={data.Length} " +
-                                    $"muxed={muxed.Length} pts(rtp)={rtpTs} " +
-                                    $"producerQ={_psProducer.QueueDepth}");
-                    WritePsDiagRow();
-                }
-                return;
-            }
+        #region External Audio Consumer #######################################
 
-            // WMRTP-wrapped MPEG audio (vnd.ms.wm-MPA), audio-only mode.
-            // MAU = clean run of MPEG audio frame bytes (no RFC 2250
-            // sub-header). Prefer the FFME / libav pipeline (handles
-            // Layer I/II/III + emits accurate position/duration); fall
-            // back to NAudio MP3 sink when SOFTSLED_AUDIO_VIA_NAUDIO=1
-            // is set (legacy path).
-            if (_mp3FfmeProducer != null) {
-                _mp3FfmeProducer.SubmitChunk(data);
-                _mp3FfmeChunks++;
-                _mp3FfmeBytesPushed += data.Length;
-                if ((_mp3FfmeChunks % 100) == 1) {
-                    Trace.WriteLine($"[mp3-ffme] mau#{_mp3FfmeChunks} len={data.Length} " +
-                                    $"producerQ={_mp3FfmeProducer.QueueDepth}");
-                    WriteMp3FfmeDiagRow();
-                }
-                return;
-            }
-            if (_mpaAudioSink != null && _mpaSinkMode == MpaSinkMode.WmrtpWrapped) {
-                _mpaAudioSink.SubmitRawMpegAudioFrames(data, 0, data.Length);
-                return;
-            }
-            // Raw-PCM x-wmf-pf audio (audio/vnd.wave fmtp) — preferred
-            // path: push samples into the FFME audio pipeline.
-            // libavformat's s16le demuxer with SDP-derived sample_rate
-            // and channels options decodes via libav, so the user gets
-            // FFME-clock consistency across audio + video and we keep
-            // NAudio reserved for the WMC fast-path UI audio.
-            if (_pcmFfmeProducer != null) {
-                _pcmFfmeProducer.SubmitChunk(data);
-                _pcmFfmeChunks++;
-                _pcmFfmeBytesPushed += data.Length;
-                if ((_pcmFfmeChunks % 100) == 1) {
-                    Trace.WriteLine($"[pcm-ffme] mau#{_pcmFfmeChunks} len={data.Length} " +
-                                    $"producerQ={_pcmFfmeProducer.QueueDepth}");
-                    if (_pcmFfmeDiagLog != null) {
-                        try {
-                            _pcmFfmeDiagLog.WriteLine(
-                                $"{_pcmFfmeDiagSw.Elapsed.TotalSeconds,7:F2} " +
-                                $"{_pcmFfmeChunks,7} {_pcmFfmeBytesPushed,10} " +
-                                $"{_pcmFfmeProducer.QueueDepth,5} " +
-                                $"{_pcmFfmeProducer.BytesProduced,12} " +
-                                $"{_pcmFfmeProducer.BytesConsumed,12} " +
-                                $"{_pcmFfmeProducer.DroppedChunks,5}");
-                        } catch { /* ignore */ }
+        // External-audio consumer.
+        // When set, audio MAUs are routed to these callbacks
+        // INSTEAD of the muxer cascade — ExternalSyncMediaController
+        // uses this to feed its libav-decoder + NAudio renderer.
+        // _externalAudioCodecCommit fires once on the first audio
+        // packet (the codec is known from SDP at that point);
+        // _externalAudioMauArrived fires for each MAU.
+        private Action<SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat> _externalAudioCodecCommit;
+        private Action<byte[], uint> _externalAudioMauArrived;
+        private bool _externalAudioCodecFired;
+
+        /// <summary>
+        /// Hand audio MAU routing to an external consumer. When set,
+        /// audio MAUs bypass the PS/TS muxer + mp3FfmeProducer
+        /// cascade entirely. The codecCommit callback receives a
+        /// rich <see cref="SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat"/>
+        /// (wire codec + MPEG layer + sample-rate hint) parsed from
+        /// SDP — lets the consumer pick the right libav decoder ID.
+        /// Pass <c>null</c> for both to detach. Idempotent.
+        /// </summary>
+        public void SetExternalAudioConsumer(
+            Action<SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat> codecCommit,
+            Action<byte[], uint> mauArrived) {
+            _externalAudioCodecCommit = codecCommit;
+            _externalAudioMauArrived = mauArrived;
+            _externalAudioCodecFired = false;   // re-arm for a new consumer
+        }
+
+        #endregion ############################################################
+
+
+        #region External Video Consumer #######################################
+
+        // External-video consumer — the video counterpart of the audio
+        // consumer above. When set, video MAUs (H.264 / MPEG-1/2 elementary
+        // stream) are routed to these callbacks instead of the FFME producer
+        // path, so ExternalSyncMediaController can decode them with libav and
+        // present via D3DImage. codecCommit fires once on the first MAU with
+        // the committed wire codec string; mauArrived fires per MAU.
+        private Action<string> _externalVideoCodecCommit;
+        private Action<byte[], uint> _externalVideoMauArrived;
+        private bool _externalVideoCodecFired;
+
+        /// <summary>
+        /// Hand video MAU routing to an external consumer. When set, video
+        /// MAUs bypass the FFME producer path entirely. <paramref name="codecCommit"/>
+        /// receives the committed wire codec (e.g. "X-WMF-PF" = H.264,
+        /// "VND.MS.WM-MPV" = MPEG-1/2 video) on the first MAU; <paramref name="mauArrived"/>
+        /// fires per MAU. Pass <c>null</c> for both to detach. Idempotent.
+        /// </summary>
+        public void SetExternalVideoConsumer(
+            Action<string> codecCommit,
+            Action<byte[], uint> mauArrived) {
+            _externalVideoCodecCommit = codecCommit;
+            _externalVideoMauArrived = mauArrived;
+            _externalVideoCodecFired = false;   // re-arm for a new consumer
+        }
+
+        #endregion ############################################################
+
+
+        #region External Audio Format #########################################
+
+        /// <summary>
+        /// Build an <see cref="SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat"/>
+        /// from the SDP entry for the given wire codec. Looks up the
+        /// PT in <c>wmfPayloadDataDict</c>, finds the first audio
+        /// entry whose Codec matches, and parses fmtp for
+        /// <c>layer=</c> / <c>samplerate=</c> / <c>mode=</c> hints.
+        /// Returns a populated DTO even if the lookup fails (with
+        /// just the wire codec set) so the consumer always gets a
+        /// non-null commit notification.
+        /// </summary>
+        private SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat
+            BuildExternalAudioFormat(string wireCodec) {
+            var fmt = new SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat {
+                WireCodec = wireCodec,
+            };
+            foreach (var kv in wmfPayloadDataDict) {
+                var entry = kv.Value;
+                if (entry == null) continue;
+                if (entry.Type != MediaType.Audio) continue;
+                if (!string.Equals(entry.Codec, wireCodec, StringComparison.OrdinalIgnoreCase)) continue;
+                string fp = entry.FormatParameter ?? "";
+                // Parse the fmtp token list. Recognised keys:
+                //   layer=N (MPA family — MPEG audio layer 1/2/3)
+                //   samplerate=N (audio sample rate Hz)
+                //   mode=mono|stereo
+                //   channels=N (X-WMF-PF PCM)
+                //   bitspersample=N (X-WMF-PF PCM, 8/16/24/32)
+                //   codec=pcm_s16be|pcm_s16le (X-WMF-PF PCM endian hint)
+                //   bitrate=N (informational, not used here)
+                foreach (string token in fp.Split(';')) {
+                    string t = token.Trim();
+                    if (t.Length == 0) continue;
+                    int eq = t.IndexOf('=');
+                    if (eq <= 0) continue;
+                    string k = t.Substring(0, eq).Trim().ToLowerInvariant();
+                    string v = t.Substring(eq + 1).Trim();
+                    if (k == "layer" && int.TryParse(v, out int layer)) fmt.MpegLayer = layer;
+                    else if (k == "samplerate" && int.TryParse(v, out int sr)) fmt.SampleRateHint = sr;
+                    else if (k == "channels" && int.TryParse(v, out int ch)) fmt.ChannelsHint = ch;
+                    else if (k == "bitspersample" && int.TryParse(v, out int bps)) fmt.BitsPerSampleHint = bps;
+                    // WMA fmtp: blocksize→block_align, bitrate→bit_rate,
+                    // config→codec extradata (hex). samplesize is the PCM
+                    // bits/sample of the SOURCE (not the wire) — informational.
+                    else if (k == "blocksize" && int.TryParse(v, out int ba)) fmt.BlockAlign = ba;
+                    else if (k == "bitrate" && int.TryParse(v, out int br)) fmt.BitRate = br;
+                    else if (k == "config") fmt.ExtraData = HexToBytes(v);
+                    else if (k == "codec") {
+                        // For PCM the codec hint usually carries
+                        // endianness: pcm_s16be vs pcm_s16le.
+                        if (v.IndexOf("be", StringComparison.OrdinalIgnoreCase) >= 0) fmt.PcmBigEndian = true;
+                    } else if (k == "mode") {
+                        if (v.Equals("mono", StringComparison.OrdinalIgnoreCase)) fmt.ChannelsHint = 1;
+                        else if (v.Equals("stereo", StringComparison.OrdinalIgnoreCase)) fmt.ChannelsHint = 2;
                     }
                 }
-                return;
-            }
-            // Legacy fallback: raw-PCM x-wmf-pf audio straight to NAudio
-            // with the SDP-derived WAVEFORMATEX. Kept for ops debugging
-            // (flip SOFTSLED_AUDIO_VIA_NAUDIO=1 to route here).
-            if (_pcmAudioSink != null) {
-                _pcmAudioSink.Submit(data);
-                return;
-            }
+                // For X-WMF-PF audio the fmtp tokens above are usually
+                // empty — the actual format is in the WAVEFORMATEX
+                // blob hex-encoded inside `config=`. SDP parsing
+                // already turned it into a parsed
+                // <see cref="WAVEFORMATEX"/> on
+                // <c>entry.AM_Media_Format.FormatData</c>. Pull rate
+                // / channels / bits-per-sample from there. (Don't
+                // overwrite if the fmtp explicitly carried them —
+                // the MPA family uses them, only PCM omits them.)
+                try {
+                    var wfx = entry.AM_Media_Format?.FormatData as SoftSled.Components.AudioVisual.FormatStructures.WAVEFORMATEX;
+                    if (wfx != null) {
+                        if (fmt.SampleRateHint == 0 && wfx.nSamplesPerSec > 0)
+                            fmt.SampleRateHint = wfx.nSamplesPerSec;
+                        if (fmt.ChannelsHint == 0 && wfx.nChannels > 0)
+                            fmt.ChannelsHint = wfx.nChannels;
+                        if (fmt.BitsPerSampleHint == 0 && wfx.wBitsPerSample > 0)
+                            fmt.BitsPerSampleHint = wfx.wBitsPerSample;
+                    }
+                } catch { /* AM_Media_Format may be null or FormatData absent */ }
 
-            // No sink for this audio stream.
-            if ((_audioDroppedNoSink & 0xFF) == 0) {
-                Trace.WriteLine($"[audio] MAU dropped (no sink configured): " +
-                                $"len={data.Length}");
+                // Last-resort fallback for sample rate ONLY: rtpmap
+                // ClockHz. For X-WMF-PF this is 1000 (a 1ms tick,
+                // not the audio sample rate) and is intentionally
+                // NOT used unless WAVEFORMATEX was unavailable —
+                // setting decoder sample_rate=1000 against a real
+                // 48kHz wire produces audio starvation (decoder
+                // produces 1/48 the expected samples, NAudio
+                // drains instantly). For MPA the ClockHz IS the
+                // audio rate (typically 90000 for MPA which is
+                // wrong but acceptable since MPA decoders read
+                // from the frame header anyway).
+                if (fmt.SampleRateHint == 0 && entry.ClockHz > 0) {
+                    bool isXWmfPf = string.Equals(wireCodec, "X-WMF-PF", StringComparison.OrdinalIgnoreCase);
+                    bool isWma    = string.Equals(wireCodec, "WMA", StringComparison.OrdinalIgnoreCase);
+                    // WMA rtpmap clock is 1000 (a 1ms tick, NOT the audio rate),
+                    // same trap as X-WMF-PF — don't use ClockHz as the rate.
+                    if (!isXWmfPf && !isWma) fmt.SampleRateHint = entry.ClockHz;
+                }
+                // WMA channels come from the rtpmap "wma/1000/<ch>" encoding
+                // parameter (e.g. "2") when the fmtp didn't carry channels=.
+                if (fmt.ChannelsHint == 0
+                    && string.Equals(wireCodec, "WMA", StringComparison.OrdinalIgnoreCase)
+                    && int.TryParse((entry.EncodingParameters ?? "").Trim(), out int wch) && wch > 0) {
+                    fmt.ChannelsHint = wch;
+                }
+                break;
             }
-            _audioDroppedNoSink++;
+            return fmt;
         }
 
-        /// <summary>
-        /// Enable the trick-play audio-silence injector. Required when
-        /// using the FFME playback engine — without it FFME's video
-        /// element freezes during server-side trick play (audio buffer
-        /// drains → SYNC-BUFFER state). The libav-direct engine
-        /// doesn't need this (its renderers are clock-driven, not
-        /// audio-locked); leave the injector unconfigured in that
-        /// mode. Idempotent — calling twice is a no-op.
-        /// </summary>
-        public void EnableAudioSilenceInjection(SoftSled.Components.Diagnostics.Logger log) {
-            if (_silenceInjector != null) return;
-            _silenceInjector = new SoftSled.Components.AudioVisual.AudioSilenceInjector(
-                emit: RouteAudioMauToFfmePipeline,
-                log: log);
+        /// <summary>Decode an even-length hex string (e.g. the WMA fmtp
+        /// <c>config=</c> blob "008800000f00e55c0000") to bytes. Returns null
+        /// on malformed input.</summary>
+        private static byte[] HexToBytes(string hex) {
+            if (string.IsNullOrEmpty(hex)) return null;
+            hex = hex.Trim();
+            if ((hex.Length & 1) != 0) return null;
+            var b = new byte[hex.Length / 2];
+            for (int i = 0; i < b.Length; i++) {
+                if (!byte.TryParse(hex.Substring(i * 2, 2),
+                                   System.Globalization.NumberStyles.HexNumber,
+                                   System.Globalization.CultureInfo.InvariantCulture, out b[i]))
+                    return null;
+            }
+            return b;
         }
 
-        // Audio silence injector. Non-null only when the FFME engine
-        // is selected (see EnableAudioSilenceInjection). Disposed in
-        // the RTSPClient disconnect path along with the muxers.
-        private SoftSled.Components.AudioVisual.AudioSilenceInjector _silenceInjector;
+        #endregion ############################################################
 
-        // Drop counters for MAUs that arrive when no sink has been set up
-        // for the corresponding codec — log throttled at every 256 to avoid
-        // spam. Useful for telling apart "depacketizer dead" vs "no sink".
-        private long _videoDroppedNoSink;
-        private long _audioDroppedNoSink;
 
+        #region Main Methods ##################################################
 
         public void Connect(string url, RTP_TRANSPORT rtp_transport, MEDIA_REQUEST media_request = MEDIA_REQUEST.VIDEO_AND_AUDIO) {
 
@@ -656,23 +573,9 @@ namespace SoftSled.Components.RTSP {
             System.Diagnostics.Debug.WriteLine("Connecting to " + url);
             this.url = url;
 
-            // Use URI to extract username and password
-            // and to make a new URL without the username and password
-            try {
-                Uri uri = new Uri(this.url);
-                hostname = uri.Host;
-                port = uri.Port;
-
-                if (uri.UserInfo.Length > 0) {
-                    username = uri.UserInfo.Split(new char[] { ':' })[0];
-                    password = uri.UserInfo.Split(new char[] { ':' })[1];
-                    this.url = uri.GetComponents((UriComponents.AbsoluteUri & ~UriComponents.UserInfo),
-                                                 UriFormat.UriEscaped);
-                }
-            } catch {
-                username = null;
-                password = null;
-            }
+            Uri uri = new Uri(this.url);
+            hostname = uri.Host;
+            port = uri.Port;
 
             // We can ask the RTSP server for Video, Audio or both. If we don't want audio we don't need to SETUP the audio channal or receive it
             client_wants_video = false;
@@ -702,17 +605,13 @@ namespace SoftSled.Components.RTSP {
             // read/written on this socket is teed into %TEMP%\softsled-rtsp-wire.log
             // so we can extract the DESCRIBE response and decide between SDP
             // pgmpu and in-band ASF header strategies. No-op when env var is unset.
-            Rtsp.IRtspTransport listenerTransport =
-                SoftSled.Components.Diagnostics.RtspWireDumper.MaybeWrap(rtsp_socket, null);
+            Rtsp.IRtspTransport listenerTransport = SoftSled.Components.Diagnostics.RtspWireDumper.MaybeWrap(rtsp_socket, null);
 
             // Connect a RTSP Listener to the RTSP Socket (or other Stream) to send RTSP messages and listen for RTSP replies
             rtsp_client = new Rtsp.RtspListener(listenerTransport);
-
             rtsp_client.AutoReconnect = false;
-
             rtsp_client.MessageReceived += Rtsp_MessageReceived;
             rtsp_client.DataReceived += Rtp_VideoDataReceived;
-
             rtsp_client.Start(); // start listening for messages from the server (messages fire the MessageReceived event)
 
 
@@ -742,49 +641,38 @@ namespace SoftSled.Components.RTSP {
                 // Nothing to do. Will open Multicast UDP sockets after the SETUP command
             }
 
-
-            //// Send OPTIONS
-            //// In the Received Message handler we will send DESCRIBE, SETUP and PLAY
-            //Rtsp.Messages.RtspRequest options_message = new Rtsp.Messages.RtspRequestOptions();
-            //options_message.RtspUri = new Uri(this.url);
-            //options_message.AddHeader(LanguageHeader);
-            //options_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
-            //options_message.AddHeader(UserAgent);
-            //rtsp_client.SendMessage(options_message);
-
             // Send DESCRIBE
-            Rtsp.Messages.RtspRequest describe_message = new Rtsp.Messages.RtspRequestDescribe();
+            RtspRequest describe_message = new RtspRequestDescribe();
             describe_message.RtspUri = new Uri(url);
             describe_message.AddHeader(AcceptHeader);
             describe_message.AddHeader(LanguageHeader);
-            //describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
             describe_message.AddHeader(SupportedHeader);
             describe_message.AddHeader(UserAgent);
             rtsp_client.SendMessage(describe_message);
         }
 
-        // return true if this connection failed, or if it connected but is no longer connected.
-        public bool StreamingFinished() {
-            if (rtsp_socket_status == RTSP_STATUS.ConnectFailed) return true;
-            if (rtsp_socket_status == RTSP_STATUS.Connected && rtsp_socket.Connected == false) return true;
-            else return false;
-        }
-
-
         public void Pause() {
             if (rtsp_client != null) {
                 // Send PAUSE
-                Rtsp.Messages.RtspRequest pause_message = new Rtsp.Messages.RtspRequestPause();
+                RtspRequest pause_message = new RtspRequestPause();
                 pause_message.RtspUri = new Uri(url);
                 pause_message.Session = session;
                 pause_message.AddHeader(LanguageHeader);
-                //pause_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                 pause_message.AddHeader(SupportedHeader);
                 pause_message.AddHeader(UserAgent);
-                if (auth_type != null) {
-                    AddAuthorization(pause_message, username, password, auth_type, realm, nonce, url);
-                }
                 rtsp_client.SendMessage(pause_message);
+
+                // After PAUSE the server stops sending RTP. The next Play()
+                // MUST hit the wire even if (startMs, rate) match what was
+                // cached from the most recent pre-PAUSE PLAY — otherwise
+                // the wire-idempotency check at the top of Play() will
+                // suppress the resume PLAY and the server stays paused
+                // forever (observed: video frame stuck at pause-time
+                // position, audio continues from buffered samples but
+                // never gets new ones either).
+                _resumeNextPlay = true;
+                Debug.WriteLine("[rtsp] PAUSE sent — armed _resumeNextPlay " +
+                                "so the next Play() bypasses wire-idempotency");
             }
         }
 
@@ -854,15 +742,29 @@ namespace SoftSled.Components.RTSP {
             // PAUSE/PLAY cycle. Skip the wire write if the requested
             // (startMs, rate) exactly matches what we last shipped.
             //
+            // EXCEPTION: a Pause() in between invalidates the cached
+            // wire state — the server has stopped sending RTP and needs
+            // a fresh PLAY to resume, even with identical params. The
+            // _resumeNextPlay flag set by Pause() forces this first
+            // post-PAUSE Play() through. After that, the suppression
+            // logic re-engages normally (so the second of two back-to-
+            // back WMC resume-Starts still gets suppressed).
+            //
             // -1 startMs is "use cached" — equate to the last-sent
             // startMs for the purposes of this check so a pure rate
             // change with no seek doesn't get artificially differentiated.
             long candidateStart = startMs >= 0 ? startMs : _lastSentStartMs;
-            if (_lastSentStartMs == candidateStart &&
+            if (!_resumeNextPlay &&
+                _lastSentStartMs == candidateStart &&
                 System.Math.Abs(_lastSentRate - rate) < 0.0001) {
                 Debug.WriteLine($"[rtsp] Play({startMs},{rate}) suppressed — " +
                                 $"wire state already (start={_lastSentStartMs}, rate={_lastSentRate})");
                 return;
+            }
+            if (_resumeNextPlay) {
+                Debug.WriteLine($"[rtsp] Play({startMs},{rate}) bypassing idempotency — " +
+                                $"resume-after-PAUSE armed");
+                _resumeNextPlay = false;
             }
 
             // Post-auto-PLAY: mid-session change. Send a fresh PLAY
@@ -870,12 +772,23 @@ namespace SoftSled.Components.RTSP {
             SendPlayMessage(startMs, rate);
         }
 
+        /// <summary>Set by <see cref="Pause"/>, consumed (and cleared)
+        /// by the next <see cref="Play"/>. Forces that one Play through
+        /// the wire-idempotency check so resume-after-pause always hits
+        /// the server with a fresh PLAY — without this, identical
+        /// (startMs, rate) before and after a Pause/Resume cycle would
+        /// be suppressed and the server would stay paused.</summary>
+        private bool _resumeNextPlay;
+
         /// <summary>Most recent (startMs, rate) actually written to the
         /// RTSP wire by <see cref="SendPlayMessage"/>. Used to suppress
         /// no-op re-PLAYs from WMC's repeating Start commands. -1 / 1.0
         /// means "no PLAY sent yet this session".</summary>
-        private long   _lastSentStartMs = -1;
-        private double _lastSentRate    = 1.0;
+        private long _lastSentStartMs = -1;
+        private double _lastSentRate = 1.0;
+
+        #endregion ############################################################
+
 
         /// <summary>
         /// Send an RTSP PLAY directly to the wire, bypassing the
@@ -887,7 +800,7 @@ namespace SoftSled.Components.RTSP {
         private void SendPlayMessage(long startMs, double rate) {
             if (rtsp_client == null) return;
 
-            RtspRequest play_message = new Rtsp.Messages.RtspRequestPlay();
+            RtspRequest play_message = new RtspRequestPlay();
             play_message.RtspUri = new Uri(url);
             play_message.Session = session;
             play_message.AddHeader(LanguageHeader);
@@ -915,10 +828,6 @@ namespace SoftSled.Components.RTSP {
                 play_message.AddHeader("Speed: " + rateStr);
             }
 
-            if (auth_type != null) {
-                AddAuthorization(play_message, username, password, auth_type, realm, nonce, url);
-            }
-
             // First-sample-after-seek arm: clear the per-stream "first
             // PTS captured" flags so the UNRECOVERABLE_SKEW first-sample
             // A/V skew check (Layer 4g(b)) re-runs on this seek.
@@ -930,7 +839,23 @@ namespace SoftSled.Components.RTSP {
             // duplicate Starts from WMC.
             _initialPlayFired = true;
             _lastSentStartMs = startMs >= 0 ? startMs : _lastSentStartMs;
-            _lastSentRate    = rate;
+            _lastSentRate = rate;
+
+            // Clear the cached start position after sending. Once the
+            // server has consumed this PLAY's Range and started
+            // streaming, "where we are" is the SERVER's current position,
+            // not the original seek. Subsequent SetRate() calls would
+            // re-fire PLAY with the same stale Range — observed: every
+            // PLAY in a session repeated Range=npt=156.850 (the open-
+            // time seek position) on every FF/RW, causing the server
+            // to restart playback at 156.850s for every speed change.
+            // -1 means "no Range header, continue from current server
+            // position" — exactly what mid-session rate changes want.
+            // Explicit seeks always call Play(startMs, ...) directly
+            // and supply a fresh startMs so this clear is safe.
+            if (startMs >= 0) {
+                _currentStartMsRequested = -1;
+            }
 
             rtsp_client.SendMessage(play_message);
         }
@@ -944,7 +869,7 @@ namespace SoftSled.Components.RTSP {
         internal void SendPlayWithCachedParams() {
             SendPlayMessage(
                 startMs: _currentStartMsRequested >= 0 ? _currentStartMsRequested : -1,
-                rate:    double.IsNaN(_currentRateRequested) ? 1.0 : _currentRateRequested);
+                rate: double.IsNaN(_currentRateRequested) ? 1.0 : _currentRateRequested);
         }
 
         /// <summary>
@@ -996,16 +921,13 @@ namespace SoftSled.Components.RTSP {
             }
 
             try {
-                var msg = new Rtsp.Messages.RtspRequestSetParameter();
+                var msg = new RtspRequestSetParameter();
                 msg.RtspUri = new Uri(url);
                 msg.Session = session;
                 msg.AddHeader(LanguageHeader);
                 msg.AddHeader(SupportedHeader);
                 msg.AddHeader(UserAgent);
                 msg.AddHeader(BuildBufferInfoHeader(bandwidthBps, optimisedPreroll));
-                if (auth_type != null) {
-                    AddAuthorization(msg, username, password, auth_type, realm, nonce, url);
-                }
                 rtsp_client.SendMessage(msg);
             } catch (Exception ex) {
                 Debug.WriteLine($"[rtsp] SetBufferInfo failed: {ex.Message}");
@@ -1016,22 +938,49 @@ namespace SoftSled.Components.RTSP {
         /// Build the <c>Buffer-Info.dlna.org</c> request-line header value
         /// from a bandwidth hint and the OptimisedPreroll flag.
         ///
-        /// Capture-observed default (Example 1 etc.):
-        /// <c>dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0</c>
-        ///
-        /// Our adjustments:
+        /// <para>Capture-observed Xbox 360 values (May 2026 capture from
+        /// a real Xbox playing the same NTSC_XAC3 recorded-TV stream
+        /// that WMPNss was under-feeding us at ~21% of real-time):</para>
         /// <list type="bullet">
-        ///   <item>dejitter scales inversely with bandwidth — clamp to the
-        ///   capture-observed 6624000 (≈6.6 MB) ceiling, drop to 16384
-        ///   floor.</item>
-        ///   <item>BTM=0 and BFR=0 when optimisedPreroll, else the
-        ///   capture defaults (BTM=0;BFR=0 was already the default in
-        ///   the corpus, but if the server later prefers a non-zero
-        ///   ramp we expose the knob here).</item>
-        ///   <item>CDB/TD held at capture defaults.</item>
+        ///   <item>Audio SETUP:
+        ///   <c>dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=1</c></item>
+        ///   <item>Video SETUP:
+        ///   <c>dejitter=6624000;CDB=39321600;BTM=0;TD=2000;BFR=1</c></item>
         /// </list>
+        ///
+        /// <para>Two important differences vs the previous SoftSled
+        /// values (which both used <c>CDB=6553600;BFR=0</c>):</para>
+        /// <list type="number">
+        ///   <item><b>BFR=1</b> (was 0). The Buffer-Info BFR field
+        ///   advertises that the client WILL send Buffer Fullness
+        ///   Report RTCP feedback (PT=205 FMT=3) — which we have
+        ///   always done per the <c>_audioBfrEnabled</c>/
+        ///   <c>_videoBfrEnabled</c> path. The previous BFR=0 was a
+        ///   self-inflicted lie that contradicted the actual BFR
+        ///   packets going out on RTCP. WMPNss appears to use BFR as
+        ///   a pacing-mode hint: BFR=0 → conservative throttle (~20%
+        ///   real-time), BFR=1 → rate-adaptive pacing using the BFR
+        ///   feedback (full real-time delivery as observed on
+        ///   Xbox).</item>
+        ///   <item><b>Per-stream CDB</b>: video SETUP uses
+        ///   <c>CDB=39321600</c> (≈37.5 MB, 6× the audio value) to
+        ///   match Xbox. CDB is the Content Data Buffer the client
+        ///   reserves for this stream; a larger video CDB lets the
+        ///   server burst more before pausing. Audio CDB stays at
+        ///   <c>6553600</c> (≈6.25 MB) per the Xbox capture.</item>
+        /// </list>
+        ///
+        /// <para>The <paramref name="isVideo"/> flag selects which CDB.
+        /// SET_PARAMETER mid-session defaults to the larger video CDB
+        /// (re-buffering scenarios typically target the bigger video
+        /// stream).</para>
+        ///
+        /// <para>dejitter sizing is unchanged: scales inversely with
+        /// bandwidth, capped at 6624000 (≈6.6 MB ≈ 1 s at 50 Mbps),
+        /// floor at 16384. BTM held at capture default (0).</para>
         /// </summary>
-        internal static string BuildBufferInfoHeader(long bandwidthBps, bool optimisedPreroll) {
+        internal static string BuildBufferInfoHeader(long bandwidthBps, bool optimisedPreroll,
+                                                     bool isVideo = true) {
             // dejitter inverse-scales with bandwidth: at 50 Mbps we can
             // get away with a small dejitter (~0.13s of 8-byte audio);
             // at 1 Mbps we need much more headroom. Cap at the captured
@@ -1047,8 +996,8 @@ namespace SoftSled.Components.RTSP {
                 if (dejitter < 16384) dejitter = 16384;
             }
             int btm = optimisedPreroll ? 0 : 0;        // unchanged (capture default)
-            int bfr = optimisedPreroll ? 0 : 0;        // unchanged (capture default)
-            const int cdb = 6553600;
+            int bfr = 1;                                // see method doc — Xbox=1, was 0
+            int cdb = isVideo ? 39321600 : 6553600;    // per-stream CDB per Xbox capture
             const int td = 2000;
             return "Buffer-Info.dlna.org: dejitter=" + dejitter +
                    ";CDB=" + cdb +
@@ -1066,10 +1015,11 @@ namespace SoftSled.Components.RTSP {
         private long _currentStartMsRequested = -1;
         private double _currentRateRequested = 1.0;
 
+
+        #region MS-DMCT Playback Events #######################################
+
         // ====================================================================
-        //  Spec-event surface (Phase 2)
-        //  -------------------------------------------------------------------
-        //  These three events are consumed by FfmeMediaController and relayed
+        //  These three events are consumed by MediaController and relayed
         //  on to VirtualChannelAvCtrlHandler.OnMediaEvent as MS-DMCT codes
         //  RTSP_DISCONNECT (3), PTS_ERROR (5), UNRECOVERABLE_SKEW (6).
         // ====================================================================
@@ -1091,25 +1041,39 @@ namespace SoftSled.Components.RTSP {
         /// first-sample PTS skew exceeds 3500ms.</summary>
         public event Action<SkewInfo> UnrecoverableSkew;
 
+        /// <summary>Fires when the server pushes an RTSP ANNOUNCE carrying a
+        /// DLNA end-of-stream event (<c>Event-Type.dlna.org: 2000</c>), i.e.
+        /// the content reached its natural end. This is the WMC
+        /// <c>com.microsoft.wm.eosmsg</c> feature surfaced over RTSP. The
+        /// controller re-raises this as <c>MediaEnded</c>, which the AVCTRL
+        /// virtual-channel handler maps to the MS-DMCT END_OF_MEDIA event so
+        /// WMC tears the session down / advances the playlist.</summary>
+        public event Action EndOfStream;
+
         // --- internal helpers used by 4d-4g of the playback plan ------------
         internal void RaiseDisconnected(Exception ex) {
-            try { Disconnected?.Invoke(ex); }
-            catch (Exception subEx) {
+            try { Disconnected?.Invoke(ex); } catch (Exception subEx) {
                 Debug.WriteLine($"[rtsp] Disconnected handler threw: {subEx.Message}");
             }
         }
         internal void RaisePtsError(PtsErrorInfo info) {
-            try { PtsError?.Invoke(info); }
-            catch (Exception subEx) {
+            try { PtsError?.Invoke(info); } catch (Exception subEx) {
                 Debug.WriteLine($"[rtsp] PtsError handler threw: {subEx.Message}");
             }
         }
         internal void RaiseUnrecoverableSkew(SkewInfo info) {
-            try { UnrecoverableSkew?.Invoke(info); }
-            catch (Exception subEx) {
+            try { UnrecoverableSkew?.Invoke(info); } catch (Exception subEx) {
                 Debug.WriteLine($"[rtsp] UnrecoverableSkew handler threw: {subEx.Message}");
             }
         }
+        internal void RaiseEndOfStream() {
+            try { EndOfStream?.Invoke(); } catch (Exception subEx) {
+                Debug.WriteLine($"[rtsp] EndOfStream handler threw: {subEx.Message}");
+            }
+        }
+
+        #endregion ############################################################
+
 
         /// <summary>Re-arms the "first sample after seek" detector used
         /// by both the PTS monitor and the UNRECOVERABLE_SKEW first-
@@ -1125,12 +1089,14 @@ namespace SoftSled.Components.RTSP {
         private long _lastVideoPtsMs;
         private long _firstAudioPtsCapturedMs = long.MinValue;
         private long _firstVideoPtsCapturedMs = long.MinValue;
-        private int  _avSkewFiredForThisSeek;   // 0 = not yet, 1 = fired
+        private int _avSkewFiredForThisSeek;   // 0 = not yet, 1 = fired
         // UNRECOVERABLE_SKEW decoder-open state (Layer 4g(a)).
         private readonly Stopwatch _decoderOpenSw = new Stopwatch();
         private int _decoderOpenArmed;          // 0 = not armed, 1 = armed (stopwatch running)
         private int _decoderOpenFired;          // 0 = not fired, 1 = fired
-        // SDP-derived clock-Hz per stream (set in SDP processing).
+        // Per-stream RTP timestamp clock rate (Hz), resolved from the SDP
+        // rtpmap of the codec the server actually picked. Set at wire-codec
+        // commit (first RTP data packet); feeds the RTCP-SR StreamClock.
         private uint _audioClockHz;
         private uint _videoClockHz;
         // RTCP-SR-anchored NTP↔RTP clocks (Layer 4e(iv)).
@@ -1146,16 +1112,12 @@ namespace SoftSled.Components.RTSP {
 
             if (rtsp_client != null) {
                 // Send TEARDOWN
-                Rtsp.Messages.RtspRequest teardown_message = new Rtsp.Messages.RtspRequestTeardown();
+                RtspRequest teardown_message = new RtspRequestTeardown();
                 teardown_message.RtspUri = new Uri(url);
                 teardown_message.Session = session;
                 teardown_message.AddHeader(LanguageHeader);
-                //teardown_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                 teardown_message.AddHeader(SupportedHeader);
                 teardown_message.AddHeader(UserAgent);
-                if (auth_type != null) {
-                    AddAuthorization(teardown_message, username, password, auth_type, realm, nonce, url);
-                }
                 rtsp_client.SendMessage(teardown_message);
             }
 
@@ -1171,167 +1133,27 @@ namespace SoftSled.Components.RTSP {
                 rtsp_client.Stop();
             }
 
-            // Stop the silence injector first so its timer can't fire
-            // synthetic MAUs into muxers we're about to dispose. Safe
-            // to call when never enabled (no-op).
-            try { _silenceInjector?.Dispose(); } catch { }
-            _silenceInjector = null;
-
-            // Tear down the PCM audio sink (frees the NAudio output device).
-            try { _pcmAudioSink?.Dispose(); } catch { }
-            _pcmAudioSink = null;
-
-            // Tear down the MPA (MP3-over-RTP) audio sink.
-            try { _mpaAudioSink?.Dispose(); } catch { }
-            _mpaAudioSink = null;
-            _mpaSinkMode  = MpaSinkMode.None;
-
-            // Tear down the audio-only MP3 FFME pipeline if active.
-            try {
-                if (_mp3FfmeDiagLog != null) {
-                    long prod = _mp3FfmeProducer?.BytesProduced ?? 0;
-                    long cons = _mp3FfmeProducer?.BytesConsumed ?? 0;
-                    long drop = _mp3FfmeProducer?.DroppedChunks ?? 0;
-                    _mp3FfmeDiagLog.WriteLine();
-                    _mp3FfmeDiagLog.WriteLine(
-                        $"# Pipeline disposed: chunks={_mp3FfmeChunks} " +
-                        $"bytesPushed={_mp3FfmeBytesPushed} producerProduced={prod} " +
-                        $"producerConsumed={cons} drops={drop} " +
-                        $"wall={_mp3FfmeDiagSw.Elapsed.TotalSeconds:F2}s");
-                    _mp3FfmeDiagLog.Dispose();
-                }
-            } catch { }
-            _mp3FfmeDiagLog = null;
-            _mp3FfmeDiagSw.Reset();
-            try { _mp3FfmeProducer?.Complete(); } catch { }
-            try { _mp3FfmeProducer?.Dispose(); } catch { }
-            _mp3FfmeProducer    = null;
-            _mp3FfmeInputStream = null;
-            _mp3FfmeNeedsFrameStrip = false;
-            _mp3FfmeChunks = 0; _mp3FfmeBytesPushed = 0;
-
-            // Tear down the combined MPEG-PS pipeline if active.
-            try {
-                if (_psDiagLog != null) {
-                    long prod = _psProducer?.BytesProduced ?? 0;
-                    long cons = _psProducer?.BytesConsumed ?? 0;
-                    long drop = _psProducer?.DroppedChunks ?? 0;
-                    _psDiagLog.WriteLine();
-                    _psDiagLog.WriteLine(
-                        $"# Pipeline disposed: vidMAUs={_psVideoMaus} audMAUs={_psAudioMaus} " +
-                        $"bytesPushed={_psBytesPushed} producerProduced={prod} " +
-                        $"producerConsumed={cons} drops={drop} " +
-                        $"wall={_psDiagSw.Elapsed.TotalSeconds:F2}s");
-                    _psDiagLog.Dispose();
-                }
-            } catch { }
-            _psDiagLog = null;
-            _psDiagSw.Reset();
-            try {
-                if (_psProducer != null && _psMuxer != null) {
-                    // Push the PS End Code so FFME hits clean EOF.
-                    _psProducer.SubmitChunk(_psMuxer.EndCode());
-                }
-            } catch { }
-            try { _psProducer?.Complete(); } catch { }
-            try { _psProducer?.Dispose(); } catch { }
-            _psProducer    = null;
-            _psInputStream = null;
-            _psMuxer       = null;
-            Debug.WriteLine($"[ps-ffme] teardown: vidMAUs={_psVideoMaus} audMAUs={_psAudioMaus} " +
-                            $"bytesPushed={_psBytesPushed}");
-            _psVideoMaus = 0; _psAudioMaus = 0; _psBytesPushed = 0;
-
-            // Tear down the MPEG-TS unified pipeline if active.
-            try {
-                if (_tsDiagLog != null) {
-                    long prod = _tsProducer?.BytesProduced ?? 0;
-                    long cons = _tsProducer?.BytesConsumed ?? 0;
-                    long drop = _tsProducer?.DroppedChunks ?? 0;
-                    _tsDiagLog.WriteLine();
-                    _tsDiagLog.WriteLine(
-                        $"# Pipeline disposed: vidMAUs={_tsVideoMaus} audMAUs={_tsAudioMaus} " +
-                        $"bytesPushed={_tsBytesPushed} producerProduced={prod} " +
-                        $"producerConsumed={cons} drops={drop} " +
-                        $"wall={_tsDiagSw.Elapsed.TotalSeconds:F2}s");
-                    _tsDiagLog.Dispose();
-                }
-            } catch { }
-            _tsDiagLog = null;
-            _tsDiagSw.Reset();
-            try {
-                if (_tsProducer != null && _tsMuxer != null) {
-                    _tsProducer.SubmitChunk(_tsMuxer.EndCode());
-                }
-            } catch { }
-            try { _tsProducer?.Complete(); } catch { }
-            try { _tsProducer?.Dispose(); } catch { }
-            _tsProducer    = null;
-            _tsInputStream = null;
-            _tsMuxer       = null;
-            _tsVideoMaus = 0; _tsAudioMaus = 0; _tsBytesPushed = 0;
-
-            // Tear down the MPEG-ES video producer. Calling Complete() lets
-            // FFME's Read return 0 (EOF) so it can close cleanly; the host
-            // UI subscribes to VideoPipelineReady and is responsible for
-            // calling Media.Close on the WPF dispatcher.
-            try {
-                if (_mpvDiagLog != null) {
-                    long producedNow  = _mpvVideoProducer?.BytesProduced ?? 0;
-                    long consumedNow  = _mpvVideoProducer?.BytesConsumed ?? 0;
-                    long droppedNow   = _mpvVideoProducer?.DroppedChunks ?? 0;
-                    _mpvDiagLog.WriteLine();
-                    _mpvDiagLog.WriteLine(
-                        $"# Producer disposed: MAUs={_mpvMauCount} syncPts={_mpvSyncPointsSeen} " +
-                        $"bytesSubmitted={_mpvBytesSubmitted} producerProduced={producedNow} " +
-                        $"producerConsumed={consumedNow} drops={droppedNow} " +
-                        $"wall={_mpvDiagSw.Elapsed.TotalSeconds:F2}s");
-                    _mpvDiagLog.Dispose();
-                }
-            } catch { }
-            _mpvDiagLog = null;
-            _mpvDiagSw.Reset();
-            try { _mpvVideoProducer?.Complete(); } catch { }
-            try { _mpvVideoProducer?.Dispose(); } catch { }
-            _mpvVideoProducer    = null;
-            _mpvVideoInputStream = null;
-            Debug.WriteLine($"[mpv-ffme] teardown: maus={_mpvMauCount} " +
-                            $"bytesSubmitted={_mpvBytesSubmitted} syncPts={_mpvSyncPointsSeen}");
-            _mpvMauCount = 0; _mpvBytesSubmitted = 0; _mpvSyncPointsSeen = 0;
-
-            // Tear down the PCM-FFME audio pipeline.
-            try {
-                if (_pcmFfmeDiagLog != null) {
-                    long prod = _pcmFfmeProducer?.BytesProduced ?? 0;
-                    long cons = _pcmFfmeProducer?.BytesConsumed ?? 0;
-                    long drop = _pcmFfmeProducer?.DroppedChunks ?? 0;
-                    _pcmFfmeDiagLog.WriteLine();
-                    _pcmFfmeDiagLog.WriteLine(
-                        $"# Pipeline disposed: chunks={_pcmFfmeChunks} " +
-                        $"bytesPushed={_pcmFfmeBytesPushed} producerProduced={prod} " +
-                        $"producerConsumed={cons} drops={drop} " +
-                        $"wall={_pcmFfmeDiagSw.Elapsed.TotalSeconds:F2}s");
-                    _pcmFfmeDiagLog.Dispose();
-                }
-            } catch { }
-            _pcmFfmeDiagLog = null;
-            _pcmFfmeDiagSw.Reset();
-            try { _pcmFfmeProducer?.Complete(); } catch { }
-            try { _pcmFfmeProducer?.Dispose(); } catch { }
-            _pcmFfmeProducer    = null;
-            _pcmFfmeInputStream = null;
-            _pcmFfmeChunks = 0; _pcmFfmeBytesPushed = 0;
-            _pcmSampleRate = 0; _pcmChannels = 0; _pcmBitsPerSample = 0;
-
             // Reset wire-commit state so the next session re-detects
             // codecs on its own RTP packets.
             _wireAudioCodec = null;
             _wireVideoCodec = null;
+            _audioClockHz = 0;
+            _videoClockHz = 0;
+            System.Threading.Interlocked.Exchange(ref _firstVideoMauWirePtsRaw, -1L);
+            System.Threading.Interlocked.Exchange(ref _audioRtpInfoRtptime, -1L);
+            System.Threading.Interlocked.Exchange(ref _videoRtpInfoRtptime, -1L);
             _pipelinesCommitted = false;
-            _pendingAudioRtptime = null;
-            _pendingVideoRtptime = null;
             try { _commitTimer?.Dispose(); } catch { }
             _commitTimer = null;
+
+            // Reset the RTCP-SR-anchored PTS clocks + monitor state so the
+            // next session's PTS_ERROR / skew detection starts clean.
+            _audioClock = null;
+            _videoClock = null;
+            _lastAudioPtsMs = 0;
+            _lastVideoPtsMs = 0;
+            _firstAudioPtsCapturedMs = long.MinValue;
+            _firstVideoPtsCapturedMs = long.MinValue;
             _vidRecvLoggedOnce = 0;
             _audRecvLoggedOnce = 0;
             try { _commitDiagLog?.Dispose(); } catch { }
@@ -1346,33 +1168,9 @@ namespace SoftSled.Components.RTSP {
             _currentRateRequested = 1.0;
             _lastSentStartMs = -1;
             _lastSentRate = 1.0;
+            _resumeNextPlay = false;
             _bufferInfoBandwidthBps = -1;
             _bufferInfoOptimisedPreroll = false;
-
-            // Tear down the H264 video producer. Mirrors the MPV teardown.
-            try {
-                if (_h264DiagLog != null) {
-                    long producedNow  = _h264VideoProducer?.BytesProduced ?? 0;
-                    long consumedNow  = _h264VideoProducer?.BytesConsumed ?? 0;
-                    long droppedNow   = _h264VideoProducer?.DroppedChunks ?? 0;
-                    _h264DiagLog.WriteLine();
-                    _h264DiagLog.WriteLine(
-                        $"# Producer disposed: MAUs={_h264MauCount} syncPts={_h264SyncPointsSeen} " +
-                        $"bytesSubmitted={_h264BytesSubmitted} producerProduced={producedNow} " +
-                        $"producerConsumed={consumedNow} drops={droppedNow} " +
-                        $"wall={_h264DiagSw.Elapsed.TotalSeconds:F2}s");
-                    _h264DiagLog.Dispose();
-                }
-            } catch { }
-            _h264DiagLog = null;
-            _h264DiagSw.Reset();
-            try { _h264VideoProducer?.Complete(); } catch { }
-            try { _h264VideoProducer?.Dispose(); } catch { }
-            _h264VideoProducer    = null;
-            _h264VideoInputStream = null;
-            Debug.WriteLine($"[h264-ffme] teardown: maus={_h264MauCount} " +
-                            $"bytesSubmitted={_h264BytesSubmitted} syncPts={_h264SyncPointsSeen}");
-            _h264MauCount = 0; _h264BytesSubmitted = 0; _h264SyncPointsSeen = 0;
 
             // Stop the RTCP RR timer so we don't send to a closed socket.
             try { _rtcpTimer?.Dispose(); } catch { }
@@ -1389,6 +1187,135 @@ namespace SoftSled.Components.RTSP {
             _rtcpDiagLog = null;
         }
 
+
+        #region TEMP - Correspondence Testing #################################
+
+        // ---- Correspondence-offset cross-check (LOGGED ONLY — does not change
+        // sync). Per stream, accumulate a steady-state (post-warmup) least-squares
+        // fit of header-RTP-ts (ms) vs the Correspondence NTP wallclock, then
+        // evaluate both streams at a common NTP to derive the cross-stream A/V
+        // offset and log it beside the RTP-Info offset. If, over several sessions,
+        // this is consistently more stable/accurate than RTP-Info, it becomes a
+        // candidate to drive sync. The header ts is converted to ms via the
+        // per-stream clock (x-wmf-pf=1 kHz so ts is already ms). Reset per media
+        // (RTSPClient is recreated per OpenMedia). ----
+        private readonly object _corrLock = new object();
+        private const double CorrWarmupSec = 15.0;       // skip preroll burst + buffer-refill transient
+        private double _corrFirstNtpV = -1, _corrFirstNtpA = -1;
+        private long _corrFirstHdrV = -1, _corrFirstHdrA = -1;
+        private double _vN, _vSx, _vSy, _vSxx, _vSxy;     // video least-squares sums (steady-state)
+        private double _aN, _aSx, _aSy, _aSxx, _aSxy;     // audio sums
+        private double _corrLastLogNtp = -1;
+        // Convergence tracking → fires CorrespondenceOffsetReady once the estimate
+        // settles, so the controller can slew the live offset to it (auto sync,
+        // no per-file trim). Stable = consecutive estimates within tolerance.
+        private double _corrLastEstimate = double.NaN;
+        private int _corrStableCount;
+        private double _corrFiredOffset = double.NaN;
+        // Tightened (2026-06-04): the estimate DRIFTS as the per-stream hdr/ntp
+        // slopes settle (observed +1265→-1458ms over one session), so a loose gate
+        // could fire on a still-ramping value. Require many consecutive estimates
+        // within a tight band so only a genuinely-settled value applies — which
+        // also means it stays out of the way when RTP-Info is already correct and
+        // only steps in as a safety net if it stabilises on a clearly different value.
+        private const double CorrStableTolMs = 40;    // estimates within this = "stable"
+        private const int CorrStableNeeded = 4;     // this many stable in a row → fire
+        private const double CorrRefireDeltaMs = 200;   // re-fire if it later shifts more than this
+        private const double CorrMaxPlausibleMs = 8000; // ignore implausible values
+        /// <summary>Fires (once converged) with the Correspondence-derived
+        /// cross-stream A/V offset in ms. Logged-cross-check value promoted to a
+        /// live driver: the controller slews the pacer to it.</summary>
+        public event Action<long> CorrespondenceOffsetReady;
+
+        /// <summary>Clear the Correspondence-offset estimator's accumulated fit.
+        /// Called on seek: the seek changes both streams' timeline, so pre-seek
+        /// (ntp,hdr) samples would pollute the running least-squares fit.</summary>
+        public void ResetCorrespondenceEstimator() {
+            lock (_corrLock) {
+                _corrFirstNtpV = _corrFirstNtpA = -1;
+                _corrFirstHdrV = _corrFirstHdrA = -1;
+                _vN = _vSx = _vSy = _vSxx = _vSxy = 0;
+                _aN = _aSx = _aSy = _aSxx = _aSxy = 0;
+                _corrLastLogNtp = -1;
+                _corrLastEstimate = double.NaN;
+                _corrStableCount = 0;
+                _corrFiredOffset = double.NaN;
+            }
+        }
+
+        private void FeedCorrSample(bool isVideo, double ntpSec, long hdrRaw) {
+            // Convert header ts to ms via the per-stream clock (1 kHz → already ms).
+            long clk = isVideo ? (_videoClockHz > 0 ? (long)_videoClockHz : 1000L)
+                               : (_audioClockHz > 0 ? (long)_audioClockHz : 1000L);
+            long hdrMs = hdrRaw * 1000L / clk;
+            lock (_corrLock) {
+                if (isVideo) {
+                    if (_corrFirstNtpV < 0) { _corrFirstNtpV = ntpSec; _corrFirstHdrV = hdrMs; }
+                    if (ntpSec - _corrFirstNtpV < CorrWarmupSec) return;
+                    _vN++; _vSx += ntpSec; _vSy += hdrMs; _vSxx += ntpSec * ntpSec; _vSxy += ntpSec * hdrMs;
+                } else {
+                    if (_corrFirstNtpA < 0) { _corrFirstNtpA = ntpSec; _corrFirstHdrA = hdrMs; }
+                    if (ntpSec - _corrFirstNtpA < CorrWarmupSec) return;
+                    _aN++; _aSx += ntpSec; _aSy += hdrMs; _aSxx += ntpSec * ntpSec; _aSxy += ntpSec * hdrMs;
+                }
+                if (_vN >= 10 && _aN >= 10 && (_corrLastLogNtp < 0 || ntpSec - _corrLastLogNtp >= 5.0)
+                    && CorrFit(_vN, _vSx, _vSy, _vSxx, _vSxy, out double vSlope, out double vInt)
+                    && CorrFit(_aN, _aSx, _aSy, _aSxx, _aSxy, out double aSlope, out double aInt)) {
+                    _corrLastLogNtp = ntpSec;
+                    double cv = vSlope * ntpSec + vInt;
+                    double ca = aSlope * ntpSec + aInt;
+                    double cvMinusCa = cv - ca;
+                    double firstHdrDiff = _corrFirstHdrV - _corrFirstHdrA;
+                    double corrOffset = cvMinusCa - firstHdrDiff;
+                    string rtpInfo = "n/a";
+                    if (_corrFirstHdrA >= 0 && _corrFirstHdrV >= 0
+                        && TryGetRtpInfoAvOffsetMs((uint)_corrFirstHdrA, (uint)_corrFirstHdrV, out long rtpOff))
+                        rtpInfo = $"{rtpOff}ms (Δcorr-rtpinfo={Math.Round(corrOffset - rtpOff)}ms)";
+                    RtcpDiagLog($"corr-offset-estimate: vSlope={vSlope:F4} aSlope={aSlope:F4} " +
+                                $"(Cv-Ca)={cvMinusCa:F0}ms firstHdrDiff={firstHdrDiff:F0}ms " +
+                                $"→ corrOffset={corrOffset:F0}ms; RTP-Info={rtpInfo} " +
+                                $"(vN={_vN:F0} aN={_aN:F0})");
+
+                    // Convergence → promote to a live offset (controller slews to it).
+                    if (Math.Abs(corrOffset) <= CorrMaxPlausibleMs) {
+                        if (!double.IsNaN(_corrLastEstimate)
+                            && Math.Abs(corrOffset - _corrLastEstimate) <= CorrStableTolMs)
+                            _corrStableCount++;
+                        else
+                            _corrStableCount = 0;
+                        _corrLastEstimate = corrOffset;
+
+                        bool firstFire = double.IsNaN(_corrFiredOffset);
+                        bool shifted = !firstFire && Math.Abs(corrOffset - _corrFiredOffset) > CorrRefireDeltaMs;
+                        if (_corrStableCount >= CorrStableNeeded && (firstFire || shifted)) {
+                            _corrFiredOffset = corrOffset;
+                            long val = (long)Math.Round(corrOffset);
+                            RtcpDiagLog($"corr-offset CONVERGED → {val}ms (firing to controller)");
+                            var h = CorrespondenceOffsetReady;
+                            if (h != null) { try { h(val); } catch { } }
+                        }
+                    } else {
+                        _corrStableCount = 0;
+                        _corrLastEstimate = corrOffset;
+                    }
+                }
+            }
+        }
+
+        private static bool CorrFit(double n, double sx, double sy, double sxx, double sxy,
+                                    out double slope, out double intercept) {
+            slope = 0; intercept = 0;
+            double denom = n * sxx - sx * sx;
+            if (Math.Abs(denom) < 1e-9) return false;
+            slope = (n * sxy - sx * sy) / denom;
+            intercept = (sy - slope * sx) / n;
+            return true;
+        }
+        #endregion ############################################################
+
+
+        #region RTCP Methods ##################################################
+
         /// <summary>
         /// Spin up the periodic RTCP Receiver Report transmitter. WMPNss
         /// paces media ~5x slower than real time when no client RR is
@@ -1402,30 +1329,6 @@ namespace SoftSled.Components.RTSP {
         /// client_port+1 — what the server expects as the RTCP feedback
         /// source.
         /// </summary>
-        // Diagnostic log for the RTCP send loop. Written to %TEMP%\softsled-rtcp-debug.log
-        // so we have ground-truth visibility into whether the timer fires, what
-        // the guards see, whether sends succeed, etc. — independent of Debug.WriteLine.
-        private System.IO.StreamWriter _rtcpDiagLog;
-        private void RtcpDiagInit() {
-            if (_rtcpDiagLog != null) return;
-            try {
-                string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
-                                                     "softsled-rtcp-debug.log");
-                _rtcpDiagLog = new System.IO.StreamWriter(
-                    new System.IO.FileStream(path, System.IO.FileMode.Create,
-                                             System.IO.FileAccess.Write,
-                                             System.IO.FileShare.Read),
-                    System.Text.Encoding.ASCII);
-                _rtcpDiagLog.AutoFlush = true;
-                _rtcpDiagLog.WriteLine($"# RTCP send-loop diagnostic, started {DateTime.Now:HH:mm:ss.fff}");
-                _rtcpDiagLog.WriteLine($"# columns: timestamp tick event details");
-            } catch (Exception ex) {
-                Debug.WriteLine($"[rtcp-diag] log open failed: {ex.Message}");
-            }
-        }
-        private void RtcpDiagLog(string line) {
-            try { _rtcpDiagLog?.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {line}"); } catch { }
-        }
 
         private void StartRtcpReceiverReports() {
             if (_rtcpTimer != null) return;  // already running
@@ -1446,8 +1349,7 @@ namespace SoftSled.Components.RTSP {
             // but at 100B/packet * 2 Hz * 2 streams = 400 B/s we're well below
             // any sensible threshold.
             _rtcpTimer = new System.Threading.Timer(_ => {
-                try { SendRtcpReceiverReport(); }
-                catch (Exception ex) {
+                try { SendRtcpReceiverReport(); } catch (Exception ex) {
                     Debug.WriteLine($"[rtcp] tick exception: {ex.Message}");
                     RtcpDiagLog($"tick-exception: {ex.Message}");
                 }
@@ -1494,12 +1396,12 @@ namespace SoftSled.Components.RTSP {
                     audio_udp_pair.SendRtcpToServer(pkt, hostname, _audioServerRtcpPort);
                     RtcpDiagLog($"#{tick} audio-send OK {pkt.Length}B → {hostname}:{_audioServerRtcpPort} " +
                                 $"extHigh={_audioSeqCycles << 16 | _audioHighestSeq} " +
-                                $"w3={ComputeBfrW3Fill()}ms " +
+                                $"w3={ComputeBfrW3Fill(true)}ms " +
                                 $"firstBytes={BitConverter.ToString(pkt, 0, Math.Min(16, pkt.Length))}");
-                    if (tick <= 3 || (tick % 10) == 0)
-                        Debug.WriteLine($"[rtcp] #{tick} audio RR+SDES{(_audioBfrEnabled ? "+BFR" : "")} " +
-                                        $"{pkt.Length}B → {hostname}:{_audioServerRtcpPort} " +
-                                        $"(extHigh={_audioSeqCycles << 16 | _audioHighestSeq})");
+                    //if (tick <= 3 || (tick % 10) == 0)
+                    //    Debug.WriteLine($"[rtcp] #{tick} audio RR+SDES{(_audioBfrEnabled ? "+BFR" : "")} " +
+                    //                    $"{pkt.Length}B → {hostname}:{_audioServerRtcpPort} " +
+                    //                    $"(extHigh={_audioSeqCycles << 16 | _audioHighestSeq})");
                 } catch (Exception ex) {
                     Debug.WriteLine($"[rtcp] audio RR send failed: {ex.Message}");
                     RtcpDiagLog($"#{tick} audio-send EXCEPTION: {ex.GetType().Name}: {ex.Message}");
@@ -1518,11 +1420,11 @@ namespace SoftSled.Components.RTSP {
                 try {
                     video_udp_pair.SendRtcpToServer(pkt, hostname, _videoServerRtcpPort);
                     RtcpDiagLog($"#{tick} video-send OK {pkt.Length}B → {hostname}:{_videoServerRtcpPort} " +
-                                $"w3={ComputeBfrW3Fill()}ms " +
+                                $"w3={ComputeBfrW3Fill(false)}ms " +
                                 $"firstBytes={BitConverter.ToString(pkt, 0, Math.Min(16, pkt.Length))}");
-                    if (tick <= 3 || (tick % 10) == 0)
-                        Debug.WriteLine($"[rtcp] #{tick} video RR+SDES{(_videoBfrEnabled ? "+BFR" : "")} " +
-                                        $"{pkt.Length}B → {hostname}:{_videoServerRtcpPort}");
+                    //if (tick <= 3 || (tick % 10) == 0)
+                    //    Debug.WriteLine($"[rtcp] #{tick} video RR+SDES{(_videoBfrEnabled ? "+BFR" : "")} " +
+                    //                    $"{pkt.Length}B → {hostname}:{_videoServerRtcpPort}");
                 } catch (Exception ex) {
                     Debug.WriteLine($"[rtcp] video RR send failed: {ex.Message}");
                     RtcpDiagLog($"#{tick} video-send EXCEPTION: {ex.GetType().Name}: {ex.Message}");
@@ -1546,8 +1448,13 @@ namespace SoftSled.Components.RTSP {
         ///   W1 [0..3]:  Unknown — varies; we copy stream-type-keyed values seen in capture.
         ///   W2 [4..7]:  Unknown — audio constant 0x03E80000 (rtpmap 1000 in high-16?);
         ///               video varies (~0x1770xxxx). We copy a stream-type-keyed value.
-        ///   W3 [8..11]: <c>high-16 = buffer fill in ms</c> (saturates near TD=2000);
-        ///               low-16 = 0xFFFF sentinel.
+        ///   W3 [8..11]: <c>high-16 = buffer fill in ms</c>; low-16 = 0xFFFF
+        ///               sentinel. The Xbox reports its REAL per-stream buffer
+        ///               occupancy here (audio ramps 0→~TD then wiggles just
+        ///               under it; video sits well above TD ~3200-4200). We now
+        ///               carry the renderer's true audio occupancy for the audio
+        ///               stream (see ComputeBfrW3Fill); video keeps the synthetic
+        ///               ramp-to-TD.
         ///   W4 [12..15]: <c>high-16 = next expected RTP seq</c> (= highest received + 1);
         ///                low-16 = 0.
         ///   W5/W6 [16..23]: zero (reserved).
@@ -1588,7 +1495,7 @@ namespace SoftSled.Components.RTSP {
             sdes[1] = 202;    // PT = SDES
             int sdesWords = (sdes.Length / 4) - 1;
             sdes[2] = (byte)((sdesWords >> 8) & 0xFF);
-            sdes[3] = (byte)((sdesWords     ) & 0xFF);
+            sdes[3] = (byte)((sdesWords) & 0xFF);
             WriteU32Be(sdes, 4, reporterSsrc);         // per-stream reporter SSRC
             sdes[8] = 1;                              // CNAME item type
             sdes[9] = (byte)cnameBytes.Length;
@@ -1649,7 +1556,7 @@ namespace SoftSled.Components.RTSP {
             // Holding at TD says "I have a healthy buffer, keep streaming
             // at media rate". Stopwatch is started on first BFR-eligible
             // RTCP tick (StartRtcpReceiverReports).
-            ushort bufferFillMs = ComputeBfrW3Fill();
+            ushort bufferFillMs = ComputeBfrW3Fill(isAudio);
             pkt[20] = (byte)((bufferFillMs >> 8) & 0xFF);
             pkt[21] = (byte)(bufferFillMs & 0xFF);
             pkt[22] = 0xFF;
@@ -1673,28 +1580,94 @@ namespace SoftSled.Components.RTSP {
         }
 
         /// <summary>
-        /// Compute the W3 buffer-fill value for the BFR FCI, expressed as
-        /// milliseconds of "buffered media". Returns a value in
-        /// <c>[0, BfrTdMs]</c>. Ramps linearly from 0 to TD over the first
-        /// <see cref="BfrRampDurationMs"/> wall-clock ms after the ramp
-        /// stopwatch starts, then holds at TD. Matches the Xbox-360
-        /// capture pattern.
+        /// Compute the W3 buffer-fill value (ms) for the BFR FCI.
+        ///
+        /// <para>With a wired occupancy provider (audio AND video): report the
+        /// REAL current buffer level for that stream. The Xbox-360 capture shows
+        /// the genuine client reports its true, dynamically-changing buffer here
+        /// (it dips whenever the server under-delivers); that dip is the signal
+        /// WMPNss uses to speed up and refill. A flat ramp-then-peg-at-TD never
+        /// shows a drain, so the server settles a few % under real-time and the
+        /// buffer slowly starves — observed on AUDIO (~94%, fixed first) and then
+        /// on VIDEO (~97%, drained the jitter buffer over ~3 min until it froze).
+        /// Honest per-stream reporting closes both loops.</para>
+        ///
+        /// <para>Fallback (no provider wired): the synthetic ramp 0 → TD over
+        /// <see cref="BfrRampDurationMs"/> then hold at TD.</para>
         /// </summary>
-        private ushort ComputeBfrW3Fill() {
+        private ushort ComputeBfrW3Fill(bool isAudio) {
+            var provider = isAudio ? _audioBufferMsProvider : _videoBufferMsProvider;
+            if (provider != null) {
+                int ms;
+                try { ms = provider(); } catch { ms = 0; }
+                if (ms < 0) ms = 0;
+                if (ms > 65535) ms = 65535;
+                return (ushort)ms;
+            }
             if (!_bfrRampStopwatch.IsRunning) return 0;
-            long ms = _bfrRampStopwatch.ElapsedMilliseconds;
-            if (ms <= 0) return 0;
-            if (ms >= BfrRampDurationMs) return BfrTdMs;
+            long el = _bfrRampStopwatch.ElapsedMilliseconds;
+            if (el <= 0) return 0;
+            if (el >= BfrRampDurationMs) return BfrTdMs;
             // Linear ramp 0 → BfrTdMs over BfrRampDurationMs.
-            return (ushort)((ms * BfrTdMs) / BfrRampDurationMs);
+            return (ushort)((el * BfrTdMs) / BfrRampDurationMs);
         }
 
-        private static void WriteU32Be(byte[] buf, int off, uint value) {
-            buf[off + 0] = (byte)((value >> 24) & 0xFF);
-            buf[off + 1] = (byte)((value >> 16) & 0xFF);
-            buf[off + 2] = (byte)((value >> 8)  & 0xFF);
-            buf[off + 3] = (byte)((value >> 0)  & 0xFF);
+        /// <summary>
+        /// Parse the MS-RTSP <c>rtcp-fb-ssrc=XXXXXXXX</c> parameter from a
+        /// Transport response header. This is the SSRC the server expects
+        /// us to put in the "SSRC of packet sender" field of outbound RTCP
+        /// packets so it can correlate feedback to the right session.
+        /// Returns 0 if the parameter isn't present (in which case the
+        /// caller should fall back to a locally-chosen SSRC).
+        /// </summary>
+        private static uint ParseRtcpFbSsrcFromTransport(string transportHeader) {
+            if (string.IsNullOrEmpty(transportHeader)) return 0;
+            foreach (string part in transportHeader.Split(';')) {
+                string p = part.Trim();
+                if (p.StartsWith("rtcp-fb-ssrc=", StringComparison.OrdinalIgnoreCase)) {
+                    string v = p.Substring("rtcp-fb-ssrc=".Length).Trim();
+                    if (uint.TryParse(v, System.Globalization.NumberStyles.HexNumber,
+                                      System.Globalization.CultureInfo.InvariantCulture,
+                                      out uint result))
+                        return result;
+                }
+            }
+            return 0;
         }
+
+        /// <summary>
+        /// Update per-stream RTP sequence-number tracking used by RTCP RR
+        /// reception-report blocks. Tracks base sequence (first seen),
+        /// highest sequence seen, and 16-bit-cycles count for the extended
+        /// highest sequence number. Wrap detection per RFC 3550 §A.1.
+        /// </summary>
+        private void UpdateRtcpSeqTracking(bool isAudio, ushort seq) {
+            if (isAudio) {
+                if (!_audioSeqInit) {
+                    _audioBaseSeq = seq;
+                    _audioHighestSeq = seq;
+                    _audioSeqInit = true;
+                } else if (IsSeqGreater(seq, _audioHighestSeq)) {
+                    // Detect 16-bit wrap (highest near 0xFFFF, new near 0).
+                    if (seq < _audioHighestSeq) _audioSeqCycles++;
+                    _audioHighestSeq = seq;
+                }
+                System.Threading.Interlocked.Increment(ref _audioPktsReceived);
+            } else {
+                if (!_videoSeqInit) {
+                    _videoBaseSeq = seq;
+                    _videoHighestSeq = seq;
+                    _videoSeqInit = true;
+                } else if (IsSeqGreater(seq, _videoHighestSeq)) {
+                    if (seq < _videoHighestSeq) _videoSeqCycles++;
+                    _videoHighestSeq = seq;
+                }
+                System.Threading.Interlocked.Increment(ref _videoPktsReceived);
+            }
+        }
+
+        #endregion ############################################################
+
 
         /// <summary>
         /// Parse the <c>ssrc=XXXXXXXX</c> parameter from a Transport header
@@ -1759,797 +1732,31 @@ namespace SoftSled.Components.RTSP {
                 }
                 if (!haveRtptime) continue;
                 if (isAudio) {
-                    _pendingAudioRtptime = rtptime;
-                    // Apply to whichever combined muxer is up. Both branches
-                    // use the first-anchor-vs-reanchor split so a mid-session
-                    // PLAY-with-Range (seek) or PLAY-with-Scale (trick play)
-                    // takes the monotonicity-preserving Reanchor path,
-                    // while the very first PLAY response uses the one-shot
-                    // SetXxxBaseTs.
-                    if (_psMuxer != null) {
-                        if (_psMuxer.AudioAnchored) {
-                            _psMuxer.Reanchor(newAudioRtpTs: rtptime, newVideoRtpTs: null);
-                            Debug.WriteLine($"[rtp-info] audio REANCHOR rtptime={rtptime}");
-                            RtcpDiagLog($"rtp-info AUDIO reanchor=rtptime={rtptime}");
-                        } else {
-                            _psMuxer.SetAudioBaseTs(rtptime);
-                            Debug.WriteLine($"[rtp-info] audio base set to rtptime={rtptime}");
-                            RtcpDiagLog($"rtp-info AUDIO base=rtptime={rtptime}");
-                        }
-                    } else if (_tsMuxer != null) {
-                        if (_tsMuxer.AudioAnchored) {
-                            _tsMuxer.Reanchor(newAudioRtpTs: rtptime, newVideoRtpTs: null);
-                            Debug.WriteLine($"[rtp-info] (ts) audio REANCHOR rtptime={rtptime}");
-                            RtcpDiagLog($"rtp-info AUDIO ts-reanchor=rtptime={rtptime}");
-                        } else {
-                            _tsMuxer.SetAudioBaseTs(rtptime);
-                            Debug.WriteLine($"[rtp-info] (ts) audio base set to rtptime={rtptime}");
-                            RtcpDiagLog($"rtp-info AUDIO ts-base=rtptime={rtptime}");
-                        }
-                    } else {
-                        // No combined muxer yet — wire-commit defers
-                        // setup until first packets observed. Stored
-                        // and replayed by TrySetupMpegPsPipeline /
-                        // TrySetupMpegTsPipeline.
-                        Debug.WriteLine($"[rtp-info] audio rtptime={rtptime} cached for later muxer");
-                        RtcpDiagLog($"rtp-info AUDIO cached=rtptime={rtptime}");
-                    }
+                    // Store the audio play-point RTP timestamp for the
+                    // cross-stream offset (see TryGetRtpInfoAvOffsetMs).
+                    System.Threading.Interlocked.Exchange(ref _audioRtpInfoRtptime, rtptime);
+                    RtcpDiagLog($"rtp-info AUDIO rtptime={rtptime}");
                 } else if (isVideo) {
-                    _pendingVideoRtptime = rtptime;
-                    if (_psMuxer != null) {
-                        if (_psMuxer.VideoAnchored) {
-                            _psMuxer.Reanchor(newAudioRtpTs: null, newVideoRtpTs: rtptime);
-                            // Post-seek / post-rate-change: the depacketizer's
-                            // sequence-number tracker would otherwise see the
-                            // new server stream as a long stretch of packet loss
-                            // and gate-keep MAUs until the next IDR. Clear the
-                            // tracker so the first post-reanchor frame is
-                            // accepted unconditionally.
-                            try { videoDepacketizer?.ResetPostLossState(); } catch { }
-                            Debug.WriteLine($"[rtp-info] video REANCHOR rtptime={rtptime}");
-                            RtcpDiagLog($"rtp-info VIDEO reanchor=rtptime={rtptime}");
-                        } else {
-                            _psMuxer.SetVideoBaseTs(rtptime);
-                            Debug.WriteLine($"[rtp-info] video base set to rtptime={rtptime}");
-                            RtcpDiagLog($"rtp-info VIDEO base=rtptime={rtptime}");
-                        }
-                    } else if (_tsMuxer != null) {
-                        if (_tsMuxer.VideoAnchored) {
-                            _tsMuxer.Reanchor(newAudioRtpTs: null, newVideoRtpTs: rtptime);
-                            try { videoDepacketizer?.ResetPostLossState(); } catch { }
-                            Debug.WriteLine($"[rtp-info] (ts) video REANCHOR rtptime={rtptime}");
-                            RtcpDiagLog($"rtp-info VIDEO ts-reanchor=rtptime={rtptime}");
-                        } else {
-                            _tsMuxer.SetVideoBaseTs(rtptime);
-                            Debug.WriteLine($"[rtp-info] (ts) video base set to rtptime={rtptime}");
-                            RtcpDiagLog($"rtp-info VIDEO ts-base=rtptime={rtptime}");
-                        }
-                    } else {
-                        Debug.WriteLine($"[rtp-info] video rtptime={rtptime} cached for later muxer");
-                        RtcpDiagLog($"rtp-info VIDEO cached=rtptime={rtptime}");
-                    }
+                    // Store the video play-point RTP timestamp for the offset.
+                    System.Threading.Interlocked.Exchange(ref _videoRtpInfoRtptime, rtptime);
+                    // On a mid-session PLAY (seek / trick play) the
+                    // depacketizer's sequence tracker would otherwise see
+                    // the new server stream as a long stretch of packet
+                    // loss and gate-keep MAUs until the next IDR. Clear it
+                    // so the first post-PLAY frame is accepted. Harmless on
+                    // the first PLAY (nothing to reset).
+                    try { videoDepacketizer?.ResetPostLossState(); } catch { }
+                    RtcpDiagLog($"rtp-info VIDEO rtptime={rtptime}");
                 } else {
                     RtcpDiagLog($"rtp-info UNKNOWN-URL entry='{trimmed}'");
                 }
             }
+            // New RTP-Info parsed (initial or post-seek) → bump generation so
+            // the controller knows the post-seek play-point timestamps are now
+            // available and it can safely re-anchor.
+            System.Threading.Interlocked.Increment(ref _rtpInfoGeneration);
         }
 
-        /// <summary>
-        /// Parse the MS-RTSP <c>rtcp-fb-ssrc=XXXXXXXX</c> parameter from a
-        /// Transport response header. This is the SSRC the server expects
-        /// us to put in the "SSRC of packet sender" field of outbound RTCP
-        /// packets so it can correlate feedback to the right session.
-        /// Returns 0 if the parameter isn't present (in which case the
-        /// caller should fall back to a locally-chosen SSRC).
-        /// </summary>
-        private static uint ParseRtcpFbSsrcFromTransport(string transportHeader) {
-            if (string.IsNullOrEmpty(transportHeader)) return 0;
-            foreach (string part in transportHeader.Split(';')) {
-                string p = part.Trim();
-                if (p.StartsWith("rtcp-fb-ssrc=", StringComparison.OrdinalIgnoreCase)) {
-                    string v = p.Substring("rtcp-fb-ssrc=".Length).Trim();
-                    if (uint.TryParse(v, System.Globalization.NumberStyles.HexNumber,
-                                      System.Globalization.CultureInfo.InvariantCulture,
-                                      out uint result))
-                        return result;
-                }
-            }
-            return 0;
-        }
-
-        /// <summary>
-        /// Update per-stream RTP sequence-number tracking used by RTCP RR
-        /// reception-report blocks. Tracks base sequence (first seen),
-        /// highest sequence seen, and 16-bit-cycles count for the extended
-        /// highest sequence number. Wrap detection per RFC 3550 §A.1.
-        /// </summary>
-        private void UpdateRtcpSeqTracking(bool isAudio, ushort seq) {
-            if (isAudio) {
-                if (!_audioSeqInit) {
-                    _audioBaseSeq = seq;
-                    _audioHighestSeq = seq;
-                    _audioSeqInit = true;
-                } else if (IsSeqGreater(seq, _audioHighestSeq)) {
-                    // Detect 16-bit wrap (highest near 0xFFFF, new near 0).
-                    if (seq < _audioHighestSeq) _audioSeqCycles++;
-                    _audioHighestSeq = seq;
-                }
-                System.Threading.Interlocked.Increment(ref _audioPktsReceived);
-            } else {
-                if (!_videoSeqInit) {
-                    _videoBaseSeq = seq;
-                    _videoHighestSeq = seq;
-                    _videoSeqInit = true;
-                } else if (IsSeqGreater(seq, _videoHighestSeq)) {
-                    if (seq < _videoHighestSeq) _videoSeqCycles++;
-                    _videoHighestSeq = seq;
-                }
-                System.Threading.Interlocked.Increment(ref _videoPktsReceived);
-            }
-        }
-
-        /// <summary>
-        /// 16-bit modular sequence comparison (RFC 1982 SerialNumberArithmetic
-        /// scaled to 16 bits). Returns true if `a` is more recent than `b`,
-        /// handling wrap-around.
-        /// </summary>
-        private static bool IsSeqGreater(ushort a, ushort b) {
-            int diff = (a - b) & 0xFFFF;
-            return diff != 0 && diff < 0x8000;
-        }
-
-        /// <summary>
-        /// Inspect the SDP-derived <see cref="wmfPayloadDataDict"/> for an
-        /// x-wmf-pf audio entry whose fmtp config is <c>audio/vnd.wave</c>
-        /// (raw PCM via WMRTP). On match, parse the embedded WAVEFORMATEX
-        /// and stand up <see cref="_pcmAudioSink"/>. The audioDepacketizer
-        /// event handler (constructor lambda) checks this field and routes
-        /// MAUs accordingly.
-        ///
-        /// We pick the FIRST matching PT in dictionary insertion order. The
-        /// SDP loop adds entries in rtpmap-declaration order, which mirrors
-        /// the m= line's PT ordering — and per the wire dump, WMPNss picks
-        /// that first PT (110 in our test). If a future server flips to a
-        /// later PT we'd see no audio; the fix would be a richer dispatcher
-        /// keyed on observed packet PTs at runtime.
-        /// </summary>
-        private void TrySetupPcmAudioSink() {
-            // The PCM-via-FFME pipeline is the preferred path. Only set up
-            // the NAudio sink when the user has explicitly opted in via
-            // env var SOFTSLED_AUDIO_VIA_NAUDIO=1.
-            if (_pcmFfmeProducer != null) return;
-            if (!string.Equals(Environment.GetEnvironmentVariable("SOFTSLED_AUDIO_VIA_NAUDIO"),
-                               "1", StringComparison.Ordinal)) {
-                Debug.WriteLine("[wmrpt-pcm-naudio] skipped — FFME path is preferred " +
-                                "(set SOFTSLED_AUDIO_VIA_NAUDIO=1 to opt back into NAudio)");
-                return;
-            }
-            if (_pcmAudioSink != null) return;  // already set up
-            foreach (var kv in wmfPayloadDataDict) {
-                var entry = kv.Value;
-                if (entry == null) continue;
-                if (entry.Type != MediaType.Audio) continue;
-                if (string.IsNullOrEmpty(entry.Codec) ||
-                    !entry.Codec.Equals("X-WMF-PF", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (string.IsNullOrEmpty(entry.FormatParameter)) continue;
-
-                // FormatParameter looks like:
-                //   "audio/vnd.wave;codec=1;config=GUID/0/0/0/GUID/HEX;extsys=..."
-                // We only care about audio/vnd.wave entries (raw PCM); the
-                // application/vnd.asf variants need a different sink.
-                string fp = entry.FormatParameter;
-                if (fp.IndexOf("audio/vnd.wave", StringComparison.OrdinalIgnoreCase) < 0)
-                    continue;
-
-                // Extract the config= value. AttributFmtp's GetParameter is
-                // private at that scope; do a manual split here to avoid the
-                // need to thread the parsed AttributFmtp through.
-                string configValue = ExtractFmtpParameter(fp, "config");
-                if (string.IsNullOrEmpty(configValue)) continue;
-
-                NAudio.Wave.WaveFormat fmt =
-                    WmrptPcmNAudioSink.WaveFormatExFromConfig(configValue);
-                if (fmt == null) {
-                    Debug.WriteLine($"[wmrpt-pcm-naudio] PT {entry.PayloadNumber} fmtp " +
-                                    $"audio/vnd.wave but WAVEFORMATEX parse failed");
-                    continue;
-                }
-
-                Debug.WriteLine($"[wmrpt-pcm-naudio] standing up sink for PT={entry.PayloadNumber}");
-                _pcmAudioSink = new WmrptPcmNAudioSink(fmt, /*log:*/ null);
-                return;
-            }
-            Debug.WriteLine("[wmrpt-pcm-naudio] no x-wmf-pf audio/vnd.wave PT in SDP — " +
-                            "PCM sink not stood up (other codec paths may handle this stream)");
-        }
-
-        /// <summary>
-        /// Stand up the FFME audio pipeline for X-WMF-PF audio/vnd.wave
-        /// raw PCM streams. The depacketizer emits clean little-endian
-        /// PCM samples per MAU; we feed them into an <see cref="AsfStreamProducer"/>
-        /// and wrap with <see cref="AsfFfmeInputStream"/> forced to
-        /// <c>s16le</c> with explicit sample_rate + channels (libavformat
-        /// can't probe these from headerless PCM bytes).
-        ///
-        /// Replaces <see cref="TrySetupPcmAudioSink"/> as the default audio
-        /// path so all media playback runs through FFME / libav.
-        /// </summary>
-        private void TrySetupPcmFfmePipeline() {
-            if (_pcmFfmeProducer != null) return;
-            if (_psMuxer != null)         return; // PS path owns audio
-
-            foreach (var kv in wmfPayloadDataDict) {
-                var entry = kv.Value;
-                if (entry == null) continue;
-                if (entry.Type != MediaType.Audio) continue;
-                if (string.IsNullOrEmpty(entry.Codec) ||
-                    !entry.Codec.Equals("X-WMF-PF", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (string.IsNullOrEmpty(entry.FormatParameter)) continue;
-                if (entry.FormatParameter.IndexOf("audio/vnd.wave", StringComparison.OrdinalIgnoreCase) < 0)
-                    continue;
-
-                string configValue = ExtractFmtpParameter(entry.FormatParameter, "config");
-                if (string.IsNullOrEmpty(configValue)) continue;
-
-                NAudio.Wave.WaveFormat fmt =
-                    WmrptPcmNAudioSink.WaveFormatExFromConfig(configValue);
-                if (fmt == null) continue;
-
-                _pcmSampleRate    = fmt.SampleRate;
-                _pcmChannels      = fmt.Channels;
-                _pcmBitsPerSample = fmt.BitsPerSample;
-
-                // libavformat raw PCM input format selection — limited to
-                // the integer-PCM variants WMC actually sends in this profile.
-                string fmtName;
-                if (fmt.BitsPerSample == 16) {
-                    fmtName = "s16le"; // matches WAVEFORMATEX PCM little-endian
-                } else if (fmt.BitsPerSample == 24) {
-                    fmtName = "s24le";
-                } else if (fmt.BitsPerSample == 8) {
-                    fmtName = "u8";
-                } else {
-                    Debug.WriteLine($"[pcm-ffme] unsupported bits/sample {fmt.BitsPerSample} for PT={entry.PayloadNumber}");
-                    return;
-                }
-
-                var extraOpts = new System.Collections.Generic.Dictionary<string, string> {
-                    ["sample_rate"] = fmt.SampleRate.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    ["channels"]    = fmt.Channels.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                };
-
-                Debug.WriteLine($"[pcm-ffme] standing up s16le FFME audio pipeline " +
-                                $"for PT={entry.PayloadNumber} fmt={fmtName} sr={fmt.SampleRate} ch={fmt.Channels}");
-                _pcmFfmeProducer    = new AsfStreamProducer(/*log:*/ null);
-                _pcmFfmeInputStream = new AsfFfmeInputStream(_pcmFfmeProducer,
-                                                              /*log:*/ null,
-                                                              forcedInputFormat: fmtName,
-                                                              extraOptions: extraOpts);
-
-                try {
-                    string logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
-                                                            "softsled-pcm-ffme-stats.log");
-                    _pcmFfmeDiagLog = new System.IO.StreamWriter(
-                        new System.IO.FileStream(logPath,
-                            System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.Read),
-                        System.Text.Encoding.ASCII) { AutoFlush = true };
-                    _pcmFfmeDiagLog.WriteLine("# WMRPT X-WMF-PF PCM FFME audio pipeline diagnostic log");
-                    _pcmFfmeDiagLog.WriteLine($"# PT={entry.PayloadNumber} fmt={fmtName} sr={fmt.SampleRate} ch={fmt.Channels} bps={fmt.BitsPerSample}");
-                    _pcmFfmeDiagLog.WriteLine("# columns: wall(s) chunks bytesPushed producerQueued producerBytesProduced producerBytesConsumed drops");
-                    _pcmFfmeDiagSw.Restart();
-                } catch (Exception ex) {
-                    Debug.WriteLine($"[pcm-ffme] diag log open failed: {ex.Message}");
-                }
-
-                try {
-                    AudioPipelineReady?.Invoke(_pcmFfmeInputStream);
-                } catch (Exception ex) {
-                    Debug.WriteLine($"[pcm-ffme] AudioPipelineReady handler threw: {ex.Message}");
-                }
-                return;
-            }
-        }
-
-        /// <summary>
-        /// Scan <see cref="wmfPayloadDataDict"/> for an audio entry with codec
-        /// MPA (MPEG Audio over RTP, RFC 2250) and stand up
-        /// <see cref="_mpaAudioSink"/>. WMPNss picks this when the source file
-        /// is plain MP3 — payload type 96 with <c>rtpmap MPA/90000/N</c>, no
-        /// WMRTP wrapper. Format (sample rate / channels / bitrate) is
-        /// discovered lazily from the first decoded MP3 frame rather than
-        /// from SDP fmtp, which is more robust against fmtp variations.
-        /// </summary>
-        private void TrySetupMpaAudioSink() {
-            if (_mpaAudioSink != null) return;
-            // The MP3-via-FFME pipeline takes priority for music files.
-            // Only stand up the NAudio sink when neither FFME pipeline
-            // (PS or MP3) is handling audio.
-            if (_mp3FfmeProducer != null || _psMuxer != null) return;
-            // Modern PCM pipeline claimed the audio stream.
-            if (_pcmFfmeProducer != null) return;
-
-            // Prefer RFC 2250 MPA if both are advertised (music-file case). If
-            // only WMRTP-wrapped vnd.ms.wm-MPA is present (recorded-TV MPEG-ES
-            // case), set up in WmrtpWrapped mode. Codec strings in the dict
-            // are upper-cased at SDP parse time, so compare against upper.
-            int rfcPt = -1, wmPt = -1;
-            foreach (var kv in wmfPayloadDataDict) {
-                var entry = kv.Value;
-                if (entry == null) continue;
-                if (entry.Type != MediaType.Audio) continue;
-                if (string.IsNullOrEmpty(entry.Codec)) continue;
-
-                if (rfcPt < 0 && entry.Codec.Equals("MPA",
-                                                    StringComparison.OrdinalIgnoreCase))
-                    rfcPt = entry.PayloadNumber;
-                else if (wmPt < 0 && entry.Codec.Equals("VND.MS.WM-MPA",
-                                                        StringComparison.OrdinalIgnoreCase))
-                    wmPt = entry.PayloadNumber;
-            }
-
-            if (rfcPt >= 0) {
-                Debug.WriteLine($"[mpa-rtp-naudio] standing up RFC 2250 MP3 sink " +
-                                $"for PT={rfcPt}");
-                _mpaAudioSink = new Mp3OverRtpAudioSink(/*log:*/ null);
-                _mpaSinkMode  = MpaSinkMode.Rfc2250;
-            } else if (wmPt >= 0) {
-                if (_psMuxer != null) {
-                    Debug.WriteLine($"[mpa-rtp-naudio] skipping WMRTP-wrapped sink " +
-                                    $"for PT={wmPt} — combined MPEG-PS pipeline is active");
-                } else {
-                    Debug.WriteLine($"[mpa-rtp-naudio] standing up WMRTP-wrapped " +
-                                    $"MPEG-audio sink for PT={wmPt} (vnd.ms.wm-MPA, " +
-                                    $"audio-only — NAudio ACM Layer III decoder)");
-                    _mpaAudioSink = new Mp3OverRtpAudioSink(/*log:*/ null);
-                    _mpaSinkMode  = MpaSinkMode.WmrtpWrapped;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Scan <see cref="wmfPayloadDataDict"/> for a video entry with codec
-        /// VND.MS.WM-MPV (WMRTP-wrapped MPEG-1/2 video, used by WMC recorded-TV
-        /// MPEG-ES profiles). If present, stand up an <see cref="AsfStreamProducer"/>
-        /// (used as a codec-agnostic byte-chunk producer) and the matching
-        /// <see cref="AsfFfmeInputStream"/> forced to <c>"mpegvideo"</c>, then
-        /// raise <see cref="VideoPipelineReady"/> so the host UI can call
-        /// <c>Media.Open</c> on FFME's dispatcher.
-        /// </summary>
-        /// <summary>
-        /// Stand up an audio-only MP3 pipeline through FFME when SDP
-        /// advertises an MPA / vnd.ms.wm-MPA codec WITHOUT a matching
-        /// video codec (music files). Returns true if the pipeline was
-        /// created — in which case the legacy NAudio MP3 sink should be
-        /// skipped. The PS pipeline takes priority above this method,
-        /// so the call order in the SDP-finalize block matters.
-        ///
-        /// Both RFC 2250 (MPA) and WMRTP-wrapped (vnd.ms.wm-MPA) inputs
-        /// reduce to the same downstream pipeline: raw MPEG audio frame
-        /// bytes pushed into <c>AsfStreamProducer</c>. The difference is
-        /// upstream: RFC 2250 carries a 4-byte MBZ/Frag sub-header on each
-        /// RTP packet that we strip in the dispatch branch; vnd.ms.wm-MPA
-        /// goes through the WMRTP depacketizer first and arrives at
-        /// <c>AudioDataReady</c> as a clean MAU.
-        /// </summary>
-        private bool TrySetupMp3FfmePipeline() {
-            if (_mp3FfmeProducer != null) return true;
-            if (_psMuxer != null) return false;  // PS pipeline owns the audio
-            // Modern PCM pipeline claimed the audio stream — having both
-            // active causes whichever fires first in dispatch to receive
-            // PCM bytes as if they were MPA, which libav rejects.
-            if (_pcmFfmeProducer != null) return false;
-
-            // Allow rolling back to the NAudio path without rebuild for
-            // diagnostic purposes — flip the env var and we keep the
-            // legacy behaviour for music files.
-            if (string.Equals(Environment.GetEnvironmentVariable("SOFTSLED_AUDIO_VIA_NAUDIO"),
-                              "1", StringComparison.Ordinal)) {
-                Debug.WriteLine("[mp3-ffme] disabled via SOFTSLED_AUDIO_VIA_NAUDIO=1");
-                return false;
-            }
-
-            int rfcPt = -1, wmPt = -1;
-            bool hasVideoCodec = false;
-            foreach (var kv in wmfPayloadDataDict) {
-                var entry = kv.Value;
-                if (entry == null || string.IsNullOrEmpty(entry.Codec)) continue;
-                if (entry.Type == MediaType.Video) {
-                    // If video is advertised, the MPV producer or PS muxer
-                    // will pick it up — audio shares that pipeline.
-                    if (entry.Codec.Equals("VND.MS.WM-MPV", StringComparison.OrdinalIgnoreCase) ||
-                        entry.Codec.Equals("X-WMF-PF",     StringComparison.OrdinalIgnoreCase)) {
-                        hasVideoCodec = true;
-                    }
-                    continue;
-                }
-                if (entry.Type != MediaType.Audio) continue;
-                if (rfcPt < 0 && entry.Codec.Equals("MPA",
-                                                    StringComparison.OrdinalIgnoreCase))
-                    rfcPt = entry.PayloadNumber;
-                else if (wmPt < 0 && entry.Codec.Equals("VND.MS.WM-MPA",
-                                                        StringComparison.OrdinalIgnoreCase))
-                    wmPt = entry.PayloadNumber;
-            }
-
-            if (hasVideoCodec) return false;          // video sessions use PS/MPV path
-            if (rfcPt < 0 && wmPt < 0) return false;  // no MPA codec at all
-
-            int activePt = rfcPt >= 0 ? rfcPt : wmPt;
-            _mp3FfmeNeedsFrameStrip = (rfcPt >= 0);
-
-            Debug.WriteLine($"[mp3-ffme] standing up audio-only MP3 pipeline " +
-                            $"for PT={activePt} ({(rfcPt >= 0 ? "RFC 2250" : "vnd.ms.wm-MPA")})");
-            _mp3FfmeProducer    = new AsfStreamProducer(/*log:*/ null);
-            _mp3FfmeInputStream = new AsfFfmeInputStream(_mp3FfmeProducer,
-                                                         /*log:*/ null,
-                                                         forcedInputFormat: "mp3");
-
-            try {
-                string logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
-                                                        "softsled-mp3-ffme-stats.log");
-                _mp3FfmeDiagLog = new System.IO.StreamWriter(
-                    new System.IO.FileStream(logPath,
-                        System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.Read),
-                    System.Text.Encoding.ASCII) { AutoFlush = true };
-                _mp3FfmeDiagLog.WriteLine("# Audio-only MP3 pipeline diagnostic log (FFME / libav decode)");
-                _mp3FfmeDiagLog.WriteLine($"# PT={activePt}  source={(rfcPt >= 0 ? "RFC 2250" : "vnd.ms.wm-MPA")}");
-                _mp3FfmeDiagLog.WriteLine("# columns: wall(s) chunks bytesPushed producerQueued producerBytesProduced producerBytesConsumed drops");
-                _mp3FfmeDiagSw.Restart();
-            } catch (Exception ex) {
-                Debug.WriteLine($"[mp3-ffme] diag log open failed: {ex.Message}");
-            }
-
-            try {
-                VideoPipelineReady?.Invoke(_mp3FfmeInputStream);
-            } catch (Exception ex) {
-                Debug.WriteLine($"[mp3-ffme] VideoPipelineReady handler threw: {ex.Message}");
-            }
-            return true;
-        }
-
-        private void WriteMp3FfmeDiagRow() {
-            if (_mp3FfmeDiagLog == null || _mp3FfmeProducer == null) return;
-            try {
-                _mp3FfmeDiagLog.WriteLine(
-                    $"{_mp3FfmeDiagSw.Elapsed.TotalSeconds,7:F2} " +
-                    $"{_mp3FfmeChunks,7} {_mp3FfmeBytesPushed,12} " +
-                    $"{_mp3FfmeProducer.QueueDepth,5} " +
-                    $"{_mp3FfmeProducer.BytesProduced,12} " +
-                    $"{_mp3FfmeProducer.BytesConsumed,12} " +
-                    $"{_mp3FfmeProducer.DroppedChunks,5}");
-            } catch { /* ignore */ }
-        }
-
-        /// <summary>
-        /// Stand up the combined MPEG-PS pipeline (video + audio muxed into
-        /// one FFME input) when SDP advertises both wm-MPV video AND wm-MPA
-        /// audio. Returns true if the pipeline was created (in which case
-        /// the single-stream MPV producer and MPA sink should be skipped).
-        /// Solves both:
-        ///   * audio decode: libav handles Layer I/II/III natively
-        ///     (NAudio's ACM only handles Layer III)
-        ///   * A/V sync: FFME's master clock presents both streams together
-        /// </summary>
-        private bool TrySetupMpegPsPipeline() {
-            CommitDiagLog($"TrySetupMpegPsPipeline: entered (_psMuxer null? {_psMuxer == null}, dict count={wmfPayloadDataDict.Count})");
-            if (_psMuxer != null) return true;
-
-            // Pre-wire-commit code declined here when X-WMF-PF was also
-            // advertised in the SDP. Obsolete now — callers are only the
-            // wire-commit FinalizePipelineSetup path, which calls us
-            // only after observing actual MPA + MPV packets. The SDP
-            // alternatives are irrelevant once the server's choice is
-            // visible on the wire.
-            int vidPt = -1, audPt = -1;
-            foreach (var kv in wmfPayloadDataDict) {
-                var entry = kv.Value;
-                CommitDiagLog($"TrySetupMpegPsPipeline: dict[{kv.Key}] type={entry?.Type} codec={entry?.Codec ?? "(null)"}");
-                if (entry == null || string.IsNullOrEmpty(entry.Codec)) continue;
-                if (entry.Type == MediaType.Video && entry.Codec.Equals("VND.MS.WM-MPV",
-                                                                       StringComparison.OrdinalIgnoreCase))
-                    vidPt = entry.PayloadNumber;
-                else if (entry.Type == MediaType.Audio && entry.Codec.Equals("VND.MS.WM-MPA",
-                                                                             StringComparison.OrdinalIgnoreCase))
-                    audPt = entry.PayloadNumber;
-            }
-            CommitDiagLog($"TrySetupMpegPsPipeline: search result vidPt={vidPt} audPt={audPt}");
-            if (vidPt < 0 || audPt < 0) return false;
-
-            Debug.WriteLine($"[ps-ffme] standing up MPEG-PS pipeline " +
-                            $"(audio PT={audPt}, video PT={vidPt})");
-            _psMuxer       = new MpegPsMuxer();
-            // Apply any RTP-Info anchor values that arrived BEFORE the
-            // muxer was created (the PLAY response runs at SETUP/PLAY
-            // time; we now create the muxer lazily on first wire packet).
-            if (_pendingAudioRtptime.HasValue) {
-                _psMuxer.SetAudioBaseTs(_pendingAudioRtptime.Value);
-                Debug.WriteLine($"[rtp-info] applied cached audio rtptime={_pendingAudioRtptime.Value} to new muxer");
-                RtcpDiagLog($"rtp-info AUDIO replay-applied=rtptime={_pendingAudioRtptime.Value}");
-            }
-            if (_pendingVideoRtptime.HasValue) {
-                _psMuxer.SetVideoBaseTs(_pendingVideoRtptime.Value);
-                Debug.WriteLine($"[rtp-info] applied cached video rtptime={_pendingVideoRtptime.Value} to new muxer");
-                RtcpDiagLog($"rtp-info VIDEO replay-applied=rtptime={_pendingVideoRtptime.Value}");
-            }
-            _psProducer    = new AsfStreamProducer(/*log:*/ null);
-            _psInputStream = new AsfFfmeInputStream(_psProducer,
-                                                    /*log:*/ null,
-                                                    forcedInputFormat: "mpeg");
-
-            // Diagnostic log for the combined pipeline. Reuses the format
-            // pattern from softsled-video-mau-stats.log.
-            try {
-                string logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
-                                                        "softsled-ps-pipeline-stats.log");
-                _psDiagLog = new System.IO.StreamWriter(
-                    new System.IO.FileStream(logPath,
-                        System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.Read),
-                    System.Text.Encoding.ASCII) { AutoFlush = true };
-                _psDiagLog.WriteLine("# MPEG-PS combined audio+video pipeline diagnostic log");
-                _psDiagLog.WriteLine($"# audio PT={audPt} (vnd.ms.wm-MPA)  video PT={vidPt} (vnd.ms.wm-MPV)");
-                _psDiagLog.WriteLine($"# forcedFmt=mpeg  target=FFME");
-                _psDiagLog.WriteLine("# columns: wall(s) vidMAUs audMAUs bytesPushed producerQueued producerBytesProduced producerBytesConsumed drops");
-                _psDiagSw.Restart();
-            } catch (Exception ex) {
-                Debug.WriteLine($"[ps-ffme] diag log open failed: {ex.Message}");
-            }
-
-            try {
-                VideoPipelineReady?.Invoke(_psInputStream);
-            } catch (Exception ex) {
-                Debug.WriteLine($"[ps-ffme] VideoPipelineReady handler threw: {ex.Message}");
-            }
-            return true;
-        }
-
-        private void WritePsDiagRow() {
-            if (_psDiagLog == null || _psProducer == null) return;
-            try {
-                // Append per-stream muxer state at end of row so we can
-                // confirm RTP-Info-based anchoring fired AND watch for any
-                // creeping A/V offset over the session (vidPtsMs - audPtsMs).
-                string muxerState = _psMuxer == null ? "no-mux" :
-                    $"audBase={_psMuxer.AudioBaseTs}({(_psMuxer.AudioAnchored ? "set" : "unset")}) " +
-                    $"vidBase={_psMuxer.VideoBaseTs}({(_psMuxer.VideoAnchored ? "set" : "unset")}) " +
-                    $"audPts={_psMuxer.LatestAudioPtsMs:F1}ms " +
-                    $"vidPts={_psMuxer.LatestVideoPtsMs:F1}ms " +
-                    $"av-skew={_psMuxer.LatestAudioPtsMs - _psMuxer.LatestVideoPtsMs:+0.0;-0.0;0}ms";
-                _psDiagLog.WriteLine(
-                    $"{_psDiagSw.Elapsed.TotalSeconds,7:F2} " +
-                    $"{_psVideoMaus,7} {_psAudioMaus,7} {_psBytesPushed,12} " +
-                    $"{_psProducer.QueueDepth,5} " +
-                    $"{_psProducer.BytesProduced,12} " +
-                    $"{_psProducer.BytesConsumed,12} " +
-                    $"{_psProducer.DroppedChunks,5}  " +
-                    muxerState);
-            } catch { /* ignore */ }
-        }
-
-        /// <summary>
-        /// Stand up the MPEG-TS unified pipeline for modern codecs
-        /// (H264 video + raw-LE PCM audio today). Replaces the dual-FFME
-        /// hack for those streams — single muxed input means a single
-        /// FFME / libav clock, so audio and video stay in sync naturally.
-        /// </summary>
-        private bool TrySetupMpegTsPipeline() {
-            if (_tsMuxer != null) return true;
-            if (_psMuxer != null) return false; // PS path owns the streams
-
-            // Look up the audio PT for sample-rate / channels / bps —
-            // muxer needs these to advertise the right format to libav.
-            // Also harvest the per-stream RTP clock rate from rtpmap so
-            // the muxer can convert RTP timestamps to canonical 90 kHz
-            // PTS (x-wmf-pf advertises 1000 Hz; wm-MPA/MPV use 90 kHz).
-            int sampleRate = 48000, channels = 2, bps = 16;
-            int audioClockHz = 90000, videoClockHz = 90000;
-            foreach (var kv in wmfPayloadDataDict) {
-                var entry = kv.Value;
-                if (entry == null) continue;
-                if (string.IsNullOrEmpty(entry.Codec)) continue;
-                if (!entry.Codec.Equals("X-WMF-PF", StringComparison.OrdinalIgnoreCase)) continue;
-                if (string.IsNullOrEmpty(entry.FormatParameter)) continue;
-
-                if (entry.Type == MediaType.Audio
-                    && entry.FormatParameter.IndexOf("audio/vnd.wave", StringComparison.OrdinalIgnoreCase) >= 0) {
-                    string configValue = ExtractFmtpParameter(entry.FormatParameter, "config");
-                    if (!string.IsNullOrEmpty(configValue)) {
-                        var fmt = WmrptPcmNAudioSink.WaveFormatExFromConfig(configValue);
-                        if (fmt != null) {
-                            sampleRate = fmt.SampleRate;
-                            channels   = fmt.Channels;
-                            bps        = fmt.BitsPerSample;
-                        }
-                    }
-                    audioClockHz = entry.ClockHz;
-                } else if (entry.Type == MediaType.Video
-                    && entry.FormatParameter.IndexOf("video/vnd.avi", StringComparison.OrdinalIgnoreCase) >= 0
-                    && entry.FormatParameter.IndexOf("codec=\"H264\"", StringComparison.OrdinalIgnoreCase) >= 0) {
-                    videoClockHz = entry.ClockHz;
-                }
-            }
-
-            _tsMuxer = new MpegTsMuxer();
-            _tsMuxer.ConfigureVideo(MpegTsMuxer.VideoCodec.H264);
-            _tsMuxer.ConfigureAudio(MpegTsMuxer.AudioCodec.BluRayLpcm, sampleRate, channels, bps);
-            _tsMuxer.SetAudioClockRate((uint)audioClockHz);
-            _tsMuxer.SetVideoClockRate((uint)videoClockHz);
-
-            // Replay RTP-Info anchors if they arrived before the muxer existed.
-            if (_pendingAudioRtptime.HasValue) {
-                _tsMuxer.SetAudioBaseTs(_pendingAudioRtptime.Value);
-                RtcpDiagLog($"rtp-info AUDIO ts-replay-applied=rtptime={_pendingAudioRtptime.Value}");
-            }
-            if (_pendingVideoRtptime.HasValue) {
-                _tsMuxer.SetVideoBaseTs(_pendingVideoRtptime.Value);
-                RtcpDiagLog($"rtp-info VIDEO ts-replay-applied=rtptime={_pendingVideoRtptime.Value}");
-            }
-
-            _tsProducer    = new AsfStreamProducer(/*log:*/ null);
-            // Tell libavformat to expect MPEG-TS. The mpegts demuxer
-            // probes PAT/PMT and per-PID streams from our muxed bytes.
-            // No PrivateOptions needed beyond the format — extra
-            // codec-override options only become necessary if the
-            // private-data PCM PID isn't auto-decoded; if so we flip
-            // ConfigureAudio above to BluRayLpcm and re-run.
-            _tsInputStream = new AsfFfmeInputStream(_tsProducer,
-                                                     /*log:*/ null,
-                                                     forcedInputFormat: "mpegts");
-
-            try {
-                string logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
-                                                        "softsled-ts-pipeline-stats.log");
-                _tsDiagLog = new System.IO.StreamWriter(
-                    new System.IO.FileStream(logPath,
-                        System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.Read),
-                    System.Text.Encoding.ASCII) { AutoFlush = true };
-                _tsDiagLog.WriteLine("# MPEG-TS combined audio+video pipeline diagnostic log");
-                _tsDiagLog.WriteLine($"# video=H264 (rtpClock={videoClockHz}Hz)  audio=BluRayLpcm {sampleRate}Hz {channels}ch {bps}bps (rtpClock={audioClockHz}Hz)");
-                _tsDiagLog.WriteLine($"# forcedFmt=mpegts target=FFME");
-                _tsDiagLog.WriteLine("# columns: wall(s) vidMAUs audMAUs bytesPushed producerQueued producerBytesProduced producerBytesConsumed drops audPts vidPts skew");
-                _tsDiagSw.Restart();
-            } catch (Exception ex) {
-                Debug.WriteLine($"[ts-ffme] diag log open failed: {ex.Message}");
-            }
-
-            try {
-                VideoPipelineReady?.Invoke(_tsInputStream);
-            } catch (Exception ex) {
-                Debug.WriteLine($"[ts-ffme] VideoPipelineReady handler threw: {ex.Message}");
-            }
-            Debug.WriteLine($"[ts-ffme] standing up MPEG-TS pipeline (H264 + LPCM-PES-private, audio cfg={sampleRate}/{channels}/{bps})");
-            return true;
-        }
-
-        private void WriteTsDiagRow() {
-            if (_tsDiagLog == null || _tsProducer == null || _tsMuxer == null) return;
-            try {
-                _tsDiagLog.WriteLine(
-                    $"{_tsDiagSw.Elapsed.TotalSeconds,7:F2} " +
-                    $"{_tsVideoMaus,7} {_tsAudioMaus,7} {_tsBytesPushed,12} " +
-                    $"{_tsProducer.QueueDepth,5} " +
-                    $"{_tsProducer.BytesProduced,12} " +
-                    $"{_tsProducer.BytesConsumed,12} " +
-                    $"{_tsProducer.DroppedChunks,5}  " +
-                    $"audPts={_tsMuxer.LatestAudioPtsMs:F1}ms " +
-                    $"vidPts={_tsMuxer.LatestVideoPtsMs:F1}ms " +
-                    $"skew={_tsMuxer.LatestAudioPtsMs - _tsMuxer.LatestVideoPtsMs:+0.0;-0.0;0}ms");
-            } catch { /* ignore */ }
-        }
-
-        private void TrySetupMpvVideoProducer() {
-            if (_mpvVideoProducer != null) return;
-            // Skip if the combined PS pipeline is already handling video.
-            if (_psMuxer != null) return;
-            // Modern H264 producer claimed the video stream — having both
-            // pipelines active routes wire MAUs (per NalUnitReady) to
-            // whichever fires first in the dispatch order, which silently
-            // breaks when the server sends bytes for the OTHER codec.
-            if (_h264VideoProducer != null) return;
-            foreach (var kv in wmfPayloadDataDict) {
-                var entry = kv.Value;
-                if (entry == null) continue;
-                if (entry.Type != MediaType.Video) continue;
-                if (string.IsNullOrEmpty(entry.Codec)) continue;
-                if (!entry.Codec.Equals("VND.MS.WM-MPV", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                Debug.WriteLine($"[mpv-ffme] standing up MPEG-ES video producer " +
-                                $"for PT={entry.PayloadNumber}");
-                _mpvVideoProducer    = new AsfStreamProducer(/*log:*/ null);
-                _mpvVideoInputStream = new AsfFfmeInputStream(_mpvVideoProducer,
-                                                              /*log:*/ null,
-                                                              forcedInputFormat: "mpegvideo");
-
-                // Diagnostic log: lets us tell apart "depacketizer emitted
-                // zero MAUs" from "FFME never consumed anything" by writing
-                // periodic counters and a final summary line. Matches the
-                // pattern used by softsled-audio-mau-stats.log.
-                try {
-                    string logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
-                                                            "softsled-video-mau-stats.log");
-                    _mpvDiagLog = new System.IO.StreamWriter(
-                        new System.IO.FileStream(logPath,
-                            System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.Read),
-                        System.Text.Encoding.ASCII) { AutoFlush = true };
-                    _mpvDiagLog.WriteLine("# WMRPT MPEG-ES (vnd.ms.wm-MPV) video producer diagnostic log");
-                    _mpvDiagLog.WriteLine($"# PT={entry.PayloadNumber} forcedFmt=mpegvideo target=FFME");
-                    _mpvDiagLog.WriteLine("# columns: wall(s) MAUs syncPts bytesSubmitted producerQueued producerBytesProduced producerBytesConsumed drops");
-                    _mpvDiagSw.Restart();
-                } catch (Exception ex) {
-                    Debug.WriteLine($"[mpv-ffme] diag log open failed: {ex.Message}");
-                }
-
-                // Fire the pipeline-ready event so the host can wire FFME.
-                try {
-                    VideoPipelineReady?.Invoke(_mpvVideoInputStream);
-                } catch (Exception ex) {
-                    Debug.WriteLine($"[mpv-ffme] VideoPipelineReady handler threw: {ex.Message}");
-                }
-                return;
-            }
-        }
-
-        /// <summary>
-        /// Scan <see cref="wmfPayloadDataDict"/> for an X-WMF-PF video PT
-        /// whose fmtp config identifies the inner codec as H264. If
-        /// present, stand up an <see cref="AsfStreamProducer"/> + an
-        /// <see cref="AsfFfmeInputStream"/> with
-        /// <c>forcedInputFormat="h264"</c>, then raise
-        /// <see cref="VideoPipelineReady"/>. Used by modern WMC live-TV /
-        /// DVR-MS recordings that pair PCM audio with H.264 video.
-        /// </summary>
-        private void TrySetupH264VideoProducer() {
-            if (_h264VideoProducer != null) return;
-            if (_psMuxer != null)            return; // PS pipeline is handling video
-            if (_mpvVideoProducer != null)   return; // Legacy MPV path already wired
-
-            int h264Pt = -1;
-            foreach (var kv in wmfPayloadDataDict) {
-                var entry = kv.Value;
-                if (entry == null) continue;
-                if (entry.Type != MediaType.Video) continue;
-                if (string.IsNullOrEmpty(entry.Codec) ||
-                    !entry.Codec.Equals("X-WMF-PF", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (string.IsNullOrEmpty(entry.FormatParameter)) continue;
-                if (entry.FormatParameter.IndexOf("video/vnd.avi", StringComparison.OrdinalIgnoreCase) < 0)
-                    continue;
-                if (entry.FormatParameter.IndexOf("codec=\"H264\"", StringComparison.OrdinalIgnoreCase) < 0)
-                    continue;
-                h264Pt = entry.PayloadNumber;
-                break;
-            }
-            if (h264Pt < 0) return;
-
-            Debug.WriteLine($"[h264-ffme] standing up H264 video producer for PT={h264Pt}");
-            _h264VideoProducer    = new AsfStreamProducer(/*log:*/ null);
-            _h264VideoInputStream = new AsfFfmeInputStream(_h264VideoProducer,
-                                                           /*log:*/ null,
-                                                           forcedInputFormat: "h264");
-
-            try {
-                string logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
-                                                        "softsled-h264-mau-stats.log");
-                _h264DiagLog = new System.IO.StreamWriter(
-                    new System.IO.FileStream(logPath,
-                        System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.Read),
-                    System.Text.Encoding.ASCII) { AutoFlush = true };
-                _h264DiagLog.WriteLine("# WMRPT X-WMF-PF H264 video producer diagnostic log");
-                _h264DiagLog.WriteLine($"# PT={h264Pt} forcedFmt=h264 target=FFME");
-                _h264DiagLog.WriteLine("# columns: wall(s) MAUs syncPts bytesSubmitted producerQueued producerBytesProduced producerBytesConsumed drops");
-                _h264DiagSw.Restart();
-            } catch (Exception ex) {
-                Debug.WriteLine($"[h264-ffme] diag log open failed: {ex.Message}");
-            }
-
-            try {
-                VideoPipelineReady?.Invoke(_h264VideoInputStream);
-            } catch (Exception ex) {
-                Debug.WriteLine($"[h264-ffme] VideoPipelineReady handler threw: {ex.Message}");
-            }
-        }
 
         /// <summary>
         /// Record the codec observed on the first wire packet of this
@@ -2563,11 +1770,11 @@ namespace SoftSled.Components.RTSP {
             lock (_commitLock) {
                 if (_wireAudioCodec != null) return;
                 _wireAudioCodec = codec;
-                Debug.WriteLine($"[wire-commit] audio codec={codec}");
-                CommitDiagLog($"COMMIT audio={codec} (videoSoFar={_wireVideoCodec ?? "(none)"})");
-                // Notify the direct-libav engine (if attached) so it can
-                // construct the AudioDecoder + NAudioRenderer pair.
-                NotifyEngineAudioCommit(codec);
+                // Capture the RTP timestamp clock for this stream so the
+                // RTCP-SR StreamClock can convert RTP timestamps to PTS.
+                _audioClockHz = ClockHzForWireCodec(MediaType.Audio, codec);
+                Debug.WriteLine($"[wire-commit] audio codec={codec} clockHz={_audioClockHz}");
+                CommitDiagLog($"COMMIT audio={codec} clockHz={_audioClockHz} (videoSoFar={_wireVideoCodec ?? "(none)"})");
                 TryFinalizePipelineSetup();
             }
         }
@@ -2577,83 +1784,35 @@ namespace SoftSled.Components.RTSP {
             lock (_commitLock) {
                 if (_wireVideoCodec != null) return;
                 _wireVideoCodec = codec;
-                Debug.WriteLine($"[wire-commit] video codec={codec}");
-                CommitDiagLog($"COMMIT video={codec} (audioSoFar={_wireAudioCodec ?? "(none)"})");
-                NotifyEngineVideoCommit(codec);
+                _videoClockHz = ClockHzForWireCodec(MediaType.Video, codec);
+                Debug.WriteLine($"[wire-commit] video codec={codec} clockHz={_videoClockHz}");
+                CommitDiagLog($"COMMIT video={codec} clockHz={_videoClockHz} (audioSoFar={_wireAudioCodec ?? "(none)"})");
                 TryFinalizePipelineSetup();
             }
         }
 
-        /// <summary>Push a video-codec-committed notification to the
-        /// playback engine with the SDP-derived format details for that
-        /// PT. No-op when the engine isn't attached (= legacy FFME path
-        /// chosen, or session torn down).</summary>
-        private void NotifyEngineVideoCommit(string wireCodec) {
-            var engine = _playbackEngine;
-            if (engine == null) return;
-            // Find the first PT in the SDP dict whose Codec equals the
-            // wire codec (and Type=Video). That gives us the FormatParameter
-            // for the AM_Media_Format / extradata derivation.
+        /// <summary>
+        /// Resolve the RTP timestamp clock rate (Hz) for the committed wire
+        /// codec from the SDP rtpmap data cached in
+        /// <see cref="wmfPayloadDataDict"/>. Used to give the RTCP-SR
+        /// <see cref="StreamClock"/> the right divisor for RTP→PTS
+        /// conversion (e.g. 90000 for vnd.ms.wm-MPA/MPV, 1000 for x-wmf-pf).
+        /// Returns 0 if no matching SDP entry is found.
+        /// </summary>
+        private uint ClockHzForWireCodec(MediaType type, string codec) {
+            // Return 0 if Codec not provided
+            if (string.IsNullOrEmpty(codec)) return 0;
+            // Iterate over WMFPayloadData Dict
             foreach (var kv in wmfPayloadDataDict) {
                 var entry = kv.Value;
-                if (entry == null) continue;
-                if (entry.Type != MediaType.Video) continue;
-                if (!string.Equals(entry.Codec, wireCodec, StringComparison.OrdinalIgnoreCase)) continue;
-                try {
-                    engine.OnVideoCodecCommitted(wireCodec, entry.AM_Media_Format,
-                                                 entry.FormatParameter,
-                                                 (uint)entry.ClockHz);
-                } catch (Exception ex) {
-                    Debug.WriteLine($"[engine] OnVideoCodecCommitted threw: {ex.Message}");
-                }
-                return;
+                if (entry == null || entry.Type != type) continue;
+                if (string.IsNullOrEmpty(entry.Codec)) continue;
+                if (!entry.Codec.Equals(codec, StringComparison.OrdinalIgnoreCase)) continue;
+                if (entry.ClockHz > 0) return (uint)entry.ClockHz;
             }
-            Debug.WriteLine($"[engine] no SDP entry for video wire codec '{wireCodec}'");
+            return 0;
         }
 
-        private void NotifyEngineAudioCommit(string wireCodec) {
-            var engine = _playbackEngine;
-            if (engine == null) return;
-            foreach (var kv in wmfPayloadDataDict) {
-                var entry = kv.Value;
-                if (entry == null) continue;
-                if (entry.Type != MediaType.Audio) continue;
-                if (!string.Equals(entry.Codec, wireCodec, StringComparison.OrdinalIgnoreCase)) continue;
-                try {
-                    engine.OnAudioCodecCommitted(wireCodec, entry.AM_Media_Format,
-                                                 entry.FormatParameter,
-                                                 (uint)entry.ClockHz);
-                } catch (Exception ex) {
-                    Debug.WriteLine($"[engine] OnAudioCodecCommitted threw: {ex.Message}");
-                }
-                return;
-            }
-            Debug.WriteLine($"[engine] no SDP entry for audio wire codec '{wireCodec}'");
-        }
-
-        // Diagnostic log for the wire-commit / FinalizePipelineSetup /
-        // TrySetupMpegPsPipeline chain — written unconditionally to
-        // %TEMP%\softsled-commit-debug.log. Helps diagnose "RTP arriving
-        // but FFME never opens" bugs by tracing exactly which branch
-        // the pipeline-setup state machine takes.
-        private System.IO.StreamWriter _commitDiagLog;
-        private void CommitDiagLog(string line) {
-            try {
-                if (_commitDiagLog == null) {
-                    string path = System.IO.Path.Combine(
-                        System.IO.Path.GetTempPath(),
-                        "softsled-commit-debug.log");
-                    _commitDiagLog = new System.IO.StreamWriter(
-                        new System.IO.FileStream(path,
-                            System.IO.FileMode.Create,
-                            System.IO.FileAccess.Write,
-                            System.IO.FileShare.Read),
-                        System.Text.Encoding.ASCII) { AutoFlush = true };
-                    _commitDiagLog.WriteLine($"# commit-debug, started {DateTime.Now:HH:mm:ss.fff}");
-                }
-                _commitDiagLog.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {line}");
-            } catch { /* never break the wire path because diag fails */ }
-        }
 
         // Lock-held caller. Either commits NOW if both codecs known, or
         // starts a 300ms safety-net timer that commits with whatever
@@ -2672,10 +1831,10 @@ namespace SoftSled.Components.RTSP {
             // Fast path for sessions where the SDP has only one media
             // stream (the other side will never commit). Most common:
             // an audio-only MP3 session — the SDP carries m=audio with
-            // no m=video, so waiting for a video commit just delays the
-            // pipeline setup and drops the first ~300 ms of audio MAUs
-            // (the RFC 2250 MPA path bypasses the depacketizer's
-            // buffering, so dropped early MAUs are gone).
+            // no m=video, so waiting 300 ms for a video commit just
+            // delays the pipeline setup and drops the first ~7 audio
+            // MAUs (the RFC 2250 MPA path doesn't buffer via the
+            // depacketizer, so dropped early MAUs are gone).
             //
             // Detect "no other side coming" by scanning the SDP-derived
             // payload dict for any entry of the missing media type. If
@@ -2690,8 +1849,7 @@ namespace SoftSled.Components.RTSP {
                 if (needVideo && entry.Type == MediaType.Video) { sdpHasMissingSide = true; break; }
             }
             if (!sdpHasMissingSide) {
-                CommitDiagLog($"TryFinalize: only have audio={_wireAudioCodec ?? "(none)"} video={_wireVideoCodec ?? "(none)"} " +
-                              "and SDP has no entry for the missing side — finalizing now");
+                CommitDiagLog($"TryFinalize: only have audio={_wireAudioCodec ?? "(none)"} video={_wireVideoCodec ?? "(none)"} and SDP has no entry for the missing side — finalizing now");
                 FinalizePipelineSetup();
                 return;
             }
@@ -2715,73 +1873,14 @@ namespace SoftSled.Components.RTSP {
             _commitTimer = null;
             Debug.WriteLine($"[wire-commit] finalize: audio={_wireAudioCodec ?? "(none)"} video={_wireVideoCodec ?? "(none)"}");
             CommitDiagLog($"FinalizePipelineSetup: audio={_wireAudioCodec ?? "(none)"} video={_wireVideoCodec ?? "(none)"}");
-
-            string aud = _wireAudioCodec ?? "";
-            string vid = _wireVideoCodec ?? "";
-            bool isAudMpa = aud.Equals("VND.MS.WM-MPA", StringComparison.OrdinalIgnoreCase)
-                         || aud.Equals("MPA",          StringComparison.OrdinalIgnoreCase);
-            bool isVidMpv = vid.Equals("VND.MS.WM-MPV", StringComparison.OrdinalIgnoreCase);
-            bool isAudPcm = aud.Equals("X-WMF-PF",     StringComparison.OrdinalIgnoreCase);
-            bool isVidH264 = vid.Equals("X-WMF-PF",    StringComparison.OrdinalIgnoreCase);
-
-            // 1. Combined PS pipeline for legacy MPA+MPV — gives FFME-clock
-            //    A/V sync via a single muxed input stream. Returns false
-            //    if it can't find both PTs in the SDP dict; fall through
-            //    to dual-FFME in that case rather than leaving the
-            //    session with no pipeline.
-            CommitDiagLog($"FinalizePipelineSetup: isAudMpa={isAudMpa} isVidMpv={isVidMpv} isAudPcm={isAudPcm} isVidH264={isVidH264}");
-            if (isAudMpa && isVidMpv) {
-                CommitDiagLog("FinalizePipelineSetup: calling TrySetupMpegPsPipeline");
-                if (TrySetupMpegPsPipeline()) {
-                    CommitDiagLog("FinalizePipelineSetup: TrySetupMpegPsPipeline returned TRUE");
-                    return;
-                }
-                CommitDiagLog("FinalizePipelineSetup: TrySetupMpegPsPipeline returned FALSE — falling back to dual FFME");
-                Debug.WriteLine("[wire-commit] PS pipeline declined despite MPA+MPV wire codecs — falling back to dual FFME");
-            }
-
-            // 2. MPEG-TS unified pipeline for modern PCM + H264 — single
-            //    libav clock keeps A/V in sync the same way PS does for
-            //    the legacy stack. This is the forward-looking unified
-            //    container; future codec combos will be added here.
-            if (isAudPcm && isVidH264) {
-                if (TrySetupMpegTsPipeline()) return;
-                Debug.WriteLine("[wire-commit] TS pipeline declined for PCM+H264 — falling back to dual FFME");
-            }
-
-            // 3. Dual-FFME paths (used when no combined muxer matches).
-            if (isAudPcm) TrySetupPcmFfmePipeline();
-            else if (isAudMpa) TrySetupMp3FfmePipeline();
-            // AC-3 etc. not yet implemented.
-
-            if (isVidH264) TrySetupH264VideoProducer();
-            else if (isVidMpv) TrySetupMpvVideoProducer();
+            // Both audio and video are owned by the external controller
+            // (libav decode → NAudio / D3DImage), fed via the external
+            // audio/video consumers. Nothing to set up here anymore — this
+            // just commits the wire codecs and tears down the commit timer.
         }
 
-        /// <summary>
-        /// Find <paramref name="key"/>=value in a semicolon-separated fmtp
-        /// FormatParameter string. Returns the value (without quotes) or
-        /// null if absent. Whitespace-tolerant.
-        /// </summary>
-        private static string ExtractFmtpParameter(string fmtp, string key) {
-            foreach (string token in fmtp.Split(';')) {
-                string t = token.Trim();
-                int eq = t.IndexOf('=');
-                if (eq <= 0) continue;
-                if (string.Equals(t.Substring(0, eq), key, StringComparison.OrdinalIgnoreCase)) {
-                    string val = t.Substring(eq + 1).Trim();
-                    if (val.Length >= 2 && val[0] == '"' && val[val.Length - 1] == '"')
-                        val = val.Substring(1, val.Length - 2);
-                    return val;
-                }
-            }
-            return null;
-        }
+        #region RTP Methods ###################################################
 
-
-        int rtp_count = 0; // used for statistics
-        private int _vidRecvLoggedOnce;
-        private int _audRecvLoggedOnce;
         // RTP packet (or RTCP packet) has been received.
         public void Rtp_VideoDataReceived(object sender, Rtsp.RtspChunkEventArgs e) {
 
@@ -2801,465 +1900,15 @@ namespace SoftSled.Components.RTSP {
             // the Audio Channel or the Audio Control Channel (RTCP)
 
             if (data_received.Channel == video_rtcp_channel || data_received.Channel == audio_rtcp_channel) {
-                Debug.WriteLine("Received a RTCP message on channel " + data_received.Channel);
-
-                // RTCP Packet
-                // - Version, Padding and Receiver Report Count
-                // - Packet Type
-                // - Length
-                // - SSRC
-                // - payload
-
-                // There can be multiple RTCP packets transmitted together. Loop ever each one
-
-                long packetIndex = 0;
-                while (packetIndex < e.Message.Data.Length) {
-
-                    int rtcp_version = (e.Message.Data[packetIndex + 0] >> 6);
-                    int rtcp_padding = (e.Message.Data[packetIndex + 0] >> 5) & 0x01;
-                    int rtcp_reception_report_count = (e.Message.Data[packetIndex + 0] & 0x1F);
-                    byte rtcp_packet_type = e.Message.Data[packetIndex + 1]; // Values from 200 to 207
-                    uint rtcp_length = (uint)(e.Message.Data[packetIndex + 2] << 8) + (uint)(e.Message.Data[packetIndex + 3]); // number of 32 bit words
-                    uint rtcp_ssrc = (uint)(e.Message.Data[packetIndex + 4] << 24) + (uint)(e.Message.Data[packetIndex + 5] << 16)
-                        + (uint)(e.Message.Data[packetIndex + 6] << 8) + (uint)(e.Message.Data[packetIndex + 7]);
-
-                    // 200 = SR = Sender Report
-                    // 201 = RR = Receiver Report
-                    // 202 = SDES = Source Description
-                    // 203 = Bye = Goodbye
-                    // 204 = APP = Application Specific Method
-                    // 207 = XR = Extended Reports
-
-                    System.Diagnostics.Debug.WriteLine("RTCP Data. PacketType=" + rtcp_packet_type
-                                      + " SSRC=" + rtcp_ssrc);
-
-                    if (rtcp_packet_type == 200) {
-                        // SR (Sender Report). Carries the per-stream NTP↔RTP
-                        // anchor we need for absolute A/V timing.
-                        //
-                        //  off 4..7   sender SSRC
-                        //  off 8..15  NTP timestamp (64-bit fixed-point)
-                        //  off 16..19 RTP timestamp paired with above NTP
-
-                        UInt32 ntp_msw_seconds =
-                            (uint)(e.Message.Data[packetIndex + 8]  << 24) |
-                            (uint)(e.Message.Data[packetIndex + 9]  << 16) |
-                            (uint)(e.Message.Data[packetIndex + 10] << 8)  |
-                            (uint)(e.Message.Data[packetIndex + 11]);
-                        UInt32 ntp_lsw_fractions =
-                            (uint)(e.Message.Data[packetIndex + 12] << 24) |
-                            (uint)(e.Message.Data[packetIndex + 13] << 16) |
-                            (uint)(e.Message.Data[packetIndex + 14] << 8)  |
-                            (uint)(e.Message.Data[packetIndex + 15]);
-                        UInt32 rtp_timestamp_sr =
-                            (uint)(e.Message.Data[packetIndex + 16] << 24) |
-                            (uint)(e.Message.Data[packetIndex + 17] << 16) |
-                            (uint)(e.Message.Data[packetIndex + 18] << 8)  |
-                            (uint)(e.Message.Data[packetIndex + 19]);
-
-                        ulong ntp_full = ((ulong)ntp_msw_seconds << 32) | ntp_lsw_fractions;
-
-                        // Plant the SR-derived anchor on the matching
-                        // per-stream clock (Layer 4e(iv)). The PTS monitor
-                        // (Layer 4f) reads this when committing each sample
-                        // to detect the MS-DMCT >200ms-behind / >2000ms-ahead
-                        // thresholds.
-                        ApplyRtcpSenderReport(rtcp_ssrc, ntp_full, rtp_timestamp_sr);
-
-                        // Periodic RR is already paced by StartRtcpReceiverReports
-                        // (~2 Hz timer in _rtcpTimer) for both UDP and TCP transports,
-                        // so we no longer ad-hoc send an extra RR per inbound SR.
-                    } else if (rtcp_packet_type == 203) {
-                        // BYE — RFC 3550 §6.6. Server is dropping the stream
-                        // for the SSRCs listed in the packet. Log and (for
-                        // a stream we depend on) surface as Disconnected
-                        // so AVCTRL can emit RTSP_DISCONNECT.
-                        bool dropsAudio = (rtcp_ssrc == _audioServerDataSsrc &&
-                                           _audioServerDataSsrc != 0);
-                        bool dropsVideo = (rtcp_ssrc == _videoServerDataSsrc &&
-                                           _videoServerDataSsrc != 0);
-                        if (dropsAudio || dropsVideo) {
-                            RaiseDisconnected(new System.IO.IOException(
-                                $"RTCP BYE for {(dropsAudio ? "audio" : "video")} stream " +
-                                $"ssrc=0x{rtcp_ssrc:X8}"));
-                        } else {
-                            Debug.WriteLine($"[rtcp] BYE for unrelated ssrc=0x{rtcp_ssrc:X8}");
-                        }
-                    }
-                    // PT 201 RR / 202 SDES / 204 APP / 207 XR — log-only.
-
-                    packetIndex = packetIndex + ((rtcp_length + 1) * 4);
-                }
-                return;
+                // Handle RTCP Data
+                Rtcp_HandleData(data_received, e);
             }
 
             if (data_received.Channel == video_data_channel || data_received.Channel == audio_data_channel) {
-                // Received some Video or Audio Data on the correct channel.
-
-                // RTP Packet Header
-                // 0 - Version, P, X, CC, M, PT and Sequence Number
-                //32 - Timestamp
-                //64 - SSRC
-                //96 - CSRCs (optional)
-                //nn - Extension ID and Length
-                //nn - Extension header
-
-                int rtp_version = (e.Message.Data[0] >> 6);
-                int rtp_padding = (e.Message.Data[0] >> 5) & 0x01;
-                int rtp_extension = (e.Message.Data[0] >> 4) & 0x01;
-                int rtp_csrc_count = (e.Message.Data[0] >> 0) & 0x0F;
-                int rtp_marker = (e.Message.Data[1] >> 7) & 0x01;
-                int rtp_payload_type = (e.Message.Data[1] >> 0) & 0x7F;
-                uint rtp_sequence_number = ((uint)e.Message.Data[2] << 8) + (uint)(e.Message.Data[3]);
-                uint rtp_timestamp = ((uint)e.Message.Data[4] << 24) + (uint)(e.Message.Data[5] << 16) + (uint)(e.Message.Data[6] << 8) + (uint)(e.Message.Data[7]);
-                uint rtp_ssrc = ((uint)e.Message.Data[8] << 24) + (uint)(e.Message.Data[9] << 16) + (uint)(e.Message.Data[10] << 8) + (uint)(e.Message.Data[11]);
-
-                int rtp_payload_start = 4 // V,P,M,SEQ
-                                    + 4 // time stamp
-                                    + 4 // ssrc
-                                    + (4 * rtp_csrc_count); // zero or more csrcs
-
-                uint rtp_extension_id = 0;
-                uint rtp_extension_size = 0;
-                if (rtp_extension == 1) {
-                    rtp_extension_id = ((uint)e.Message.Data[rtp_payload_start + 0] << 8) | (uint)e.Message.Data[rtp_payload_start + 1];
-                    // RFC 3550 §5.3.1: extension length is 16-bit big-endian and counted in 32-bit words.
-                    // Previous code had operator-precedence bug: `(hi<<8) + lo*4` instead of `((hi<<8)|lo)*4`.
-                    rtp_extension_size = (((uint)e.Message.Data[rtp_payload_start + 2] << 8) | (uint)e.Message.Data[rtp_payload_start + 3]) * 4u;
-                    rtp_payload_start += 4 + (int)rtp_extension_size;  // extension header and extension payload
-                }
-
-                //Debug.WriteLine("RTP Data"
-                //                   + " V=" + rtp_version
-                //                   + " P=" + rtp_padding
-                //                   + " X=" + rtp_extension
-                //                   + " CC=" + rtp_csrc_count
-                //                   + " M=" + rtp_marker
-                //                   + " PT=" + rtp_payload_type
-                //                   + " Seq=" + rtp_sequence_number
-                //                   + " Time (MS)=" + rtp_timestamp / 90 // convert from 90kHZ clock to ms
-                //                   + " SSRC=" + rtp_ssrc
-                //                   + " Size=" + e.Message.Data.Length);
-
-                //Debug.WriteLine("RTP Data"
-                //                   + " PT=" + rtp_payload_type
-                //                   + " Seq=" + rtp_sequence_number
-                //                   + " Timestamp=" + rtp_timestamp / 90 // convert from 90kHZ clock to ms
-                //                   + " SSRC=" + rtp_ssrc);
-
-                // RFC 3550 §5.1: when the P bit is set, the LAST byte of the packet contains the
-                // padding count (including the count byte itself), and those bytes are NOT payload.
-                // Trim before handing to the depacketizer; otherwise stray bytes leak past BF1.
-                int rtp_payload_end = e.Message.Data.Length;
-                if (rtp_padding == 1) {
-                    int padCount = e.Message.Data[rtp_payload_end - 1];
-                    if (padCount > 0 && rtp_payload_end - padCount >= rtp_payload_start)
-                        rtp_payload_end -= padCount;
-                }
-                int rtp_payload_len = rtp_payload_end - rtp_payload_start;
-
-                // Handle Video with X-WMF-PF Payload
-                if (data_received.Channel == video_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
-                    CommitVideoPipelineForWireCodec("X-WMF-PF");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: false, (ushort)rtp_sequence_number);
-                    // Marker bit propagated for cross-checking F-field fragmentation completion
-                    // (WMRTP spec line 643).
-                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
-                                                          (ushort)rtp_sequence_number, rtp_timestamp,
-                                                          rtp_marker == 1);
-                    return;
-                }
-
-                // Handle Audio with X-WMF-PF Payload
-                if (data_received.Channel == audio_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
-                    CommitAudioPipelineForWireCodec("X-WMF-PF");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
-                                                          (ushort)rtp_sequence_number, rtp_timestamp,
-                                                          rtp_marker == 1);
-                    return;
-                }
-
-                // Handle Audio with VND.MS.WM-MPA Payload (WMRTP-wrapped MPEG
-                // audio — MPEG-1/2 Layer I/II/III, used by WMC recorded-TV
-                // MPEG-ES profiles like WMDRMND_MPEG_ES_NTSC_XAC3). The WMRTP
-                // wrapper is parsed by audioDepacketizer; the resulting MAU is
-                // a clean run of MPEG audio frame bytes (no RFC 2250 sub-
-                // header). The AudioDataReady handler picks the routing:
-                // PS muxer (if combined pipeline is up) > NAudio MP3 sink.
-                // Dispatch is therefore gated purely on the SDP codec match —
-                // NOT on the sink fields — so the PS pipeline gets to see
-                // audio MAUs even though _mpaAudioSink is intentionally null
-                // there.
-                if (data_received.Channel == audio_data_channel
-                    && wmfPayloadDataDict.ContainsKey(rtp_payload_type)
-                    && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec,
-                                     "VND.MS.WM-MPA", StringComparison.OrdinalIgnoreCase)) {
-                    CommitAudioPipelineForWireCodec("VND.MS.WM-MPA");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
-                                                          (ushort)rtp_sequence_number, rtp_timestamp,
-                                                          rtp_marker == 1);
-                    return;
-                }
-
-                // Handle Video with VND.MS.WM-MPV Payload (WMRTP-wrapped MPEG
-                // video — MPEG-1/2 ES, same recorded-TV profile). The
-                // resulting MAU is one MPEG video access unit (start-code
-                // prefixed). videoDepacketizer.NalUnitReady is hooked to push
-                // bytes into the MPEG-ES producer when one is set up.
-                if (data_received.Channel == video_data_channel
-                    && wmfPayloadDataDict.ContainsKey(rtp_payload_type)
-                    && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec,
-                                     "VND.MS.WM-MPV", StringComparison.OrdinalIgnoreCase)) {
-                    CommitVideoPipelineForWireCodec("VND.MS.WM-MPV");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: false, (ushort)rtp_sequence_number);
-                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
-                                                          (ushort)rtp_sequence_number, rtp_timestamp,
-                                                          rtp_marker == 1);
-                    return;
-                }
-
-                // Handle Audio with MPA (MPEG Audio over RTP, RFC 2250) Payload.
-                // WMPNss negotiates this for plain .mp3 source files — no
-                // WMRTP wrapper, 4-byte MBZ/Frag sub-header per packet.
-                // Strip the sub-header and push to whichever pipeline is
-                // active: direct-libav engine (preferred), FFME via
-                // _mp3FfmeProducer, or NAudio sink (legacy fallback).
-                if (data_received.Channel == audio_data_channel
-                    && wmfPayloadDataDict.ContainsKey(rtp_payload_type)
-                    && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec,
-                                     "MPA", StringComparison.OrdinalIgnoreCase)) {
-                    // Commit the wire codec on FIRST packet — without
-                    // this, TrySetupMp3FfmePipeline never runs, the
-                    // producer stays null, and every MAU below
-                    // silently drops. The matching X-WMF-PF / VND.MS.WM-MPA
-                    // branches above all call this; the original
-                    // RFC 2250 branch was missing it (audio-only MP3
-                    // sessions produced no audio as a result).
-                    CommitAudioPipelineForWireCodec("MPA");
-                    UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                    if (rtp_payload_len <= 4) return;
-                    // RFC 2250 §3.5: skip [16 bits MBZ][16 bits Frag_offset].
-                    int frameLen = rtp_payload_len - 4;
-                    byte[] frame = new byte[frameLen];
-                    Array.Copy(e.Message.Data, rtp_payload_start + 4, frame, 0, frameLen);
-
-                    // Direct-libav engine path. The MPA RFC 2250 path
-                    // bypasses audioDepacketizer (which is for WMRTP-
-                    // wrapped audio only), so we route to the engine
-                    // here directly. Engine consumes raw MP3 frame
-                    // bytes — same shape as a VND.MS.WM-MPA MAU.
-                    if (_playbackEngine != null) {
-                        _playbackEngine.OnDepacketizedAudio(frame, rtp_timestamp);
-                        return;
-                    }
-
-                    // Notify the silence injector so it can learn
-                    // cadence and (in video sessions) keep FFME's
-                    // audio buffer fed during server-side trick play.
-                    // For audio-only MP3 sessions this is a near-noop
-                    // (no video to freeze) but kept for symmetry.
-                    _silenceInjector?.NoticeReal(frame, rtp_timestamp);
-
-                    if (_mp3FfmeProducer != null) {
-                        _mp3FfmeProducer.SubmitChunk(frame);
-                        _mp3FfmeChunks++;
-                        _mp3FfmeBytesPushed += frameLen;
-                        if ((_mp3FfmeChunks % 100) == 1) {
-                            Trace.WriteLine($"[mp3-ffme] chunk#{_mp3FfmeChunks} len={frameLen} " +
-                                            $"producerQ={_mp3FfmeProducer.QueueDepth}");
-                            WriteMp3FfmeDiagRow();
-                        }
-                    } else if (_mpaAudioSink != null) {
-                        _mpaAudioSink.SubmitRtpPayload(e.Message.Data,
-                                                       rtp_payload_start,
-                                                       rtp_payload_len);
-                    }
-                    return;
-                }
-
-                //// Check the payload type in the RTP packet matches the Payload Type value from the SDP
-                //else if (data_received.Channel == audio_data_channel && rtp_payload_type != audio_payload) {
-                //    System.Diagnostics.Debug.WriteLine("Ignoring this Audio RTP payload");
-                //    return; // ignore this data
-                //} else if (data_received.Channel == video_data_channel
-                //           && rtp_payload_type == video_payload
-                //           //&& rtp_payload_type == 2
-                //           && video_codec.Equals("H264")
-                //           ) {
-                //    // H264 RTP Packet
-
-                //    // If rtp_marker is '1' then this is the final transmission for this packet.
-                //    // If rtp_marker is '0' we need to accumulate data with the same timestamp
-
-                //    // ToDo - Check Timestamp
-                //    // Add the RTP packet to the tempoary_rtp list until we have a complete 'Frame'
-
-                //    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
-                //    System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
-
-                //    List<byte[]> nal_units = h264Payload.Process_H264_RTP_Packet(rtp_payload, rtp_marker); // this will cache the Packets until there is a Frame
-
-                //    if (nal_units == null) {
-                //        // we have not passed in enough RTP packets to make a Frame of video
-                //    } else {
-                //        // If we did not have a SPS and PPS in the SDP then search for the SPS and PPS
-                //        // in the NALs and fire the Received_SPS_PPS event.
-                //        // We assume the SPS and PPS are in the same Frame.
-                //        if (h264_sps_pps_fired == false) {
-
-                //            // Check this frame for SPS and PPS
-                //            byte[] sps = null;
-                //            byte[] pps = null;
-                //            foreach (byte[] nal_unit in nal_units) {
-                //                if (nal_unit.Length > 0) {
-                //                    int nal_ref_idc = (nal_unit[0] >> 5) & 0x03;
-                //                    int nal_unit_type = nal_unit[0] & 0x1F;
-
-                //                    if (nal_unit_type == 7) {
-                //                        sps = nal_unit; // SPS
-                //                    }
-                //                    if (nal_unit_type == 8) {
-                //                        pps = nal_unit; // PPS
-                //                    }
-                //                }
-                //            }
-                //            if (sps != null && pps != null) {
-                //                // Fire the Event
-                //                if (Received_SPS_PPS != null) {
-                //                    Received_SPS_PPS(sps, pps);
-                //                }
-                //                h264_sps_pps_fired = true;
-                //            }
-                //        }
-
-
-                //        //nalHandler.ProcessFrameNalUnitsAsync(nal_units).Wait();
-
-                //        //// we have a frame of NAL Units. Write them to the file
-                //        //if (Received_NALs != null) {
-                //        //    //Received_NALs(nal_units);
-                //        //}
-                //    }
-                //} else if (data_received.Channel == video_data_channel
-                //           && rtp_payload_type == video_payload
-                //           && video_codec.Equals("H265")) {
-                //    // H265 RTP Packet
-
-                //    // If rtp_marker is '1' then this is the final transmission for this packet.
-                //    // If rtp_marker is '0' we need to accumulate data with the same timestamp
-
-                //    // Add the RTP packet to the tempoary_rtp list until we have a complete 'Frame'
-
-                //    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
-                //    System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
-
-                //    List<byte[]> nal_units = h265Payload.Process_H265_RTP_Packet(rtp_payload, rtp_marker); // this will cache the Packets until there is a Frame
-
-                //    if (nal_units == null) {
-                //        // we have not passed in enough RTP packets to make a Frame of video
-                //    } else {
-                //        // If we did not have a VPS, SPS and PPS in the SDP then search for the VPS SPS and PPS
-                //        // in the NALs and fire the Received_VPS_SPS_PPS event.
-                //        // We assume the VPS, SPS and PPS are in the same Frame.
-                //        if (h265_vps_sps_pps_fired == false) {
-
-                //            // Check this frame for VPS, SPS and PPS
-                //            byte[] vps = null;
-                //            byte[] sps = null;
-                //            byte[] pps = null;
-                //            foreach (byte[] nal_unit in nal_units) {
-                //                if (nal_unit.Length > 0) {
-                //                    int nal_unit_type = (nal_unit[0] >> 1) & 0x3F;
-
-                //                    if (nal_unit_type == 32) vps = nal_unit; // VPS
-                //                    if (nal_unit_type == 33) sps = nal_unit; // SPS
-                //                    if (nal_unit_type == 34) pps = nal_unit; // PPS
-                //                }
-                //            }
-                //            if (vps != null && sps != null && pps != null) {
-                //                // Fire the Event
-                //                if (Received_VPS_SPS_PPS != null) {
-                //                    Received_VPS_SPS_PPS(vps, sps, pps);
-                //                }
-                //                h265_vps_sps_pps_fired = true;
-                //            }
-                //        }
-
-                //        // we have a frame of NAL Units. Write them to the file
-                //        if (Received_NALs != null) {
-                //            Received_NALs(nal_units);
-                //        }
-                //    }
-                //} else if (data_received.Channel == audio_data_channel && (rtp_payload_type == 0 || rtp_payload_type == 8 || audio_codec.Equals("PCMA") || audio_codec.Equals("PCMU"))) {
-                //    // G711 PCMA or G711 PCMU
-                //    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
-                //    System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
-
-                //    List<byte[]> audio_frames = g711Payload.Process_G711_RTP_Packet(rtp_payload, rtp_marker);
-
-                //    if (audio_frames == null) {
-                //        // some error
-                //    } else {
-                //        // Write the audio frames to the file
-                //        if (Received_G711 != null) {
-                //            Received_G711(audio_codec, audio_frames);
-                //        }
-                //    }
-                //} else if (data_received.Channel == audio_data_channel
-                //            && rtp_payload_type == audio_payload
-                //            && audio_codec.Equals("AMR")) {
-                //    // AMR
-                //    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
-                //    System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
-
-                //    List<byte[]> audio_frames = amrPayload.Process_AMR_RTP_Packet(rtp_payload, rtp_marker);
-
-                //    if (audio_frames == null) {
-                //        // some error
-                //    } else {
-                //        // Write the audio frames to the file
-                //        if (Received_AMR != null) {
-                //            Received_AMR(audio_codec, audio_frames);
-                //        }
-                //    }
-                //} else if (data_received.Channel == audio_data_channel
-                //           && rtp_payload_type == audio_payload
-                //           && audio_codec.Equals("MPEG4-GENERIC")
-                //          && aacPayload != null) {
-                //    // AAC
-                //    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
-                //    System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
-
-                //    List<byte[]> audio_frames = aacPayload.Process_AAC_RTP_Packet(rtp_payload, rtp_marker);
-
-                //    if (audio_frames == null) {
-                //        // some error
-                //    } else {
-                //        // Write the audio frames to the file
-                //        if (Received_AAC != null) {
-                //            Received_AAC(audio_codec, audio_frames, aacPayload.ObjectType, aacPayload.FrequencyIndex, aacPayload.ChannelConfiguration);
-                //        }
-                //    }
-                //} else if (data_received.Channel == video_data_channel && rtp_payload_type == 26) {
-                //    System.Diagnostics.Debug.WriteLine("No parser has been written for JPEG RTP packets. Please help write one");
-                //    return; // ignore this data
-                //}
-                else {
-                    System.Diagnostics.Debug.WriteLine("No parser for RTP payload " + rtp_payload_type);
-                }
+                // Handle RTP Data
+                Rtp_HandleData(data_received, e);
             }
         }
-
 
         // RTP packet (or RTCP packet) has been received.
         public void Rtp_AudioDataReceived(object sender, Rtsp.RtspChunkEventArgs e) {
@@ -3280,533 +1929,441 @@ namespace SoftSled.Components.RTSP {
             // the Audio Channel or the Audio Control Channel (RTCP)
 
             if (data_received.Channel == video_rtcp_channel || data_received.Channel == audio_rtcp_channel) {
-                Debug.WriteLine("Received a RTCP message on channel " + data_received.Channel);
-
-                // RTCP Packet
-                // - Version, Padding and Receiver Report Count
-                // - Packet Type
-                // - Length
-                // - SSRC
-                // - payload
-
-                // There can be multiple RTCP packets transmitted together. Loop ever each one
-
-                long packetIndex = 0;
-                while (packetIndex < e.Message.Data.Length) {
-
-                    int rtcp_version = (e.Message.Data[packetIndex + 0] >> 6);
-                    int rtcp_padding = (e.Message.Data[packetIndex + 0] >> 5) & 0x01;
-                    int rtcp_reception_report_count = (e.Message.Data[packetIndex + 0] & 0x1F);
-                    byte rtcp_packet_type = e.Message.Data[packetIndex + 1]; // Values from 200 to 207
-                    uint rtcp_length = (uint)(e.Message.Data[packetIndex + 2] << 8) + (uint)(e.Message.Data[packetIndex + 3]); // number of 32 bit words
-                    uint rtcp_ssrc = (uint)(e.Message.Data[packetIndex + 4] << 24) + (uint)(e.Message.Data[packetIndex + 5] << 16)
-                        + (uint)(e.Message.Data[packetIndex + 6] << 8) + (uint)(e.Message.Data[packetIndex + 7]);
-
-                    // 200 = SR = Sender Report
-                    // 201 = RR = Receiver Report
-                    // 202 = SDES = Source Description
-                    // 203 = Bye = Goodbye
-                    // 204 = APP = Application Specific Method
-                    // 207 = XR = Extended Reports
-
-                    System.Diagnostics.Debug.WriteLine("RTCP Data. PacketType=" + rtcp_packet_type
-                                      + " SSRC=" + rtcp_ssrc);
-
-                    if (rtcp_packet_type == 200) {
-                        // SR (Sender Report). Carries the per-stream NTP↔RTP
-                        // anchor we need for absolute A/V timing.
-                        //
-                        //  off 4..7   sender SSRC
-                        //  off 8..15  NTP timestamp (64-bit fixed-point)
-                        //  off 16..19 RTP timestamp paired with above NTP
-
-                        UInt32 ntp_msw_seconds =
-                            (uint)(e.Message.Data[packetIndex + 8]  << 24) |
-                            (uint)(e.Message.Data[packetIndex + 9]  << 16) |
-                            (uint)(e.Message.Data[packetIndex + 10] << 8)  |
-                            (uint)(e.Message.Data[packetIndex + 11]);
-                        UInt32 ntp_lsw_fractions =
-                            (uint)(e.Message.Data[packetIndex + 12] << 24) |
-                            (uint)(e.Message.Data[packetIndex + 13] << 16) |
-                            (uint)(e.Message.Data[packetIndex + 14] << 8)  |
-                            (uint)(e.Message.Data[packetIndex + 15]);
-                        UInt32 rtp_timestamp_sr =
-                            (uint)(e.Message.Data[packetIndex + 16] << 24) |
-                            (uint)(e.Message.Data[packetIndex + 17] << 16) |
-                            (uint)(e.Message.Data[packetIndex + 18] << 8)  |
-                            (uint)(e.Message.Data[packetIndex + 19]);
-
-                        ulong ntp_full = ((ulong)ntp_msw_seconds << 32) | ntp_lsw_fractions;
-
-                        // Plant the SR-derived anchor on the matching
-                        // per-stream clock (Layer 4e(iv)). The PTS monitor
-                        // (Layer 4f) reads this when committing each sample
-                        // to detect the MS-DMCT >200ms-behind / >2000ms-ahead
-                        // thresholds.
-                        ApplyRtcpSenderReport(rtcp_ssrc, ntp_full, rtp_timestamp_sr);
-
-                        // Periodic RR is already paced by StartRtcpReceiverReports
-                        // (~2 Hz timer in _rtcpTimer) for both UDP and TCP transports,
-                        // so we no longer ad-hoc send an extra RR per inbound SR.
-                    } else if (rtcp_packet_type == 203) {
-                        // BYE — RFC 3550 §6.6. Server is dropping the stream
-                        // for the SSRCs listed in the packet. Log and (for
-                        // a stream we depend on) surface as Disconnected
-                        // so AVCTRL can emit RTSP_DISCONNECT.
-                        bool dropsAudio = (rtcp_ssrc == _audioServerDataSsrc &&
-                                           _audioServerDataSsrc != 0);
-                        bool dropsVideo = (rtcp_ssrc == _videoServerDataSsrc &&
-                                           _videoServerDataSsrc != 0);
-                        if (dropsAudio || dropsVideo) {
-                            RaiseDisconnected(new System.IO.IOException(
-                                $"RTCP BYE for {(dropsAudio ? "audio" : "video")} stream " +
-                                $"ssrc=0x{rtcp_ssrc:X8}"));
-                        } else {
-                            Debug.WriteLine($"[rtcp] BYE for unrelated ssrc=0x{rtcp_ssrc:X8}");
-                        }
-                    }
-                    // PT 201 RR / 202 SDES / 204 APP / 207 XR — log-only.
-
-                    packetIndex = packetIndex + ((rtcp_length + 1) * 4);
-                }
-                return;
+                // Handle RTCP Data
+                Rtcp_HandleData(data_received, e);
             }
 
             if (data_received.Channel == video_data_channel || data_received.Channel == audio_data_channel) {
-                // Received some Video or Audio Data on the correct channel.
-
-                // RTP Packet Header
-                // 0 - Version, P, X, CC, M, PT and Sequence Number
-                //32 - Timestamp
-                //64 - SSRC
-                //96 - CSRCs (optional)
-                //nn - Extension ID and Length
-                //nn - Extension header
-
-                int rtp_version = (e.Message.Data[0] >> 6);
-                int rtp_padding = (e.Message.Data[0] >> 5) & 0x01;
-                int rtp_extension = (e.Message.Data[0] >> 4) & 0x01;
-                int rtp_csrc_count = (e.Message.Data[0] >> 0) & 0x0F;
-                int rtp_marker = (e.Message.Data[1] >> 7) & 0x01;
-                int rtp_payload_type = (e.Message.Data[1] >> 0) & 0x7F;
-                uint rtp_sequence_number = ((uint)e.Message.Data[2] << 8) + (uint)(e.Message.Data[3]);
-                uint rtp_timestamp = ((uint)e.Message.Data[4] << 24) + (uint)(e.Message.Data[5] << 16) + (uint)(e.Message.Data[6] << 8) + (uint)(e.Message.Data[7]);
-                uint rtp_ssrc = ((uint)e.Message.Data[8] << 24) + (uint)(e.Message.Data[9] << 16) + (uint)(e.Message.Data[10] << 8) + (uint)(e.Message.Data[11]);
-
-                int rtp_payload_start = 4 // V,P,M,SEQ
-                                    + 4 // time stamp
-                                    + 4 // ssrc
-                                    + (4 * rtp_csrc_count); // zero or more csrcs
-
-                uint rtp_extension_id = 0;
-                uint rtp_extension_size = 0;
-                if (rtp_extension == 1) {
-                    rtp_extension_id = ((uint)e.Message.Data[rtp_payload_start + 0] << 8) | (uint)e.Message.Data[rtp_payload_start + 1];
-                    // RFC 3550 §5.3.1: extension length is 16-bit big-endian and counted in 32-bit words.
-                    // Previous code had operator-precedence bug: `(hi<<8) + lo*4` instead of `((hi<<8)|lo)*4`.
-                    rtp_extension_size = (((uint)e.Message.Data[rtp_payload_start + 2] << 8) | (uint)e.Message.Data[rtp_payload_start + 3]) * 4u;
-                    rtp_payload_start += 4 + (int)rtp_extension_size;  // extension header and extension payload
-                }
-
-                //Debug.WriteLine("RTP Data"
-                //                   + " V=" + rtp_version
-                //                   + " P=" + rtp_padding
-                //                   + " X=" + rtp_extension
-                //                   + " CC=" + rtp_csrc_count
-                //                   + " M=" + rtp_marker
-                //                   + " PT=" + rtp_payload_type
-                //                   + " Seq=" + rtp_sequence_number
-                //                   + " Time (MS)=" + rtp_timestamp / 90 // convert from 90kHZ clock to ms
-                //                   + " SSRC=" + rtp_ssrc
-                //                   + " Size=" + e.Message.Data.Length);
-
-                //Debug.WriteLine("RTP Data"
-                //                   + " PT=" + rtp_payload_type
-                //                   + " Seq=" + rtp_sequence_number
-                //                   + " Timestamp=" + rtp_timestamp / 90 // convert from 90kHZ clock to ms
-                //                   + " SSRC=" + rtp_ssrc);
-
-                // RFC 3550 §5.1: when the P bit is set, the LAST byte of the packet contains the
-                // padding count (including the count byte itself), and those bytes are NOT payload.
-                // Trim before handing to the depacketizer; otherwise stray bytes leak past BF1.
-                int rtp_payload_end = e.Message.Data.Length;
-                if (rtp_padding == 1) {
-                    int padCount = e.Message.Data[rtp_payload_end - 1];
-                    if (padCount > 0 && rtp_payload_end - padCount >= rtp_payload_start)
-                        rtp_payload_end -= padCount;
-                }
-                int rtp_payload_len = rtp_payload_end - rtp_payload_start;
-
-                // Handle Video with X-WMF-PF Payload
-                if (data_received.Channel == video_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
-                    CommitVideoPipelineForWireCodec("X-WMF-PF");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: false, (ushort)rtp_sequence_number);
-                    // Marker bit propagated for cross-checking F-field fragmentation completion
-                    // (WMRTP spec line 643).
-                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
-                                                          (ushort)rtp_sequence_number, rtp_timestamp,
-                                                          rtp_marker == 1);
-                    return;
-                }
-
-                // Handle Audio with X-WMF-PF Payload
-                if (data_received.Channel == audio_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
-                    CommitAudioPipelineForWireCodec("X-WMF-PF");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
-                                                          (ushort)rtp_sequence_number, rtp_timestamp,
-                                                          rtp_marker == 1);
-                    return;
-                }
-
-                // Handle Audio with VND.MS.WM-MPA Payload (WMRTP-wrapped MPEG
-                // audio — MPEG-1/2 Layer I/II/III, used by WMC recorded-TV
-                // MPEG-ES profiles like WMDRMND_MPEG_ES_NTSC_XAC3). The WMRTP
-                // wrapper is parsed by audioDepacketizer; the resulting MAU is
-                // a clean run of MPEG audio frame bytes (no RFC 2250 sub-
-                // header). The AudioDataReady handler picks the routing:
-                // PS muxer (if combined pipeline is up) > NAudio MP3 sink.
-                // Dispatch is therefore gated purely on the SDP codec match —
-                // NOT on the sink fields — so the PS pipeline gets to see
-                // audio MAUs even though _mpaAudioSink is intentionally null
-                // there.
-                if (data_received.Channel == audio_data_channel
-                    && wmfPayloadDataDict.ContainsKey(rtp_payload_type)
-                    && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec,
-                                     "VND.MS.WM-MPA", StringComparison.OrdinalIgnoreCase)) {
-                    CommitAudioPipelineForWireCodec("VND.MS.WM-MPA");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                    audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
-                                                          (ushort)rtp_sequence_number, rtp_timestamp,
-                                                          rtp_marker == 1);
-                    return;
-                }
-
-                // Handle Video with VND.MS.WM-MPV Payload (WMRTP-wrapped MPEG
-                // video — MPEG-1/2 ES, same recorded-TV profile). The
-                // resulting MAU is one MPEG video access unit (start-code
-                // prefixed). videoDepacketizer.NalUnitReady is hooked to push
-                // bytes into the MPEG-ES producer when one is set up.
-                if (data_received.Channel == video_data_channel
-                    && wmfPayloadDataDict.ContainsKey(rtp_payload_type)
-                    && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec,
-                                     "VND.MS.WM-MPV", StringComparison.OrdinalIgnoreCase)) {
-                    CommitVideoPipelineForWireCodec("VND.MS.WM-MPV");
-                    byte[] rtp_payload = new byte[rtp_payload_len];
-                    Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
-                    UpdateRtcpSeqTracking(isAudio: false, (ushort)rtp_sequence_number);
-                    videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc,
-                                                          (ushort)rtp_sequence_number, rtp_timestamp,
-                                                          rtp_marker == 1);
-                    return;
-                }
-
-                // Handle Audio with MPA (MPEG Audio over RTP, RFC 2250) Payload.
-                // WMPNss negotiates this for plain .mp3 source files — no
-                // WMRTP wrapper, 4-byte MBZ/Frag sub-header per packet.
-                // Strip the sub-header and push to whichever pipeline is
-                // active: direct-libav engine (preferred), FFME via
-                // _mp3FfmeProducer, or NAudio sink (legacy fallback).
-                if (data_received.Channel == audio_data_channel
-                    && wmfPayloadDataDict.ContainsKey(rtp_payload_type)
-                    && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec,
-                                     "MPA", StringComparison.OrdinalIgnoreCase)) {
-                    // Commit the wire codec on FIRST packet — without
-                    // this, TrySetupMp3FfmePipeline never runs, the
-                    // producer stays null, and every MAU below
-                    // silently drops. The matching X-WMF-PF / VND.MS.WM-MPA
-                    // branches above all call this; the original
-                    // RFC 2250 branch was missing it (audio-only MP3
-                    // sessions produced no audio as a result).
-                    CommitAudioPipelineForWireCodec("MPA");
-                    UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                    if (rtp_payload_len <= 4) return;
-                    // RFC 2250 §3.5: skip [16 bits MBZ][16 bits Frag_offset].
-                    int frameLen = rtp_payload_len - 4;
-                    byte[] frame = new byte[frameLen];
-                    Array.Copy(e.Message.Data, rtp_payload_start + 4, frame, 0, frameLen);
-
-                    // Direct-libav engine path. The MPA RFC 2250 path
-                    // bypasses audioDepacketizer (which is for WMRTP-
-                    // wrapped audio only), so we route to the engine
-                    // here directly. Engine consumes raw MP3 frame
-                    // bytes — same shape as a VND.MS.WM-MPA MAU.
-                    if (_playbackEngine != null) {
-                        _playbackEngine.OnDepacketizedAudio(frame, rtp_timestamp);
-                        return;
-                    }
-
-                    // Notify the silence injector so it can learn
-                    // cadence and (in video sessions) keep FFME's
-                    // audio buffer fed during server-side trick play.
-                    // For audio-only MP3 sessions this is a near-noop
-                    // (no video to freeze) but kept for symmetry.
-                    _silenceInjector?.NoticeReal(frame, rtp_timestamp);
-
-                    if (_mp3FfmeProducer != null) {
-                        _mp3FfmeProducer.SubmitChunk(frame);
-                        _mp3FfmeChunks++;
-                        _mp3FfmeBytesPushed += frameLen;
-                        if ((_mp3FfmeChunks % 100) == 1) {
-                            Trace.WriteLine($"[mp3-ffme] chunk#{_mp3FfmeChunks} len={frameLen} " +
-                                            $"producerQ={_mp3FfmeProducer.QueueDepth}");
-                            WriteMp3FfmeDiagRow();
-                        }
-                    } else if (_mpaAudioSink != null) {
-                        _mpaAudioSink.SubmitRtpPayload(e.Message.Data,
-                                                       rtp_payload_start,
-                                                       rtp_payload_len);
-                    }
-                    return;
-                }
-
-                //// Check the payload type in the RTP packet matches the Payload Type value from the SDP
-                //else if (data_received.Channel == audio_data_channel && rtp_payload_type != audio_payload) {
-                //    System.Diagnostics.Debug.WriteLine("Ignoring this Audio RTP payload");
-                //    return; // ignore this data
-                //} else if (data_received.Channel == video_data_channel
-                //           && rtp_payload_type == video_payload
-                //           //&& rtp_payload_type == 2
-                //           && video_codec.Equals("H264")
-                //           ) {
-                //    // H264 RTP Packet
-
-                //    // If rtp_marker is '1' then this is the final transmission for this packet.
-                //    // If rtp_marker is '0' we need to accumulate data with the same timestamp
-
-                //    // ToDo - Check Timestamp
-                //    // Add the RTP packet to the tempoary_rtp list until we have a complete 'Frame'
-
-                //    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
-                //    System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
-
-                //    List<byte[]> nal_units = h264Payload.Process_H264_RTP_Packet(rtp_payload, rtp_marker); // this will cache the Packets until there is a Frame
-
-                //    if (nal_units == null) {
-                //        // we have not passed in enough RTP packets to make a Frame of video
-                //    } else {
-                //        // If we did not have a SPS and PPS in the SDP then search for the SPS and PPS
-                //        // in the NALs and fire the Received_SPS_PPS event.
-                //        // We assume the SPS and PPS are in the same Frame.
-                //        if (h264_sps_pps_fired == false) {
-
-                //            // Check this frame for SPS and PPS
-                //            byte[] sps = null;
-                //            byte[] pps = null;
-                //            foreach (byte[] nal_unit in nal_units) {
-                //                if (nal_unit.Length > 0) {
-                //                    int nal_ref_idc = (nal_unit[0] >> 5) & 0x03;
-                //                    int nal_unit_type = nal_unit[0] & 0x1F;
-
-                //                    if (nal_unit_type == 7) {
-                //                        sps = nal_unit; // SPS
-                //                    }
-                //                    if (nal_unit_type == 8) {
-                //                        pps = nal_unit; // PPS
-                //                    }
-                //                }
-                //            }
-                //            if (sps != null && pps != null) {
-                //                // Fire the Event
-                //                if (Received_SPS_PPS != null) {
-                //                    Received_SPS_PPS(sps, pps);
-                //                }
-                //                h264_sps_pps_fired = true;
-                //            }
-                //        }
-
-
-                //        //nalHandler.ProcessFrameNalUnitsAsync(nal_units).Wait();
-
-                //        //// we have a frame of NAL Units. Write them to the file
-                //        //if (Received_NALs != null) {
-                //        //    //Received_NALs(nal_units);
-                //        //}
-                //    }
-                //} else if (data_received.Channel == video_data_channel
-                //           && rtp_payload_type == video_payload
-                //           && video_codec.Equals("H265")) {
-                //    // H265 RTP Packet
-
-                //    // If rtp_marker is '1' then this is the final transmission for this packet.
-                //    // If rtp_marker is '0' we need to accumulate data with the same timestamp
-
-                //    // Add the RTP packet to the tempoary_rtp list until we have a complete 'Frame'
-
-                //    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
-                //    System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
-
-                //    List<byte[]> nal_units = h265Payload.Process_H265_RTP_Packet(rtp_payload, rtp_marker); // this will cache the Packets until there is a Frame
-
-                //    if (nal_units == null) {
-                //        // we have not passed in enough RTP packets to make a Frame of video
-                //    } else {
-                //        // If we did not have a VPS, SPS and PPS in the SDP then search for the VPS SPS and PPS
-                //        // in the NALs and fire the Received_VPS_SPS_PPS event.
-                //        // We assume the VPS, SPS and PPS are in the same Frame.
-                //        if (h265_vps_sps_pps_fired == false) {
-
-                //            // Check this frame for VPS, SPS and PPS
-                //            byte[] vps = null;
-                //            byte[] sps = null;
-                //            byte[] pps = null;
-                //            foreach (byte[] nal_unit in nal_units) {
-                //                if (nal_unit.Length > 0) {
-                //                    int nal_unit_type = (nal_unit[0] >> 1) & 0x3F;
-
-                //                    if (nal_unit_type == 32) vps = nal_unit; // VPS
-                //                    if (nal_unit_type == 33) sps = nal_unit; // SPS
-                //                    if (nal_unit_type == 34) pps = nal_unit; // PPS
-                //                }
-                //            }
-                //            if (vps != null && sps != null && pps != null) {
-                //                // Fire the Event
-                //                if (Received_VPS_SPS_PPS != null) {
-                //                    Received_VPS_SPS_PPS(vps, sps, pps);
-                //                }
-                //                h265_vps_sps_pps_fired = true;
-                //            }
-                //        }
-
-                //        // we have a frame of NAL Units. Write them to the file
-                //        if (Received_NALs != null) {
-                //            Received_NALs(nal_units);
-                //        }
-                //    }
-                //} else if (data_received.Channel == audio_data_channel && (rtp_payload_type == 0 || rtp_payload_type == 8 || audio_codec.Equals("PCMA") || audio_codec.Equals("PCMU"))) {
-                //    // G711 PCMA or G711 PCMU
-                //    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
-                //    System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
-
-                //    List<byte[]> audio_frames = g711Payload.Process_G711_RTP_Packet(rtp_payload, rtp_marker);
-
-                //    if (audio_frames == null) {
-                //        // some error
-                //    } else {
-                //        // Write the audio frames to the file
-                //        if (Received_G711 != null) {
-                //            Received_G711(audio_codec, audio_frames);
-                //        }
-                //    }
-                //} else if (data_received.Channel == audio_data_channel
-                //            && rtp_payload_type == audio_payload
-                //            && audio_codec.Equals("AMR")) {
-                //    // AMR
-                //    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
-                //    System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
-
-                //    List<byte[]> audio_frames = amrPayload.Process_AMR_RTP_Packet(rtp_payload, rtp_marker);
-
-                //    if (audio_frames == null) {
-                //        // some error
-                //    } else {
-                //        // Write the audio frames to the file
-                //        if (Received_AMR != null) {
-                //            Received_AMR(audio_codec, audio_frames);
-                //        }
-                //    }
-                //} else if (data_received.Channel == audio_data_channel
-                //           && rtp_payload_type == audio_payload
-                //           && audio_codec.Equals("MPEG4-GENERIC")
-                //          && aacPayload != null) {
-                //    // AAC
-                //    byte[] rtp_payload = new byte[e.Message.Data.Length - rtp_payload_start]; // payload with RTP header removed
-                //    System.Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload.Length); // copy payload
-
-                //    List<byte[]> audio_frames = aacPayload.Process_AAC_RTP_Packet(rtp_payload, rtp_marker);
-
-                //    if (audio_frames == null) {
-                //        // some error
-                //    } else {
-                //        // Write the audio frames to the file
-                //        if (Received_AAC != null) {
-                //            Received_AAC(audio_codec, audio_frames, aacPayload.ObjectType, aacPayload.FrequencyIndex, aacPayload.ChannelConfiguration);
-                //        }
-                //    }
-                //} else if (data_received.Channel == video_data_channel && rtp_payload_type == 26) {
-                //    System.Diagnostics.Debug.WriteLine("No parser has been written for JPEG RTP packets. Please help write one");
-                //    return; // ignore this data
-                //}
-                else {
-                    System.Diagnostics.Debug.WriteLine("No parser for RTP payload " + rtp_payload_type);
-                }
+                // Handle RTP Data
+                Rtp_HandleData(data_received, e);
             }
         }
 
+        private void Rtcp_HandleData(RtspData data_received, Rtsp.RtspChunkEventArgs e) {
+            Debug.WriteLine("Received a RTCP message on channel " + data_received.Channel);
 
-        // RTSP Messages are OPTIONS, DESCRIBE, SETUP, PLAY etc
-        private void Rtsp_MessageReceived(object sender, Rtsp.RtspChunkEventArgs e) {
-            Rtsp.Messages.RtspResponse message = e.Message as Rtsp.Messages.RtspResponse;
+            // RTCP Packet
+            // - Version, Padding and Receiver Report Count
+            // - Packet Type
+            // - Length
+            // - SSRC
+            // - payload
 
-            //System.Diagnostics.Debug.WriteLine("Received RTSP Message " + message.OriginalRequest.ToString());
+            // There can be multiple RTCP packets transmitted together. Loop ever each one
 
-            // If message has a 401 - Unauthorised Error, then we re-send the message with Authorization
-            // using the most recently received 'realm' and 'nonce'
-            if (message.IsOk == false) {
-                System.Diagnostics.Debug.WriteLine("Got Error in RTSP Reply " + message.ReturnCode + " " + message.ReturnMessage);
+            long packetIndex = 0;
+            while (packetIndex < e.Message.Data.Length) {
 
-                if (message.ReturnCode == 401 && (message.OriginalRequest.Headers.ContainsKey(RtspHeaderNames.Authorization) == true)) {
-                    // the authorization failed.
-                    Stop();
+                int rtcp_version = (e.Message.Data[packetIndex + 0] >> 6);
+                int rtcp_padding = (e.Message.Data[packetIndex + 0] >> 5) & 0x01;
+                int rtcp_reception_report_count = (e.Message.Data[packetIndex + 0] & 0x1F);
+                byte rtcp_packet_type = e.Message.Data[packetIndex + 1]; // Values from 200 to 207
+                uint rtcp_length = (uint)(e.Message.Data[packetIndex + 2] << 8) + (uint)(e.Message.Data[packetIndex + 3]); // number of 32 bit words
+                uint rtcp_ssrc = (uint)(e.Message.Data[packetIndex + 4] << 24) + (uint)(e.Message.Data[packetIndex + 5] << 16)
+                    + (uint)(e.Message.Data[packetIndex + 6] << 8) + (uint)(e.Message.Data[packetIndex + 7]);
+
+                // 200 = SR = Sender Report
+                // 201 = RR = Receiver Report
+                // 202 = SDES = Source Description
+                // 203 = Bye = Goodbye
+                // 204 = APP = Application Specific Method
+                // 207 = XR = Extended Reports
+
+                System.Diagnostics.Debug.WriteLine("RTCP Data. PacketType=" + rtcp_packet_type
+                                  + " SSRC=" + rtcp_ssrc);
+
+                if (rtcp_packet_type == 200) {
+                    // SR (Sender Report). Carries the per-stream NTP↔RTP
+                    // anchor we need for absolute A/V timing.
+                    //
+                    //  off 4..7   sender SSRC
+                    //  off 8..15  NTP timestamp (64-bit fixed-point)
+                    //  off 16..19 RTP timestamp paired with above NTP
+
+                    UInt32 ntp_msw_seconds =
+                        (uint)(e.Message.Data[packetIndex + 8] << 24) |
+                        (uint)(e.Message.Data[packetIndex + 9] << 16) |
+                        (uint)(e.Message.Data[packetIndex + 10] << 8) |
+                        (uint)(e.Message.Data[packetIndex + 11]);
+                    UInt32 ntp_lsw_fractions =
+                        (uint)(e.Message.Data[packetIndex + 12] << 24) |
+                        (uint)(e.Message.Data[packetIndex + 13] << 16) |
+                        (uint)(e.Message.Data[packetIndex + 14] << 8) |
+                        (uint)(e.Message.Data[packetIndex + 15]);
+                    UInt32 rtp_timestamp_sr =
+                        (uint)(e.Message.Data[packetIndex + 16] << 24) |
+                        (uint)(e.Message.Data[packetIndex + 17] << 16) |
+                        (uint)(e.Message.Data[packetIndex + 18] << 8) |
+                        (uint)(e.Message.Data[packetIndex + 19]);
+
+                    ulong ntp_full = ((ulong)ntp_msw_seconds << 32) | ntp_lsw_fractions;
+
+                    // Plant the SR-derived anchor on the matching
+                    // per-stream clock (Layer 4e(iv)). The PTS monitor
+                    // (Layer 4f) reads this when committing each sample
+                    // to detect the MS-DMCT >200ms-behind / >2000ms-ahead
+                    // thresholds.
+                    ApplyRtcpSenderReport(rtcp_ssrc, ntp_full, rtp_timestamp_sr);
+
+                    // Periodic RR is already paced by StartRtcpReceiverReports
+                    // (~2 Hz timer in _rtcpTimer) for both UDP and TCP transports,
+                    // so we no longer ad-hoc send an extra RR per inbound SR.
+                } else if (rtcp_packet_type == 203) {
+                    // BYE — RFC 3550 §6.6. Server is dropping the stream
+                    // for the SSRCs listed in the packet. Log and (for
+                    // a stream we depend on) surface as Disconnected
+                    // so AVCTRL can emit RTSP_DISCONNECT.
+                    bool dropsAudio = (rtcp_ssrc == _audioServerDataSsrc && _audioServerDataSsrc != 0);
+                    bool dropsVideo = (rtcp_ssrc == _videoServerDataSsrc && _videoServerDataSsrc != 0);
+                    if (dropsAudio || dropsVideo) {
+                        RaiseDisconnected(new System.IO.IOException( $"RTCP BYE for {(dropsAudio ? "audio" : "video")} stream ssrc=0x{rtcp_ssrc:X8}"));
+                    } else {
+                        Debug.WriteLine($"[rtcp] BYE for unrelated ssrc=0x{rtcp_ssrc:X8}");
+                    }
+                }
+                // PT 201 RR / 202 SDES / 204 APP / 207 XR — log-only.
+
+                packetIndex = packetIndex + ((rtcp_length + 1) * 4);
+            }
+            return;
+        }
+
+        private void Rtp_HandleData(RtspData data_received, Rtsp.RtspChunkEventArgs e) {
+
+            // RTP Packet Header
+            // 0 - Version, P, X, CC, M, PT and Sequence Number
+            //32 - Timestamp
+            //64 - SSRC
+            //96 - CSRCs (optional)
+            //nn - Extension ID and Length
+            //nn - Extension header
+
+            int rtp_version = (e.Message.Data[0] >> 6);
+            int rtp_padding = (e.Message.Data[0] >> 5) & 0x01;
+            int rtp_extension = (e.Message.Data[0] >> 4) & 0x01;
+            int rtp_csrc_count = (e.Message.Data[0] >> 0) & 0x0F;
+            int rtp_marker = (e.Message.Data[1] >> 7) & 0x01;
+            int rtp_payload_type = (e.Message.Data[1] >> 0) & 0x7F;
+            uint rtp_sequence_number = ((uint)e.Message.Data[2] << 8) + (uint)(e.Message.Data[3]);
+            uint rtp_timestamp = ((uint)e.Message.Data[4] << 24) + (uint)(e.Message.Data[5] << 16) + (uint)(e.Message.Data[6] << 8) + (uint)(e.Message.Data[7]);
+            uint rtp_ssrc = ((uint)e.Message.Data[8] << 24) + (uint)(e.Message.Data[9] << 16) + (uint)(e.Message.Data[10] << 8) + (uint)(e.Message.Data[11]);
+
+            int rtp_payload_start = 4 // V,P,M,SEQ
+                                + 4 // time stamp
+                                + 4 // ssrc
+                                + (4 * rtp_csrc_count); // zero or more csrcs
+
+            uint rtp_extension_id = 0;
+            uint rtp_extension_size = 0;
+            if (rtp_extension == 1) {
+                rtp_extension_id = ((uint)e.Message.Data[rtp_payload_start + 0] << 8) | (uint)e.Message.Data[rtp_payload_start + 1];
+                // RFC 3550 §5.3.1: extension length is 16-bit big-endian and counted in 32-bit words.
+                // Previous code had operator-precedence bug: `(hi<<8) + lo*4` instead of `((hi<<8)|lo)*4`.
+                rtp_extension_size = (((uint)e.Message.Data[rtp_payload_start + 2] << 8) | (uint)e.Message.Data[rtp_payload_start + 3]) * 4u;
+                rtp_payload_start += 4 + (int)rtp_extension_size;  // extension header and extension payload
+            }
+
+            //Debug.WriteLine("RTP Data"
+            //                   + " V=" + rtp_version
+            //                   + " P=" + rtp_padding
+            //                   + " X=" + rtp_extension
+            //                   + " CC=" + rtp_csrc_count
+            //                   + " M=" + rtp_marker
+            //                   + " PT=" + rtp_payload_type
+            //                   + " Seq=" + rtp_sequence_number
+            //                   + " Time (MS)=" + rtp_timestamp / 90 // convert from 90kHZ clock to ms
+            //                   + " SSRC=" + rtp_ssrc
+            //                   + " Size=" + e.Message.Data.Length);
+
+            //Debug.WriteLine("RTP Data"
+            //                       + " PT=" + rtp_payload_type
+            //                       + " Seq=" + rtp_sequence_number
+            //                       + " Timestamp=" + rtp_timestamp
+            //                       + " SSRC=" + rtp_ssrc);
+
+            // RFC 3550 §5.1: when the P bit is set, the LAST byte of the packet contains the
+            // padding count (including the count byte itself), and those bytes are NOT payload.
+            // Trim before handing to the depacketizer; otherwise stray bytes leak past BF1.
+            int rtp_payload_end = e.Message.Data.Length;
+            if (rtp_padding == 1) {
+                int padCount = e.Message.Data[rtp_payload_end - 1];
+                if (padCount > 0 && rtp_payload_end - padCount >= rtp_payload_start)
+                    rtp_payload_end -= padCount;
+            }
+            int rtp_payload_len = rtp_payload_end - rtp_payload_start;
+
+            // Handle Video with X-WMF-PF Payload
+            if (data_received.Channel == video_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
+                CommitVideoPipelineForWireCodec("X-WMF-PF");
+                byte[] rtp_payload = new byte[rtp_payload_len];
+                Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
+                UpdateRtcpSeqTracking(isAudio: false, (ushort)rtp_sequence_number);
+                // Marker bit propagated for cross-checking F-field fragmentation completion
+                // (WMRTP spec line 643).
+                videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
+                return;
+            }
+
+            // Handle Audio with X-WMF-PF Payload
+            if (data_received.Channel == audio_data_channel && wmfPayloadDataDict[rtp_payload_type].Codec.Equals("X-WMF-PF")) {
+                CommitAudioPipelineForWireCodec("X-WMF-PF");
+                byte[] rtp_payload = new byte[rtp_payload_len];
+                Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
+                UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
+                audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
+                return;
+            }
+
+            // Handle Audio with VND.MS.WM-MPA Payload (WMRTP-wrapped MPEG
+            // audio — MPEG-1/2 Layer I/II/III, used by WMC recorded-TV
+            // MPEG-ES profiles like WMDRMND_MPEG_ES_NTSC_XAC3). The WMRTP
+            // wrapper is parsed by audioDepacketizer; the resulting MAU is
+            // a clean run of MPEG audio frame bytes (no RFC 2250 sub-
+            // header). The AudioDataReady handler picks the routing:
+            // PS muxer (if combined pipeline is up) > NAudio MP3 sink.
+            // Dispatch is therefore gated purely on the SDP codec match —
+            // NOT on the sink fields — so the PS pipeline gets to see
+            // audio MAUs even though _mpaAudioSink is intentionally null
+            // there.
+            if (data_received.Channel == audio_data_channel && wmfPayloadDataDict.ContainsKey(rtp_payload_type) && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec, "VND.MS.WM-MPA", StringComparison.OrdinalIgnoreCase)) {
+                CommitAudioPipelineForWireCodec("VND.MS.WM-MPA");
+                byte[] rtp_payload = new byte[rtp_payload_len];
+                Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
+                UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
+                audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
+                return;
+            }
+
+            // Handle Video with VND.MS.WM-MPV Payload (WMRTP-wrapped MPEG
+            // video — MPEG-1/2 ES, same recorded-TV profile). The
+            // resulting MAU is one MPEG video access unit (start-code
+            // prefixed). videoDepacketizer.NalUnitReady is hooked to push
+            // bytes into the MPEG-ES producer when one is set up.
+            if (data_received.Channel == video_data_channel && wmfPayloadDataDict.ContainsKey(rtp_payload_type) && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec, "VND.MS.WM-MPV", StringComparison.OrdinalIgnoreCase)) {
+                CommitVideoPipelineForWireCodec("VND.MS.WM-MPV");
+                byte[] rtp_payload = new byte[rtp_payload_len];
+                Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
+                UpdateRtcpSeqTracking(isAudio: false, (ushort)rtp_sequence_number);
+                videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
+                return;
+            }
+
+            // Handle Audio with MPA (MPEG Audio over RTP, RFC 2250) Payload.
+            // WMPNss negotiates this for plain .mp3 source files — no
+            // WMRTP wrapper, 4-byte MBZ/Frag sub-header per packet.
+            // Strip the sub-header and push to whichever pipeline is
+            // active: FFME (preferred) or NAudio sink (legacy fallback).
+            if (data_received.Channel == audio_data_channel && wmfPayloadDataDict.ContainsKey(rtp_payload_type) && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec, "MPA", StringComparison.OrdinalIgnoreCase)) {
+                // Commit the wire codec on FIRST packet — without
+                // this, TrySetupMp3FfmePipeline never runs, the
+                // producer stays null, and every MAU below
+                // silently drops. The matching X-WMF-PF /
+                // VND.MS.WM-MPA branches all call this; the
+                // original RFC 2250 branch was missing it (audio-
+                // only MP3 sessions produced no audio as a result).
+                CommitAudioPipelineForWireCodec("MPA");
+                UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
+                if (rtp_payload_len <= 4) return;
+                // RFC 2250 §3.5: skip [16 bits MBZ][16 bits Frag_offset].
+                int frameLen = rtp_payload_len - 4;
+                byte[] frame = new byte[frameLen];
+                Array.Copy(e.Message.Data, rtp_payload_start + 4, frame, 0, frameLen);
+
+                // External-audio consumer (Phase 1 FFME-bypass).
+                // When ExternalSyncMediaController is the active
+                // controller it owns audio decoding + rendering
+                // directly via libav + NAudio. We hand it the
+                // raw MP3 frame; the muxer / FFME producers
+                // below are skipped.
+                if (_externalAudioMauArrived != null) {
+                    if (!_externalAudioCodecFired) {
+                        _externalAudioCodecFired = true;
+                        try { _externalAudioCodecCommit?.Invoke(BuildExternalAudioFormat("MPA")); } catch (Exception ex) {
+                            Debug.WriteLine($"[ext-audio] codecCommit threw: {ex.Message}");
+                        }
+                    }
+                    try { _externalAudioMauArrived(frame, rtp_timestamp); } catch (Exception ex) {
+                        Debug.WriteLine($"[ext-audio] mauArrived threw: {ex.Message}");
+                    }
                     return;
                 }
 
-                //// Check if the Reply has an Authenticate header.
-                //if (message.ReturnCode == 401 && message.Headers.ContainsKey(RtspHeaderNames.WWWAuthenticate)) {
-
-                //    // Process the WWW-Authenticate header
-                //    // EG:   Basic realm="AProxy"
-                //    // EG:   Digest realm="AXIS_WS_ACCC8E3A0A8F", nonce="000057c3Y810622bff50b36005eb5efeae118626a161bf", stale=FALSE
-                //    // EG:   Digest realm="IP Camera(21388)", nonce="534407f373af1bdff561b7b4da295354", stale="FALSE"
-
-                //    string www_authenticate = message.Headers[RtspHeaderNames.WWWAuthenticate];
-                //    string auth_params = "";
-
-                //    if (www_authenticate.StartsWith("basic", StringComparison.InvariantCultureIgnoreCase)) {
-                //        auth_type = "Basic";
-                //        auth_params = www_authenticate.Substring(5);
-                //    }
-                //    if (www_authenticate.StartsWith("digest", StringComparison.InvariantCultureIgnoreCase)) {
-                //        auth_type = "Digest";
-                //        auth_params = www_authenticate.Substring(6);
-                //    }
-
-                //    string[] items = auth_params.Split(new char[] { ',' }); // NOTE, does not handle Commas in Quotes
-
-                //    foreach (string item in items) {
-                //        // Split on the = symbol and update the realm and nonce
-                //        string[] parts = item.Trim().Split(new char[] { '=' }, 2); // max 2 parts in the results array
-                //        if (parts.Count() >= 2 && parts[0].Trim().Equals("realm")) {
-                //            realm = parts[1].Trim(new char[] { ' ', '\"' }); // trim space and quotes
-                //        } else if (parts.Count() >= 2 && parts[0].Trim().Equals("nonce")) {
-                //            nonce = parts[1].Trim(new char[] { ' ', '\"' }); // trim space and quotes
-                //        }
-                //    }
-
-                //    System.Diagnostics.Debug.WriteLine("WWW Authorize parsed for " + auth_type + " " + realm + " " + nonce);
-                //}
-
-                RtspMessage resend_message = message.OriginalRequest.Clone() as RtspMessage;
-
-                if (auth_type != null) {
-                    AddAuthorization(resend_message, username, password, auth_type, realm, nonce, url);
-                }
-
-                rtsp_client.SendMessage(resend_message);
-
+                // No external audio consumer attached — drop the frame.
+                // Audio is always owned by the external controller, which
+                // wires the consumer before PLAY.
                 return;
+            }
 
+            // Handle Audio with WMA (Windows Media Audio). Same WMRTP payload
+            // framing (BF1/BF2/BF3) as the other WM codecs (X-WMF-PF,
+            // VND.MS.WM-MPA) — the audio depacketizer unwraps it to a WMA
+            // data-unit MAU, which the external controller decodes via libav
+            // (AV_CODEC_ID_WMAV2 + the SDP fmtp config= as extradata). The
+            // AudioDataReady handler fires the codec commit using _wireAudioCodec
+            // (= "WMA", set by CommitAudioPipelineForWireCodec just below), so it
+            // builds the correct WMA ExternalAudioFormat. DIAGNOSTIC: dump the
+            // first payload's bytes so we can verify this WMRTP-framing
+            // assumption against a real capture if decode fails (if it's NOT
+            // WMRTP-framed, the first byte won't look like a BF1 and the WMA
+            // decoder will error — the dump tells us the real framing).
+            if (data_received.Channel == audio_data_channel && wmfPayloadDataDict.ContainsKey(rtp_payload_type) && string.Equals(wmfPayloadDataDict[rtp_payload_type].Codec, "WMA", StringComparison.OrdinalIgnoreCase)) {
+                CommitAudioPipelineForWireCodec("WMA");
+                byte[] rtp_payload = new byte[rtp_payload_len];
+                Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
+                if (!_wmaFirstPayloadLogged) {
+                    _wmaFirstPayloadLogged = true;
+                    RtcpDiagLog($"wma-first-payload len={rtp_payload_len} marker={rtp_marker} " +
+                                $"firstBytes={BitConverter.ToString(rtp_payload, 0, Math.Min(24, rtp_payload_len))}");
+                }
+                UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
+                audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
+                return;
+            }
+
+            // If we get here, there is no Parser for this Payload Type
+            System.Diagnostics.Debug.WriteLine("No parser for RTP payload " + rtp_payload_type);
+        }
+
+        #endregion ############################################################
+
+
+        #region RTSP Methods ##################################################
+
+        // RTSP Messages are OPTIONS, DESCRIBE, SETUP, PLAY, ANNOUNCE, etc
+        /// <summary>
+        /// Handle a server-initiated RTSP request (server→client). RTSP allows
+        /// either peer to send requests; WMPNss/McxDMS pushes session events
+        /// this way. There are two end-of-stream conventions, both observed
+        /// from WMPNss servers and BOTH documented in the specs shipped under
+        /// Tools/Documents:
+        ///
+        ///   (a) DLNA variant — an <c>ANNOUNCE</c> with the
+        ///       <c>Event-Type.dlna.org</c> header. [MS-DLNHND] §4.2 shows the
+        ///       exact message: after the DMS sends the last RTP packet it
+        ///       ANNOUNCEs with <c>Event-Type.dlna.org: 2000</c> (= end of
+        ///       stream). The full numeric enumeration is owned by the external
+        ///       [DLNA] Networked Device Interoperability Guidelines (guideline
+        ///       7.4.261); 2000 is the only value Microsoft documents/sends.
+        ///
+        ///   (b) Native Windows Media variant — a server→client
+        ///       <c>SET_PARAMETER</c> with the <c>X-Notice</c> header
+        ///       ([MS-RTSP] §2.2.7.3 "EndOfStream"): <c>X-Notice: 2101
+        ///       "End-of-Stream Reached"</c>, Content-Type
+        ///       <c>application/x-wms-extension-cmd</c>, and a self-describing
+        ///       US-ASCII body — <c>EOF: true</c> plus optionally one of
+        ///       <c>AdministrativeDisconnection</c> / <c>End-Of-Playlist-Entry</c>
+        ///       / <c>RecedingEos</c>.
+        ///
+        /// Every server request MUST be acknowledged with a 200 OK echoing the
+        /// CSeq (+ Session) or the server stalls / retransmits. We then log the
+        /// event verbosely (the body is human-readable text — see HandleAnnounce)
+        /// and, for either EOS form, raise <see cref="EndOfStream"/>.
+        /// </summary>
+        private void HandleServerRequest(RtspRequest request) {
+            string method = request.Method ?? "(none)";
+            int cseq = request.CSeq;
+            Debug.WriteLine($"[rtsp] server request: {method} CSeq={cseq}");
+            CommitDiagLog($"SERVER-REQ {method} CSeq={cseq}");
+
+            // Acknowledge with 200 OK (CreateResponse copies CSeq + Session).
+            // Send it before acting on the event so the server isn't kept
+            // waiting on the round-trip.
+            try {
+                RtspResponse ack = request.CreateResponse();
+                rtsp_client.SendMessage(ack);
+            } catch (Exception ex) {
+                Debug.WriteLine($"[rtsp] failed to ACK server request {method}: {ex.Message}");
+                CommitDiagLog($"SERVER-REQ {method} ACK FAILED: {ex.Message}");
+            }
+
+            // ANNOUNCE (DLNA) and server-initiated SET_PARAMETER (native MS-RTSP
+            // EndOfStream) both carry events; route both through the same parser.
+            if (string.Equals(method, "ANNOUNCE", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(method, "SET_PARAMETER", StringComparison.OrdinalIgnoreCase)) {
+                HandleAnnounce(request);
+            }
+        }
+
+        /// <summary>
+        /// Interpret + log a server event request (ANNOUNCE or SET_PARAMETER).
+        /// Surfaces end-of-stream (either the DLNA <c>Event-Type.dlna.org: 2000</c>
+        /// header or the MS-RTSP <c>X-Notice: 2101</c> / <c>EOF: true</c> body)
+        /// as <see cref="EndOfStream"/> → controller MediaEnded → MS-DMCT
+        /// END_OF_MEDIA. The event body is US-ASCII and self-describing, so it is
+        /// logged verbatim as TEXT (this is how unknown event types are
+        /// identified). We do NOT tear down locally — WMC drives
+        /// teardown / playlist-advance off END_OF_MEDIA.
+        /// </summary>
+        private void HandleAnnounce(RtspRequest request) {
+            string method     = request.Method ?? "(none)";
+            string eventType  = request.Headers.TryGetValue("Event-Type.dlna.org", out string et) ? et?.Trim() : null;
+            string xNotice    = request.Headers.TryGetValue("X-Notice", out string xn) ? xn?.Trim() : null;
+            string rtpInfo    = request.Headers.TryGetValue("RTP-Info", out string ri) ? ri : "(none)";
+            string contentType= request.Headers.TryGetValue("Content-Type", out string ct) ? ct : "(none)";
+
+            // The x-wms-extension-cmd body is US-ASCII text per [MS-RTSP]
+            // §2.2.7.3 (e.g. "Session: …\r\nEOF: true\r\nEnd-Of-Playlist-Entry: true").
+            // Decode + log it so any event can be identified from the log.
+            int bodyLen = request.Data?.Length ?? 0;
+            string bodyText = bodyLen > 0
+                ? System.Text.Encoding.ASCII.GetString(request.Data).Replace("\r", "\\r").Replace("\n", "\\n")
+                : "";
+
+            string summary = $"{method} event-type={eventType ?? "(none)"} x-notice={xNotice ?? "(none)"} " +
+                             $"content-type={contentType} rtp-info=[{rtpInfo}] bodyLen={bodyLen}";
+            Debug.WriteLine($"[rtsp] {summary}");
+            CommitDiagLog(summary);
+            if (bodyLen > 0) CommitDiagLog($"{method} body(text): \"{bodyText}\"");
+
+            // End-of-stream detection across both conventions:
+            //   DLNA:     Event-Type.dlna.org: 2000
+            //   MS-RTSP:  X-Notice: 2101 ...   OR body contains "EOF: true"
+            bool dlnaEos    = eventType == "2000";
+            bool noticeEos  = xNotice != null && xNotice.StartsWith("2101");
+            bool bodyEos    = bodyLen > 0 &&
+                              System.Text.Encoding.ASCII.GetString(request.Data)
+                                  .IndexOf("EOF: true", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            if (dlnaEos || noticeEos || bodyEos) {
+                string why = dlnaEos ? "DLNA Event-Type 2000"
+                           : noticeEos ? "MS-RTSP X-Notice 2101"
+                           : "body EOF: true";
+                Debug.WriteLine($"[rtsp] {method} end-of-stream ({why}) → raising EndOfStream");
+                CommitDiagLog($"{method} → EndOfStream ({why})");
+                RaiseEndOfStream();
+            }
+        }
+
+        private void Rtsp_MessageReceived(object sender, Rtsp.RtspChunkEventArgs e) {
+            // RTSP lets the SERVER push requests to the client, not just
+            // respond. WMPNss/McxDMS uses ANNOUNCE for that — most importantly
+            // to push the DLNA end-of-stream event. Server-initiated requests
+            // arrive here as RtspRequest (RtspRequestAnnounce etc.), NOT
+            // RtspResponse, so the "as RtspResponse" cast below would yield
+            // null and NRE on message.IsOk. Handle (and acknowledge) them
+            // first, then return.
+            if (e.Message is RtspRequest serverRequest) {
+                HandleServerRequest(serverRequest);
+                return;
+            }
+
+            RtspResponse message = e.Message as RtspResponse;
+            if (message == null) {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[rtsp] ignoring unrecognised message: {e.Message?.GetType().Name ?? "(null)"}");
+                return;
+            }
+
+            if (message.IsOk == false) {
+                System.Diagnostics.Debug.WriteLine("Got Error in RTSP Reply " + message.ReturnCode + " " + message.ReturnMessage);
+                RtspMessage resend_message = message.OriginalRequest.Clone() as RtspMessage;
+                rtsp_client.SendMessage(resend_message);
+                return;
             }
 
 
             // If we get a reply to OPTIONS then start the Keepalive Timer and send DESCRIBE
-            if (message.OriginalRequest != null && message.OriginalRequest is Rtsp.Messages.RtspRequestOptions) {
+            if (message.OriginalRequest != null && message.OriginalRequest is RtspRequestOptions) {
 
                 // Check the capabilities returned by OPTIONS
                 // The Public: header contains the list of commands the RTSP server supports
@@ -3822,21 +2379,17 @@ namespace SoftSled.Components.RTSP {
                 if (keepalive_timer == null) {
                     // Start a Timer to send an Keepalive RTSP command every 20 seconds
                     keepalive_timer = new System.Timers.Timer();
-                    keepalive_timer.Elapsed += Timer_Elapsed;
+                    keepalive_timer.Elapsed += KeepaliveTimer_Elapsed;
                     keepalive_timer.Interval = 20 * 1000;
                     keepalive_timer.Enabled = true;
 
                     // Send DESCRIBE
-                    RtspRequest describe_message = new Rtsp.Messages.RtspRequestDescribe();
+                    RtspRequest describe_message = new RtspRequestDescribe();
                     describe_message.RtspUri = new Uri(url);
                     describe_message.AddHeader(AcceptHeader);
                     describe_message.AddHeader(LanguageHeader);
-                    //describe_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                     describe_message.AddHeader(SupportedHeader);
                     describe_message.AddHeader(UserAgent);
-                    if (auth_type != null) {
-                        AddAuthorization(describe_message, username, password, auth_type, realm, nonce, url);
-                    }
                     rtsp_client.SendMessage(describe_message);
                 } else {
                     // If the Keepalive Timer was not null, the OPTIONS reply may have come from a Keepalive
@@ -3847,7 +2400,7 @@ namespace SoftSled.Components.RTSP {
 
 
             // If we get a reply to DESCRIBE (which was our second command), then prosess SDP and send the SETUP
-            if (message.OriginalRequest != null && message.OriginalRequest is Rtsp.Messages.RtspRequestDescribe) {
+            if (message.OriginalRequest != null && message.OriginalRequest is RtspRequestDescribe) {
 
                 // Got a reply for DESCRIBE
                 if (message.IsOk == false) {
@@ -3855,33 +2408,23 @@ namespace SoftSled.Components.RTSP {
                     return;
                 }
 
-
-                // ADDED TEMPORARILY //
-
+                // If Keepalive Timer hasn't been configured
                 if (keepalive_timer == null) {
                     // Start a Timer to send an Keepalive RTSP command every 20 seconds
                     keepalive_timer = new System.Timers.Timer();
-                    keepalive_timer.Elapsed += Timer_Elapsed;
+                    keepalive_timer.Elapsed += KeepaliveTimer_Elapsed;
                     keepalive_timer.Interval = 20 * 1000;
                     keepalive_timer.Enabled = true;
                 }
 
-                // END ADDED TEMPORARILY //
-
-
-
-
-                // Examine the SDP
-
-                //System.Diagnostics.Debug.WriteLine(System.Text.Encoding.UTF8.GetString(message.Data));
-
+                // Get the SDP Data
                 Rtsp.Sdp.SdpFile sdp_data;
                 String control = "";  // the "track" or "stream id"
                 using (StreamReader sdp_stream = new StreamReader(new MemoryStream(message.Data))) {
                     sdp_data = Rtsp.Sdp.SdpFile.Read(sdp_stream);
 
                     // Find the base RTSP Server URL
-                    foreach (Rtsp.Sdp.Attribut attrib in sdp_data.Attributs) {
+                    foreach (Rtsp.Sdp.Attribute attrib in sdp_data.Attributs) {
                         // If this is the Control attribute
                         if (attrib.Key.Equals("control")) {
                             string sdp_control = attrib.Value;
@@ -3896,7 +2439,6 @@ namespace SoftSled.Components.RTSP {
 
                 // RTP and RTCP 'channels' are used in TCP Interleaved mode (RTP over RTSP)
                 // These are the channels we request. The camera confirms the channel in the SETUP Reply.
-                // But, a Panasonic decides to use different channels in the reply.
                 int next_free_rtp_channel = 0;
                 int next_free_rtcp_channel = 1;
 
@@ -3908,7 +2450,7 @@ namespace SoftSled.Components.RTSP {
                         sdp_data = Rtsp.Sdp.SdpFile.Read(sdp_stream);
 
                         // Find the base RTSP Server URL
-                        foreach (Rtsp.Sdp.Attribut attrib in sdp_data.Attributs) {
+                        foreach (Rtsp.Sdp.Attribute attrib in sdp_data.Attributs) {
                             // If this is the Control attribute
                             if (attrib.Key.Equals("control")) {
                                 string sdp_control = attrib.Value;
@@ -3924,8 +2466,8 @@ namespace SoftSled.Components.RTSP {
                     bool audio = (sdp_data.Medias[x].MediaType == Rtsp.Sdp.Media.MediaTypes.audio);
                     bool video = (sdp_data.Medias[x].MediaType == Rtsp.Sdp.Media.MediaTypes.video);
 
-                    if (video && video_payload != -1) continue; // have already matched a video payload. don't match another
-                    if (audio && audio_payload != -1) continue; // have already matched an audio payload. don't match another
+                    if (video && video_payload != -1) continue; // have already matched video payload, don't match another
+                    if (audio && audio_payload != -1) continue; // have already matched audio payload, don't match another
 
                     if (audio && (client_wants_audio == false)) continue; // client does not want audio from the RTSP server
                     if (video && (client_wants_video == false)) continue; // client does not want video from the RTSP server
@@ -3937,8 +2479,8 @@ namespace SoftSled.Components.RTSP {
 
                         // search the attributes for control, rtpmap and fmtp
                         // (fmtp only applies to video)
-                        Rtsp.Sdp.AttributFmtp fmtp = null; // holds SPS and PPS in base64 (h264 video)
-                        foreach (Rtsp.Sdp.Attribut attrib in sdp_data.Medias[x].Attributs) {
+                        Rtsp.Sdp.AttributeFmtp fmtp = null;
+                        foreach (Rtsp.Sdp.Attribute attrib in sdp_data.Medias[x].Attributs) {
                             if (attrib.Key.Equals("control")) {
                                 String sdp_control = attrib.Value;
                                 if (sdp_control.ToLower().StartsWith("rtsp://")) {
@@ -3976,56 +2518,57 @@ namespace SoftSled.Components.RTSP {
                                 }
                             }
                             if (attrib.Key.Equals("fmtp")) {
-                                fmtp = attrib as Rtsp.Sdp.AttributFmtp;
+                                fmtp = attrib as Rtsp.Sdp.AttributeFmtp;
                                 if (wmfPayloadDataDict.ContainsKey(fmtp.PayloadNumber)) {
                                     // Set the Format Parameter in the Payload Data Dictionary
                                     wmfPayloadDataDict[fmtp.PayloadNumber].FormatParameter = fmtp.FormatParameter;
-                                    // Split the Format Parameter into Individual Segments
-                                    string[] fmtpFormatParameterSegments = fmtp.FormatParameter.Split(';');
-                                    // Iterate over all Format Parameter Segments
-                                    foreach (string fmtpFormatParameterSegment in fmtpFormatParameterSegments) {
-                                        // Split the Format Parameter Segment into Element=Data
-                                        string[] fmtpFormatParameterSegmentElementData = fmtpFormatParameterSegment.Split('=');
-                                        // If this is Segment is a Config Element
-                                        if (fmtpFormatParameterSegmentElementData[0] == "config") {
-                                            // Set the AM_MEDIA_FORMAT with this Segment Data
-                                            wmfPayloadDataDict[fmtp.PayloadNumber].AM_Media_Format = new AM_Media_Format(fmtpFormatParameterSegmentElementData[1]);
-                                        }
-
-                                    }
                                 } else {
+                                    // Add the Payload Data Dictionary with Format Parameter
                                     wmfPayloadDataDict.Add(fmtp.PayloadNumber, new WMFPayloadData {
                                         PayloadNumber = fmtp.PayloadNumber,
                                         FormatParameter = fmtp.FormatParameter
                                     });
-                                    // Split the Format Parameter into Individual Segments
-                                    string[] fmtpFormatParameterSegments = fmtp.FormatParameter.Split(';');
-                                    // Iterate over all Format Parameter Segments
-                                    foreach (string fmtpFormatParameterSegment in fmtpFormatParameterSegments) {
-                                        // Split the Format Parameter Segment into Element=Data
-                                        string[] fmtpFormatParameterSegmentElementData = fmtpFormatParameterSegment.Split('=');
-                                        // If this is Segment is a Config Element
-                                        if (fmtpFormatParameterSegmentElementData[0] == "config") {
-                                            // Set the AM_MEDIA_FORMAT with this Segment Data
-                                            wmfPayloadDataDict[fmtp.PayloadNumber].AM_Media_Format = new AM_Media_Format(fmtpFormatParameterSegmentElementData[1]);
-                                        }
+                                }
 
+                                // Split the Format Parameter into Individual Segments
+                                string[] fmtpFormatParameterSegments = fmtp.FormatParameter.Split(';');
+                                // Iterate over all Format Parameter Segments
+                                foreach (string fmtpFormatParameterSegment in fmtpFormatParameterSegments) {
+                                    // Split the Format Parameter Segment into Element=Data
+                                    string[] fmtpFormatParameterSegmentElementData = fmtpFormatParameterSegment.Split('=');
+                                    // If this is Segment is a Config Element
+                                    if (fmtpFormatParameterSegmentElementData[0] == "config") {
+                                        // Two WMA config encodings exist in the wild:
+                                        //   (a) legacy slash-delimited AM_MEDIA_TYPE
+                                        //       ("major/.../waveformatex-hex") — parsed
+                                        //       into AM_Media_Format.
+                                        //   (b) plain codec-private hex blob, e.g.
+                                        //       "008800000f00e55c0000" — NOT slash
+                                        //       delimited; AM_Media_Format would throw
+                                        //       (formatSegments[1] out of range). This
+                                        //       case is handled later as libav extradata
+                                        //       via BuildExternalAudioFormat/HexToBytes,
+                                        //       so just skip AM_Media_Format here.
+                                        string cfg = fmtpFormatParameterSegmentElementData.Length > 1
+                                                     ? fmtpFormatParameterSegmentElementData[1] : "";
+                                        if (cfg.Contains("/")) {
+                                            try {
+                                                wmfPayloadDataDict[fmtp.PayloadNumber].AM_Media_Format = new AM_Media_Format(cfg);
+                                            } catch (Exception ex) {
+                                                Debug.WriteLine($"[sdp] AM_Media_Format parse failed: {ex.Message}");
+                                            }
+                                        }
                                     }
+
                                 }
                             }
                             if (attrib.Key.Equals("rtpmap")) {
-                                Rtsp.Sdp.AttributRtpMap rtpmap = attrib as Rtsp.Sdp.AttributRtpMap;
+                                Rtsp.Sdp.AttributeRtpMap rtpmap = attrib as Rtsp.Sdp.AttributeRtpMap;
 
                                 // Check if the Codec Used (EncodingName) is one we support
-                                //String[] valid_video_codecs = { "H264", "H265", "X-WMF-PF" };
-                                String[] valid_video_codecs = { "H264", "H265", "VND.MS.WM-MPV", "X-WMF-PF" };
-                                //String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "X-WMF-PF" /* for aac */}; // Note some are "mpeg4-generic" lower case
-                                String[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "VND.MS.WM-MPA", "X-WMF-PF" /* for aac */}; // Note some are "mpeg4-generic" lower case
+                                string[] valid_video_codecs = { "H264", "H265", "VND.MS.WM-MPV", "X-WMF-PF" };
+                                string[] valid_audio_codecs = { "PCMA", "PCMU", "AMR", "MPA", "MPEG4-GENERIC", "VND.MS.WM-MPA", "VND.MS.WM-AC3", "X-WMF-PF", "WMA" /* for aac */}; // Note some are "mpeg4-generic" lower case
 
-                                //if (video && video_payload == -1 && Array.IndexOf(valid_video_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
-                                // Parse the rtpmap ClockRate (string, e.g. "90000"
-                                // or "1000") once and reuse for both branches.
-                                // Default 90 kHz if missing/unparseable.
                                 int rtpClockHz = 90000;
                                 if (!string.IsNullOrEmpty(rtpmap.ClockRate)
                                     && int.TryParse(rtpmap.ClockRate,
@@ -4051,11 +2594,8 @@ namespace SoftSled.Components.RTSP {
                                             //EncodingParameters = rtpmap.EncodingParameters
                                         });
                                     }
-                                    video_codec = rtpmap.EncodingName.ToUpper();
-                                    //video_payload = sdp_data.Medias[x].PayloadType;
                                     video_payload = rtpmap.PayloadNumber;
                                 }
-                                //if (audio && audio_payload == -1 && Array.IndexOf(valid_audio_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
                                 if (audio && Array.IndexOf(valid_audio_codecs, rtpmap.EncodingName.ToUpper()) >= 0) {
                                     if (wmfPayloadDataDict.ContainsKey(rtpmap.PayloadNumber)) {
                                         wmfPayloadDataDict[rtpmap.PayloadNumber].Type = MediaType.Audio;
@@ -4071,63 +2611,10 @@ namespace SoftSled.Components.RTSP {
                                             EncodingParameters = rtpmap.EncodingParameters
                                         });
                                     }
-                                    audio_codec = rtpmap.EncodingName.ToUpper();
-                                    //audio_payload = sdp_data.Medias[x].PayloadType;
                                     audio_payload = rtpmap.PayloadNumber;
                                 }
                             }
                         }
-
-                        // Create H264 RTP Parser
-                        if (video && (video_codec.Contains("H264") || video_codec.ToUpper().Contains("X-WMF-PF"))) {
-                            h264Payload = new Rtsp.H264Payload();
-                        }
-
-                        // If the rtpmap contains H264 then split the fmtp to get the sprop-parameter-sets which hold the SPS and PPS in base64
-                        if (video && (video_codec.Contains("H264") || video_codec.ToUpper().Contains("X-WMF-PF")) && fmtp != null) {
-                            var param = Rtsp.Sdp.H264Parameters.Parse(fmtp.FormatParameter);
-                            var sps_pps = param.SpropParameterSets;
-                            if (sps_pps.Count() >= 2) {
-                                byte[] sps = sps_pps[0];
-                                byte[] pps = sps_pps[1];
-                                if (Received_SPS_PPS != null) {
-                                    Received_SPS_PPS(sps, pps);
-                                }
-                                h264_sps_pps_fired = true;
-                            }
-                        }
-
-                        // Create H265 RTP Parser
-                        if (video && video_codec.Contains("H265")) {
-                            // TODO - check if DONL is being used
-                            bool has_donl = false;
-                            h265Payload = new Rtsp.H265Payload(has_donl);
-                        }
-
-                        // If the rtpmap contains H265 then split the fmtp to get the sprop-vps, sprop-sps and sprop-pps
-                        // The RFC makes the VPS, SPS and PPS OPTIONAL so they may not be present. In which we pass back NULL values
-                        if (video && video_codec.Contains("H265") && fmtp != null) {
-                            var param = Rtsp.Sdp.H265Parameters.Parse(fmtp.FormatParameter);
-                            var vps_sps_pps = param.SpropParameterSets;
-                            if (vps_sps_pps.Count() >= 3) {
-                                byte[] vps = vps_sps_pps[0];
-                                byte[] sps = vps_sps_pps[1];
-                                byte[] pps = vps_sps_pps[2];
-                                if (Received_VPS_SPS_PPS != null) {
-                                    Received_VPS_SPS_PPS(vps, sps, pps);
-                                }
-                                h265_vps_sps_pps_fired = true;
-                            }
-                        }
-
-                        // Create AAC RTP Parser
-                        // Example fmtp is "96 profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1490"
-                        // Example fmtp is ""96 streamtype=5;profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1210"
-                        if (audio && audio_codec.Contains("MPEG4-GENERIC") && fmtp.GetParameter("mode").ToLower().Equals("aac-hbr")) {
-                            // Extract config (eg 0x1490 or 0x1210)
-                            aacPayload = new Rtsp.AACPayload(fmtp.GetParameter("config"));
-                        }
-
 
                         // Send the SETUP RTSP command if we have a matching Payload Decoder
                         if (video && video_payload == -1) continue;
@@ -4203,46 +2690,19 @@ namespace SoftSled.Components.RTSP {
                         setup_message.RtspUri = new Uri(control);
                         setup_message.AddTransport(transport);
                         setup_message.AddHeader(LanguageHeader);
-                        setup_message.AddHeader("Buffer-Info.dlna.org: dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0");
-                        //setup_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                        // Per-stream Buffer-Info: video gets the larger CDB
+                        // (matches Xbox 360 capture — see
+                        // BuildBufferInfoHeader doc). The `video` bool is
+                        // set by the outer m= line loop and is in scope.
+                        setup_message.AddHeader(BuildBufferInfoHeader(
+                            _bufferInfoBandwidthBps, _bufferInfoOptimisedPreroll,
+                            isVideo: video));
                         setup_message.AddHeader(SupportedHeader);
                         setup_message.AddHeader(UserAgent);
-                        if (auth_type != null) {
-                            AddAuthorization(setup_message, username, password, auth_type, realm, nonce, url);
-                        }
-
                         // Add SETUP message to list of messages to send
                         setup_messages.Add(setup_message);
-
                     }
                 }
-
-                // Phase-0c: now that the SDP loop has populated wmfPayloadDataDict
-                // with all rtpmap+fmtp entries, identify the audio PT the server
-                // will most likely deliver and stand up a matching NAudio sink.
-                // Server-picked-PT logic: pick the FIRST x-wmf-pf audio entry
-                // whose fmtp config is `audio/vnd.wave` (raw PCM via WMRTP).
-                // The wire dump confirmed PT=110 (first such entry) is what
-                // WMPNss actually emits; if a future server picks a different
-                // PT we'd see no audio and need to extend dispatch (multi-PT
-                // sinks). Keep simple for now.
-                // Pipeline-selection priority (first match wins; downstream
-                // setups check for their predecessors and skip):
-                //   1. MPEG-PS — combined wm-MPV video + wm-MPA audio
-                //   2. MP3-via-FFME — audio-only MPA / vnd.ms.wm-MPA
-                //   3. PCM via NAudio — x-wmf-pf vnd.wave (no FFME analogue
-                //      yet; could be unified later)
-                //   4. NAudio MP3 sink — legacy MPA fallback (only fires
-                //      if FFME paths are disabled via env var)
-                //   5. Video-only MPEG-ES — wm-MPV with no audio codec
-                // No pipeline setup here. The SDP advertises multiple
-                // codecs (legacy MPA/MPV + modern X-WMF-PF PCM/H264) and
-                // the server picks one at PLAY time — we can't tell from
-                // SDP alone. We defer pipeline setup until the first
-                // wire RTP packet arrives in each direction and commit
-                // based on the actual codec for that PT.
-                // See CommitAudioPipelineForWireCodec /
-                //     CommitVideoPipelineForWireCodec further down.
 
                 // Send the FIRST SETUP message and remove it from the list of Setup Messages
                 rtsp_client.SendMessage(setup_messages[0]);
@@ -4254,7 +2714,7 @@ namespace SoftSled.Components.RTSP {
             // (i) check if the Interleaved Channel numbers have been modified by the camera (eg Panasonic cameras)
             // (ii) check if we have any more SETUP commands to send out (eg if we are doing SETUP for Video and Audio)
             // (iii) send a PLAY command if all the SETUP command have been sent
-            if (message.OriginalRequest != null && message.OriginalRequest is Rtsp.Messages.RtspRequestSetup) {
+            if (message.OriginalRequest != null && message.OriginalRequest is RtspRequestSetup) {
                 // Got Reply to SETUP
                 if (message.IsOk == false) {
                     Debug.WriteLine("Got Error in SETUP Reply " + message.ReturnCode + " " + message.ReturnMessage);
@@ -4275,7 +2735,7 @@ namespace SoftSled.Components.RTSP {
 
                     // Check if Transport header includes Multicast
                     if (transport.IsMulticast) {
-                        String multicast_address = transport.Destination;
+                        string multicast_address = transport.Destination;
                         video_data_channel = transport.Port.First;
                         video_rtcp_channel = transport.Port.Second;
 
@@ -4374,14 +2834,19 @@ namespace SoftSled.Components.RTSP {
                 }
 
 
-                // Check if we have another SETUP command to send, then remote it from the list
+                // Check if we have another SETUP command to send, then remove it from the list
                 if (setup_messages.Count > 0) {
                     // send the next SETUP message, after adding in the 'session'
                     RtspRequestSetup next_setup = setup_messages[0];
                     next_setup.Session = session;
                     next_setup.AddHeader(LanguageHeader);
-                    next_setup.AddHeader("Buffer-Info.dlna.org: dejitter=6624000;CDB=6553600;BTM=0;TD=2000;BFR=0");
-                    //next_setup.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
+                    // Per-stream Buffer-Info: video gets the larger CDB
+                    // (matches Xbox 360 capture). Derive stream type
+                    // from the SETUP URI's path tail (m= line control
+                    // URLs end in /audio or /video — see SDP loop).
+                    string nextSetupUriStr = next_setup.RtspUri?.ToString() ?? "";
+                    bool nextIsVideo = nextSetupUriStr.EndsWith("/video", StringComparison.OrdinalIgnoreCase);
+                    next_setup.AddHeader(BuildBufferInfoHeader(_bufferInfoBandwidthBps, _bufferInfoOptimisedPreroll, isVideo: nextIsVideo));
                     next_setup.AddHeader(SupportedHeader);
                     next_setup.AddHeader(UserAgent);
                     rtsp_client.SendMessage(next_setup);
@@ -4401,7 +2866,7 @@ namespace SoftSled.Components.RTSP {
             }
 
             // If we get a reply to PLAY (which was our fourth command), then we should have video being received
-            if (message.OriginalRequest != null && message.OriginalRequest is Rtsp.Messages.RtspRequestPlay) {
+            if (message.OriginalRequest != null && message.OriginalRequest is RtspRequestPlay) {
                 // Got Reply to PLAY
                 if (message.IsOk == false) {
                     Debug.WriteLine("Got Error in PLAY Reply " + message.ReturnCode + " " + message.ReturnMessage);
@@ -4430,7 +2895,7 @@ namespace SoftSled.Components.RTSP {
                     Debug.WriteLine($"[rtp-info] parse failed: {ex.Message}");
                 }
 
-                // Phase-0c follow-up: start sending RTCP Receiver Reports.
+                // Start sending RTCP Receiver Reports.
                 // WMPNss paces ~20% real-time without RR feedback. We send
                 // a minimal 8-byte RR every 1 second for each stream that
                 // has a known server RTCP port. First send is immediate so
@@ -4443,48 +2908,32 @@ namespace SoftSled.Components.RTSP {
 
         }
 
-        // Flag set by Stop() so the keepalive miss-counter (and any other
-        // background path that observes a socket exception) knows the
-        // disconnect is user-initiated and shouldn't escalate to a
-        // Disconnected event.
-        private volatile bool _stopRequested;
-        private int _keepaliveConsecutiveFailures;
+        #endregion ############################################################
 
-        void Timer_Elapsed(object sender, System.Timers.ElapsedEventArgs e) {
+
+        #region RTSP Keepalive ################################################
+
+        void KeepaliveTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e) {
             // Send Keepalive message
-            // The ONVIF Standard uses SET_PARAMETER as "an optional method to keep an RTSP session alive"
-            // RFC 2326 (RTSP Standard) says "GET_PARAMETER with no entity body may be used to test client or server liveness("ping")"
-
             // This code uses GET_PARAMETER (unless OPTIONS report it is not supported, and then it sends OPTIONS as a keepalive)
 
             if (_stopRequested) return;
 
             try {
                 if (server_supports_get_parameter) {
-
-                    Rtsp.Messages.RtspRequest getparam_message = new Rtsp.Messages.RtspRequestGetParameter();
+                    RtspRequest getparam_message = new RtspRequestGetParameter();
                     getparam_message.RtspUri = new Uri(url);
                     getparam_message.Session = session;
                     getparam_message.AddHeader(LanguageHeader);
-                    //getparam_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                     getparam_message.AddHeader(SupportedHeader);
                     getparam_message.AddHeader(UserAgent);
-                    if (auth_type != null) {
-                        AddAuthorization(getparam_message, username, password, auth_type, realm, nonce, url);
-                    }
                     rtsp_client.SendMessage(getparam_message);
-
                 } else {
-
-                    Rtsp.Messages.RtspRequest options_message = new Rtsp.Messages.RtspRequestOptions();
+                    RtspRequest options_message = new RtspRequestOptions();
                     options_message.RtspUri = new Uri(url);
                     options_message.AddHeader(LanguageHeader);
-                    //options_message.AddHeader("Supported: dlna.announce, dlna.rtx-dup");
                     options_message.AddHeader(SupportedHeader);
                     options_message.AddHeader(UserAgent);
-                    if (auth_type != null) {
-                        AddAuthorization(options_message, username, password, auth_type, realm, nonce, url);
-                    }
                     rtsp_client.SendMessage(options_message);
                 }
                 // Reset miss counter on every successful send.
@@ -4492,71 +2941,15 @@ namespace SoftSled.Components.RTSP {
             } catch (Exception ex) {
                 int fails = System.Threading.Interlocked.Increment(ref _keepaliveConsecutiveFailures);
                 Debug.WriteLine($"[rtsp] keepalive send failed ({fails} consecutive): {ex.Message}");
-                // Layer 4d: after 2 consecutive keepalive misses, treat
-                // the session as disconnected. (Single misses can be
-                // transient — TCP retransmit cycle, brief CPU stall, etc.)
+                // After 2 consecutive keepalive misses, treat the session as disconnected
                 if (fails >= 2 && !_stopRequested) {
                     RaiseDisconnected(ex);
                 }
             }
         }
 
-        // Generate Basic or Digest Authorization
-        public void AddAuthorization(RtspMessage message, string username, string password,
-            string auth_type, string realm, string nonce, string url) {
+        #endregion ############################################################
 
-            if (username == null || username.Length == 0) return;
-            if (password == null || password.Length == 0) return;
-            if (realm == null || realm.Length == 0) return;
-            if (auth_type.Equals("Digest") && (nonce == null || nonce.Length == 0)) return;
-
-            if (auth_type.Equals("Basic")) {
-                byte[] credentials = System.Text.Encoding.UTF8.GetBytes(username + ":" + password);
-                String credentials_base64 = Convert.ToBase64String(credentials);
-                String basic_authorization = "Basic " + credentials_base64;
-
-                message.Headers.Add(RtspHeaderNames.Authorization, basic_authorization);
-
-                return;
-            } else if (auth_type.Equals("Digest")) {
-
-                string method = message.Method; // DESCRIBE, SETUP, PLAY etc
-
-                MD5 md5 = System.Security.Cryptography.MD5.Create();
-                String hashA1 = CalculateMD5Hash(md5, username + ":" + realm + ":" + password);
-                String hashA2 = CalculateMD5Hash(md5, method + ":" + url);
-                String response = CalculateMD5Hash(md5, hashA1 + ":" + nonce + ":" + hashA2);
-
-                const String quote = "\"";
-                String digest_authorization = "Digest username=" + quote + username + quote + ", "
-                    + "realm=" + quote + realm + quote + ", "
-                    + "nonce=" + quote + nonce + quote + ", "
-                    + "uri=" + quote + url + quote + ", "
-                    + "response=" + quote + response + quote;
-
-                message.Headers.Add(RtspHeaderNames.Authorization, digest_authorization);
-
-                return;
-            } else {
-                return;
-            }
-
-        }
-
-        // MD5 (lower case)
-        public string CalculateMD5Hash(MD5 md5_session, string input) {
-            byte[] inputBytes = System.Text.Encoding.UTF8.GetBytes(input);
-            byte[] hash = md5_session.ComputeHash(inputBytes);
-
-            StringBuilder output = new StringBuilder();
-            for (int i = 0; i < hash.Length; i++) {
-                output.Append(hash[i].ToString("x2"));
-            }
-
-            return output.ToString();
-        }
-
-        //public void AddWMFPayloadData()
 
         // ===================================================================
         //  StreamClock — per-stream RTP↔NTP anchor (Layer 4e(iv))
@@ -4605,15 +2998,23 @@ namespace SoftSled.Components.RTSP {
         internal void ApplyRtcpSenderReport(uint senderSsrc, ulong ntpTimestamp, uint rtpTimestamp) {
             if (senderSsrc == _audioServerDataSsrc && _audioServerDataSsrc != 0) {
                 if (_audioClock == null) {
-                    _audioClock = new StreamClock { SSRC = senderSsrc, ClockHz = _audioClockHz };
+                    _audioClock = new StreamClock { SSRC = senderSsrc };
                 }
+                // Refresh the clock rate every SR: the wire codec commit
+                // (first RTP data packet) may land before OR after the
+                // first SR, so we can't rely on _audioClockHz being set
+                // when the clock is first created. PtsMs returns 0 while
+                // ClockHz is still 0, so PTS monitoring stays dormant
+                // (no false errors) until the rate is known.
+                if (_audioClockHz != 0) _audioClock.ClockHz = _audioClockHz;
                 _audioClock.AnchorNtp = ntpTimestamp;
                 _audioClock.AnchorRtp = rtpTimestamp;
                 _audioClock.HasAnchor = true;
             } else if (senderSsrc == _videoServerDataSsrc && _videoServerDataSsrc != 0) {
                 if (_videoClock == null) {
-                    _videoClock = new StreamClock { SSRC = senderSsrc, ClockHz = _videoClockHz };
+                    _videoClock = new StreamClock { SSRC = senderSsrc };
                 }
+                if (_videoClockHz != 0) _videoClock.ClockHz = _videoClockHz;
                 _videoClock.AnchorNtp = ntpTimestamp;
                 _videoClock.AnchorRtp = rtpTimestamp;
                 _videoClock.HasAnchor = true;
@@ -4624,7 +3025,7 @@ namespace SoftSled.Components.RTSP {
         /// <summary>
         /// Monitor a freshly-committed sample's PTS for the spec thresholds.
         /// Called from inside the audio + video depacketizer callbacks
-        /// (Layer 4f). The check is best-effort — if no SR has anchored
+        /// The check is best-effort — if no SR has anchored
         /// the per-stream clock yet, we return without firing.
         /// </summary>
         private void MonitorPts(bool isAudio, uint rtpTs) {
@@ -4634,7 +3035,7 @@ namespace SoftSled.Components.RTSP {
             long ptsMs = clock.PtsMs(rtpTs);
             long prev = isAudio ? _lastAudioPtsMs : _lastVideoPtsMs;
 
-            // First-sample-after-seek capture — used by Layer 4g(b).
+            // First-sample-after-seek capture
             if (isAudio) {
                 if (System.Threading.Interlocked.CompareExchange(
                         ref _firstAudioPtsCapturedMs, ptsMs, long.MinValue) == long.MinValue) {
@@ -4661,7 +3062,7 @@ namespace SoftSled.Components.RTSP {
         }
 
         /// <summary>
-        /// Layer 4g(b): once both first-sample PTS values are captured
+        /// Once both first-sample PTS values are captured
         /// after a seek, compare and fire UNRECOVERABLE_SKEW if the gap
         /// exceeds 3500ms. Only fires once per seek.
         /// </summary>
@@ -4677,8 +3078,8 @@ namespace SoftSled.Components.RTSP {
         }
 
         /// <summary>
-        /// Layer 4g(a): start the decoder-open stopwatch the first time
-        /// a sample is handed to FFME. Called from the producer-submit
+        /// start the decoder-open stopwatch the first time
+        /// a sample is handed to MediaController. Called from the producer-submit
         /// path of whichever pipeline commits first.
         /// </summary>
         internal void ArmDecoderOpenStopwatch() {
@@ -4687,43 +3088,96 @@ namespace SoftSled.Components.RTSP {
             }
         }
 
-        /// <summary>
-        /// Layer 4g(a): called by the host (via FfmeMediaController) when
-        /// FFME raises MediaOpened. Stops the stopwatch and fires
-        /// UNRECOVERABLE_SKEW if open took longer than 500ms.
-        /// </summary>
-        public void NotifyDecoderOpened() {
-            if (_decoderOpenArmed == 0) return;
-            if (System.Threading.Interlocked.Exchange(ref _decoderOpenFired, 1) != 0) return;
-            _decoderOpenSw.Stop();
-            long openMs = _decoderOpenSw.ElapsedMilliseconds;
-            if (openMs > 500) {
-                RaiseUnrecoverableSkew(new SkewInfo(SkewInfo.Cause.DecoderOpenTooSlow, openMs));
+        #region Utility #######################################################
+
+        // Resolve the directory for RTSP diagnostic logs: an "rtsp" subfolder
+        // under the configured main log directory (SoftSledConfig.LogFileDirectory,
+        // default %LocalAppData%/SoftSled/Logs) so they sit alongside the
+        // session logs instead of in %TEMP%. Falls back to %TEMP% if config
+        // resolution or directory creation fails, so diagnostics are never lost.
+        private static string ResolveRtspDiagDir() {
+            try {
+                string dir = null;
+                try { dir = SoftSled.Components.Configuration.SoftSledConfigManager.ReadConfig()?.LogFileDirectory; } catch { }
+                if (string.IsNullOrWhiteSpace(dir)) {
+                    dir = System.IO.Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "SoftSled", "Logs");
+                }
+                dir = System.IO.Path.Combine(dir, "rtsp");
+                System.IO.Directory.CreateDirectory(dir);
+                return dir;
+            } catch {
+                return System.IO.Path.GetTempPath();
             }
         }
 
-    }
+        // Diagnostic log for the wire-commit / FinalizePipelineSetup /
+        // TrySetupMpegPsPipeline chain — written unconditionally to
+        // <configured-log-dir>/rtsp/softsled-commit-debug.log. Helps diagnose
+        // "RTP arriving but pipeline never commits" bugs by tracing exactly
+        // which branch the pipeline-setup state machine takes.
+        private System.IO.StreamWriter _commitDiagLog;
+        private void CommitDiagLog(string line) {
+            try {
+                if (_commitDiagLog == null) {
+                    string path = System.IO.Path.Combine(
+                        ResolveRtspDiagDir(),
+                        "softsled-commit-debug.log");
+                    _commitDiagLog = new System.IO.StreamWriter(
+                        new System.IO.FileStream(path,
+                            System.IO.FileMode.Create,
+                            System.IO.FileAccess.Write,
+                            System.IO.FileShare.Read),
+                        System.Text.Encoding.ASCII) { AutoFlush = true };
+                    _commitDiagLog.WriteLine($"# commit-debug, started {DateTime.Now:HH:mm:ss.fff}");
+                }
+                _commitDiagLog.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {line}");
+            } catch { /* never break the wire path because diag fails */ }
+        }
 
-    public class WMFPayloadData {
-        public MediaType Type { get; set; }
-        public string Codec { get; set; }
-        public int PayloadNumber { get; set; }
-        public string FormatParameter { get; set; }
+        // Diagnostic log for the RTCP send loop + WMRTP timing dumps. Written to
+        // <configured-log-dir>/rtsp/softsled-rtcp-debug.log so we have ground-truth
+        // visibility into the timer/guards/sends — independent of Debug.WriteLine.
+        private System.IO.StreamWriter _rtcpDiagLog;
+        private void RtcpDiagInit() {
+            if (_rtcpDiagLog != null) return;
+            try {
+                string path = System.IO.Path.Combine(ResolveRtspDiagDir(),
+                                                     "softsled-rtcp-debug.log");
+                _rtcpDiagLog = new System.IO.StreamWriter(
+                    new System.IO.FileStream(path, System.IO.FileMode.Create,
+                                             System.IO.FileAccess.Write,
+                                             System.IO.FileShare.Read),
+                    System.Text.Encoding.ASCII);
+                _rtcpDiagLog.AutoFlush = true;
+                _rtcpDiagLog.WriteLine($"# RTCP send-loop diagnostic, started {DateTime.Now:HH:mm:ss.fff}");
+                _rtcpDiagLog.WriteLine($"# columns: timestamp tick event details");
+            } catch (Exception ex) {
+                Debug.WriteLine($"[rtcp-diag] log open failed: {ex.Message}");
+            }
+        }
+        private void RtcpDiagLog(string line) {
+            try { _rtcpDiagLog?.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {line}"); } catch { }
+        }
+
         /// <summary>
-        /// RTP timestamp clock in Hz, parsed from the rtpmap entry
-        /// (e.g. <c>vnd.ms.wm-MPA/90000</c> → 90000, <c>x-wmf-pf/1000</c> → 1000).
-        /// Used by container muxers to convert per-stream RTP timestamps
-        /// to a canonical PTS clock. Defaults to 90000 if unknown.
+        /// 16-bit modular sequence comparison (RFC 1982 SerialNumberArithmetic
+        /// scaled to 16 bits). Returns true if `a` is more recent than `b`,
+        /// handling wrap-around.
         /// </summary>
-        public int ClockHz { get; set; } = 90000;
-        public string EncodingParameters { get; set; }
+        private static bool IsSeqGreater(ushort a, ushort b) {
+            int diff = (a - b) & 0xFFFF;
+            return diff != 0 && diff < 0x8000;
+        }
 
-        public AM_Media_Format AM_Media_Format { get; set; }
+        private static void WriteU32Be(byte[] buf, int off, uint value) {
+            buf[off + 0] = (byte)((value >> 24) & 0xFF);
+            buf[off + 1] = (byte)((value >> 16) & 0xFF);
+            buf[off + 2] = (byte)((value >> 8) & 0xFF);
+            buf[off + 3] = (byte)((value >> 0) & 0xFF);
+        }
 
-    }
-
-    public enum MediaType {
-        Video,
-        Audio
+        #endregion ############################################################
     }
 }

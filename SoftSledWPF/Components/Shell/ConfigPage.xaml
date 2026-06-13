@@ -37,9 +37,11 @@
                          VerticalAlignment="Top"
                          KeyDown="RootMenu_KeyDown"
                          MouseLeftButtonUp="RootMenu_MouseLeftButtonUp">
-                    <ListBoxItem x:Name="ItemGeneral"   Content="General"  IsSelected="True"/>
+                    <ListBoxItem x:Name="ItemSetup"     Content="First-Time Setup" IsSelected="True"/>
+                    <ListBoxItem x:Name="ItemGeneral"   Content="General"/>
                     <ListBoxItem x:Name="ItemPairing"   Content="Pairing"/>
                     <ListBoxItem x:Name="ItemVideo"     Content="Video"/>
+                    <ListBoxItem x:Name="ItemAudio"     Content="Audio"/>
                     <ListBoxItem x:Name="ItemUi"        Content="UI"/>
                     <ListBoxItem x:Name="ItemDebugging" Content="Debugging"/>
                     <ListBoxItem x:Name="ItemAbout"     Content="About"/>
@@ -97,15 +99,13 @@
             <Grid x:Name="VideoView"
                   Margin="100,200,100,80"
                   Visibility="Collapsed">
-                <!-- Content overflows the 440px sub-view height (six
-                     codec/render toggles + three engine choices +
-                     resolution picker); wrap in a ScrollViewer so the
-                     engine selector and resolution row stay reachable.
-                     PanningMode=VerticalOnly lets a future touch / remote
-                     wheel work too. Arrow-key focus traversal still drives
-                     the visible row via the child controls' default focus
-                     behaviour, and ScrollIntoView is implicit when a
-                     newly-focused control lies outside the viewport. -->
+                <!-- Content can overflow the ~440px sub-view height
+                     once enough toggles are added; wrap in a
+                     ScrollViewer so lower controls stay reachable.
+                     Focusable=False keeps the WMC-remote tab-stop
+                     traversal walking through the child checkboxes,
+                     and each focused control auto-scrolls into view
+                     via WPF's default BringIntoView behaviour. -->
                 <ScrollViewer VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled"
                               PanningMode="VerticalOnly"
@@ -178,6 +178,61 @@
                 </ScrollViewer>
             </Grid>
 
+            <!-- ===== Audio sub-view ======================================= -->
+            <Grid x:Name="AudioView"
+                  Margin="100,200,100,80"
+                  Visibility="Collapsed">
+                <StackPanel HorizontalAlignment="Left" Width="640">
+                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
+                               Text="Audio sync offset"
+                               Foreground="{StaticResource WmcTextBrush}"
+                               Margin="10,0,0,8"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="10,0,0,16"
+                               TextWrapping="Wrap"
+                               Text="Adjust if audio appears out of sync with video — e.g. when an HDMI display adds picture-processing lag or an A/V receiver delays audio. Positive values delay audio (use when video lags); negative values delay video (use when audio lags). Applied automatically when the external-sync audio engine is enabled."/>
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Left"
+                                Margin="10,0,0,0">
+                        <Button x:Name="BtnAudioSyncMinusBig"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="-50ms"
+                                MinWidth="100"
+                                Click="BtnAudioSyncMinusBig_Click"/>
+                        <Button x:Name="BtnAudioSyncMinus"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="-10ms"
+                                MinWidth="100"
+                                Click="BtnAudioSyncMinus_Click"/>
+                        <TextBlock x:Name="AudioSyncValueText"
+                                   Style="{StaticResource WmcSubtitleStyle}"
+                                   Foreground="{StaticResource WmcTextBrush}"
+                                   VerticalAlignment="Center"
+                                   Width="160"
+                                   TextAlignment="Center"
+                                   Text="0 ms"/>
+                        <Button x:Name="BtnAudioSyncPlus"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="+10ms"
+                                MinWidth="100"
+                                Click="BtnAudioSyncPlus_Click"/>
+                        <Button x:Name="BtnAudioSyncPlusBig"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="+50ms"
+                                MinWidth="100"
+                                Click="BtnAudioSyncPlusBig_Click"/>
+                    </StackPanel>
+                    <Button x:Name="BtnAudioSyncReset"
+                            Style="{StaticResource WmcButtonStyle}"
+                            Content="Reset to 0 ms"
+                            HorizontalAlignment="Left"
+                            MinWidth="240"
+                            Margin="10,16,0,0"
+                            Click="BtnAudioSyncReset_Click"/>
+                </StackPanel>
+            </Grid>
+
             <!-- ===== UI sub-view ========================================== -->
             <Grid x:Name="UiView"
                   Margin="100,200,100,80"
@@ -206,6 +261,12 @@
             <Grid x:Name="DebuggingView"
                   Margin="100,200,100,80"
                   Visibility="Collapsed">
+                <!-- Wrap in ScrollViewer so the growing list of toggles
+                     stays reachable. Matches the Video sub-view pattern. -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              PanningMode="VerticalOnly"
+                              Focusable="False">
                 <StackPanel HorizontalAlignment="Left" Width="640">
                     <CheckBox x:Name="ChkLogger"
                               Style="{StaticResource WmcCheckBoxStyle}"
@@ -233,7 +294,162 @@
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Include RDP Fastpath logs"
                               Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkLogAvPlayback"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Include A/V (FFME / sync) logs"
+                              Click="OnConfigChanged"/>
+
+                    <!-- File logging — survives a crash so release-build
+                         hangs on remote machines can still be diagnosed. -->
+                    <CheckBox x:Name="ChkLogToFile"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Write logs to file"
+                              Margin="0,16,0,0"
+                              Click="OnConfigChanged"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="10,4,0,8"
+                               TextWrapping="Wrap"
+                               Text="A timestamped log file is created per session in the folder shown below. Auto-flushed so a crash still leaves a captured log on disk."/>
+                    <StackPanel Orientation="Horizontal" Margin="10,0,0,0">
+                        <TextBlock x:Name="LogFolderPath"
+                                   Style="{StaticResource WmcBodyStyle}"
+                                   Foreground="{StaticResource WmcSubtleTextBrush}"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   MaxWidth="360"
+                                   Text="(folder)"/>
+                        <Button x:Name="BtnOpenLogFolder"
+                                Content="Open"
+                                Margin="12,0,0,0"
+                                Padding="14,4"
+                                Click="OnOpenLogFolderClick"/>
+                        <Button x:Name="BtnChangeLogFolder"
+                                Content="Change..."
+                                Margin="6,0,0,0"
+                                Padding="14,4"
+                                Click="OnChangeLogFolderClick"/>
+                    </StackPanel>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="10,4,0,0"
+                               FontSize="12"
+                               Text="Log path changes take effect on the NEXT app launch."/>
+
+                    <!-- Video jitter buffer (libav + D3DImage player). -->
+                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
+                               Text="Video jitter buffer"
+                               Foreground="{StaticResource WmcTextBrush}"
+                               Margin="0,32,0,4"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="0,0,0,16"
+                               TextWrapping="Wrap"
+                               Text="How much video the player buffers to absorb bursty RTSP delivery (frames arrive in ~160 ms bursts around I-frames). Larger values smooth out judder at the cost of more start-up latency. Default 250 ms. Takes effect on the next playback."/>
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Left"
+                                Margin="10,0,0,0">
+                        <Button x:Name="BtnJitterMinus"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="-250ms"
+                                MinWidth="100"
+                                Click="BtnJitterMinus_Click"/>
+                        <TextBlock x:Name="JitterBufferValueText"
+                                   Style="{StaticResource WmcSubtitleStyle}"
+                                   Foreground="{StaticResource WmcTextBrush}"
+                                   VerticalAlignment="Center"
+                                   Width="160"
+                                   TextAlignment="Center"
+                                   Text="250 ms"/>
+                        <Button x:Name="BtnJitterPlus"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="+250ms"
+                                MinWidth="100"
+                                Click="BtnJitterPlus_Click"/>
+                    </StackPanel>
+                    <Button x:Name="BtnJitterReset"
+                            Style="{StaticResource WmcButtonStyle}"
+                            Content="Reset to 250 ms"
+                            HorizontalAlignment="Left"
+                            MinWidth="240"
+                            Margin="10,16,0,0"
+                            Click="BtnJitterReset_Click"/>
+
+                    <!-- =================================================
+                         Advanced diagnostics — these surface env-var
+                         toggles that previously had to be set before
+                         launch via `set SOFTSLED_X=Y`. The config
+                         values are translated into process-scope env
+                         vars at session start, so existing call sites
+                         keep working unchanged.
+                         ================================================= -->
+                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
+                               Text="Advanced diagnostic dumps"
+                               Foreground="{StaticResource WmcTextBrush}"
+                               Margin="0,32,0,4"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="0,0,0,16"
+                               TextWrapping="Wrap"
+                               Text="Mirror of the SOFTSLED_* environment variables. Files are written to the folder shown below. Changes take effect on the NEXT session start."/>
+
+                    <CheckBox x:Name="ChkDumpSplashRaw"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Dump splash wire bytes + events (SOFTSLED_SPLASH_RAW_DUMP)"
+                              Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkDumpFastpathRaw"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Dump RDP fastpath payloads (SOFTSLED_FASTPATH_RAW_DUMP)"
+                              Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkDumpAudio"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Dump fastpath audio PCM (SOFTSLED_AUDIO_DUMP)"
+                              Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkDumpRtspWire"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Dump RTSP control-channel wire (SOFTSLED_RTSP_WIRE_DUMP)"
+                              Click="OnConfigChanged"/>
+
+                    <StackPanel Orientation="Horizontal" Margin="10,8,0,0">
+                        <TextBlock x:Name="DumpFolderPath"
+                                   Style="{StaticResource WmcBodyStyle}"
+                                   Foreground="{StaticResource WmcSubtleTextBrush}"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   MaxWidth="360"
+                                   Text="(folder)"/>
+                        <Button x:Name="BtnOpenDumpFolder"
+                                Content="Open"
+                                Margin="12,0,0,0"
+                                Padding="14,4"
+                                Click="OnOpenDumpFolderClick"/>
+                        <Button x:Name="BtnChangeDumpFolder"
+                                Content="Change..."
+                                Margin="6,0,0,0"
+                                Padding="14,4"
+                                Click="OnChangeDumpFolderClick"/>
+                    </StackPanel>
+
+                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
+                               Text="Advanced behaviour toggles"
+                               Foreground="{StaticResource WmcTextBrush}"
+                               Margin="0,32,0,4"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="0,0,0,16"
+                               TextWrapping="Wrap"
+                               Text="These change runtime behaviour rather than producing files. Use for isolating audio-pipeline issues."/>
+
+                    <CheckBox x:Name="ChkAudioTrace"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Verbose fastpath audio trace (SOFTSLED_AUDIO_TRACE)"
+                              Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkAudioViaNAudio"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Route RTSP audio via NAudio (SOFTSLED_AUDIO_VIA_NAUDIO)"
+                              Click="OnConfigChanged"/>
                 </StackPanel>
+                </ScrollViewer>
             </Grid>
 
             <!-- ===== About sub-view ======================================= -->

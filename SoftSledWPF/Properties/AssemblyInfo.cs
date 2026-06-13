@@ -7,12 +7,12 @@ using System.Windows;
 // General Information about an assembly is controlled through the following
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("SoftSledWPF")]
-[assembly: AssemblyDescription("")]
+[assembly: AssemblyTitle("SoftSled Windows Media Center Extender")]
+[assembly: AssemblyDescription("An open-source Windows Media Center Extender")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("")]
-[assembly: AssemblyProduct("SoftSledWPF")]
-[assembly: AssemblyCopyright("Copyright ©  2025")]
+[assembly: AssemblyCompany("SoftSled")]
+[assembly: AssemblyProduct("SoftSled")]
+[assembly: AssemblyCopyright("Copyright ©  2026")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 

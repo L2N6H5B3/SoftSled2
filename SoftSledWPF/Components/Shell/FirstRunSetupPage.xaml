@@ -1,0 +1,259 @@
+<UserControl x:Class="SoftSledWPF.Components.Shell.FirstRunSetupPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             Focusable="True"
+             d:DesignHeight="720" d:DesignWidth="1280">
+
+    <UserControl.Resources>
+        <!-- Resolution list items: a tick marks the selected entry instead of
+             a heavy gradient "window" covering the text. Selection just adds a
+             light outline + the accent tick. -->
+        <Style x:Key="ResolutionItemStyle" TargetType="ListBoxItem">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource WmcTextBrush}"/>
+            <Setter Property="FontSize"   Value="22"/>
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="Padding"    Value="6,8"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="ItemBorder"
+                                Background="Transparent"
+                                BorderBrush="Transparent"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Margin="0,0,0,2"
+                                Padding="{TemplateBinding Padding}">
+                            <StackPanel Orientation="Horizontal">
+                                <Grid Width="36" VerticalAlignment="Center">
+                                    <Path x:Name="Tick"
+                                          Data="M 4,13 L 11,20 22,6"
+                                          Stroke="{StaticResource WmcAccentBrush}"
+                                          StrokeThickness="3"
+                                          StrokeStartLineCap="Round"
+                                          StrokeEndLineCap="Round"
+                                          StrokeLineJoin="Round"
+                                          HorizontalAlignment="Center"
+                                          VerticalAlignment="Center"
+                                          Visibility="Collapsed"/>
+                                </Grid>
+                                <ContentPresenter VerticalAlignment="Center"
+                                                  HorizontalAlignment="Left"/>
+                            </StackPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter Property="Foreground" Value="White"/>
+                                <Setter TargetName="Tick" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="ItemBorder" Property="BorderBrush" Value="#40FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ItemBorder" Property="BorderBrush" Value="#30FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <!-- First-run setup wizard. Full-bleed WMC-blue gradient so it reads as a
+         distinct "setup" experience (matching the classic Windows Media Center
+         Setup wizard), while reusing the shared WMC control styles for the
+         radio buttons / buttons so it stays consistent with the rest of the
+         shell. Scaled via a Viewbox like ConfigPage. -->
+    <Grid>
+        <Grid.Background>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="0.35,1">
+                <GradientStop Color="#FF1D5E95" Offset="0"/>
+                <GradientStop Color="#FF0C3052" Offset="0.55"/>
+                <GradientStop Color="#FF071F36" Offset="1"/>
+            </LinearGradientBrush>
+        </Grid.Background>
+
+        <!-- Soft radial glow, bottom-right, mimicking the reference art. -->
+        <Rectangle IsHitTestVisible="False">
+            <Rectangle.Fill>
+                <RadialGradientBrush GradientOrigin="0.72,0.78" Center="0.72,0.78"
+                                     RadiusX="0.6" RadiusY="0.7">
+                    <GradientStop Color="#330F8FE0" Offset="0"/>
+                    <GradientStop Color="#00000000" Offset="1"/>
+                </RadialGradientBrush>
+            </Rectangle.Fill>
+        </Rectangle>
+
+        <Viewbox Stretch="Uniform">
+            <Grid Width="1280" Height="720">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="130"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="110"/>
+                </Grid.RowDefinitions>
+
+                <!-- ===== Header band ===== -->
+                <Grid Grid.Row="0" Margin="80,0,80,0">
+                    <!-- Current-step title, just above the divider — keeps the
+                         content area below uncluttered. -->
+                    <TextBlock x:Name="StepTitle"
+                               Foreground="{StaticResource WmcTextBrush}"
+                               FontFamily="Segoe UI Light" FontSize="44"
+                               HorizontalAlignment="Left"
+                               VerticalAlignment="Bottom"
+                               Margin="0,0,0,14"/>
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center">
+                        <Image Source="/wmc.ico" Width="34" Height="34"
+                               VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="SoftSled"
+                                       Foreground="{StaticResource WmcTextBrush}"
+                                       FontFamily="Segoe UI Light" FontSize="24"/>
+                            <TextBlock Text="Windows Media Center Extender"
+                                       Foreground="{StaticResource WmcSubtleTextBrush}"
+                                       FontFamily="Segoe UI" FontSize="13"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <Rectangle Height="1" Fill="#40FFFFFF"
+                               VerticalAlignment="Bottom"/>
+                </Grid>
+
+                <!-- ===== Content area (one panel visible at a time) ===== -->
+                <Grid Grid.Row="1" Margin="100,30,100,10">
+
+                    <!-- Welcome -->
+                    <StackPanel x:Name="WelcomePanel" Visibility="Visible">
+                        <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                   Margin="0,8,0,30" Width="900"
+                                   HorizontalAlignment="Left"
+                                   Text="To get the best experience, SoftSled will ask a couple of quick questions about your setup. You can change any of these later from Settings."/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,18">
+                            <TextBlock Text="1" Foreground="{StaticResource WmcAccentBrush}"
+                                       FontFamily="Segoe UI Light" FontSize="30"
+                                       Width="44" VerticalAlignment="Center"/>
+                            <TextBlock Style="{StaticResource WmcBodyStyle}" Width="820"
+                                       VerticalAlignment="Center"
+                                       Text="Networking — how this device connects to your home network."/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="2" Foreground="{StaticResource WmcAccentBrush}"
+                                       FontFamily="Segoe UI Light" FontSize="30"
+                                       Width="44" VerticalAlignment="Center"/>
+                            <TextBlock Style="{StaticResource WmcBodyStyle}" Width="820"
+                                       VerticalAlignment="Center"
+                                       Text="Display — how SoftSled is shown and animated."/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- Networking -->
+                    <StackPanel x:Name="NetworkPanel" Visibility="Collapsed">
+                        <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                   Margin="0,8,0,24" Width="940"
+                                   HorizontalAlignment="Left"
+                                   Text="How is this device connected to your home network? A wired (Ethernet) connection gives a stable, low-latency link and the best experience — it lets SoftSled use Remote Rendering, where Windows Media Center draws the interface for the smoothest, most responsive result. Wi-Fi works too, but can add lag or stutter, so Remote Rendering is turned off to keep things responsive."/>
+                        <RadioButton x:Name="RbWired" GroupName="net"
+                                     Style="{StaticResource WmcRadioButtonStyle}"
+                                     Content="Wired (Ethernet) — recommended"/>
+                        <RadioButton x:Name="RbWifi" GroupName="net"
+                                     Style="{StaticResource WmcRadioButtonStyle}"
+                                     Content="Wireless (Wi-Fi)"/>
+                    </StackPanel>
+
+                    <!-- Display / TV -->
+                    <StackPanel x:Name="DisplayPanel" Visibility="Collapsed">
+                        <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                   Margin="0,8,0,24" Width="940"
+                                   HorizontalAlignment="Left"
+                                   Text="Are you using SoftSled on a television? TVs work best with the 10-foot 'TV skin', which uses larger text and couch-friendly layouts designed to be read from across the room."/>
+                        <RadioButton x:Name="RbTv" GroupName="disp"
+                                     Style="{StaticResource WmcRadioButtonStyle}"
+                                     Content="Yes — I'm using a TV"/>
+                        <RadioButton x:Name="RbMonitor" GroupName="disp"
+                                     Style="{StaticResource WmcRadioButtonStyle}"
+                                     Content="No — I'm on a monitor or laptop screen"/>
+                    </StackPanel>
+
+                    <!-- Animations (only shown when Wi-Fi / Remote Rendering off) -->
+                    <StackPanel x:Name="AnimationsPanel" Visibility="Collapsed">
+                        <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                   Margin="0,8,0,24" Width="940"
+                                   HorizontalAlignment="Left"
+                                   Text="With Remote Rendering off, Windows Media Center draws the interface on the host and streams it to SoftSled over the connection, frame by frame. Rich animations mean a lot of frames to send, which can overwhelm the link and cause stutter or lag. Sending fewer animations keeps the interface crisp and responsive — Minimal is the best balance for most setups."/>
+                        <RadioButton x:Name="RbAnimFull" GroupName="anim"
+                                     Style="{StaticResource WmcRadioButtonStyle}"
+                                     Content="Full animations"/>
+                        <RadioButton x:Name="RbAnimMinimal" GroupName="anim"
+                                     Style="{StaticResource WmcRadioButtonStyle}"
+                                     Content="Minimal animations (recommended)"/>
+                        <RadioButton x:Name="RbAnimNone" GroupName="anim"
+                                     Style="{StaticResource WmcRadioButtonStyle}"
+                                     Content="No animations"/>
+                    </StackPanel>
+
+                    <!-- Resolution (auto-detected) + full-screen toggle -->
+                    <StackPanel x:Name="ResolutionPanel" Visibility="Collapsed">
+                        <TextBlock x:Name="ResolutionIntro"
+                                   Style="{StaticResource WmcBodyStyle}"
+                                   Margin="0,8,0,16" Width="940"
+                                   HorizontalAlignment="Left"
+                                   Text="Choose the resolution SoftSled should request from Windows Media Center."/>
+                        <Border BorderBrush="#60FFFFFF" BorderThickness="1"
+                                CornerRadius="6" Background="#22000000"
+                                Width="560" Padding="6,4"
+                                HorizontalAlignment="Left">
+                            <ListBox x:Name="ResolutionList"
+                                     Style="{StaticResource WmcListBoxStyle}"
+                                     ItemContainerStyle="{StaticResource ResolutionItemStyle}"
+                                     Height="244"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+                        </Border>
+                        <CheckBox x:Name="ChkWizFullScreen"
+                                  Style="{StaticResource WmcCheckBoxStyle}"
+                                  Content="Run SoftSled full screen"
+                                  Margin="0,16,0,0"/>
+                    </StackPanel>
+
+                    <!-- Startup / connection behaviour -->
+                    <StackPanel x:Name="ConnectionPanel" Visibility="Collapsed">
+                        <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                   Margin="0,8,0,20" Width="940"
+                                   HorizontalAlignment="Left"
+                                   Text="Finally, choose how SoftSled behaves around your Windows Media Center session."/>
+                        <CheckBox x:Name="ChkWizAutoConnect"
+                                  Style="{StaticResource WmcCheckBoxStyle}"
+                                  Content="Connect to Windows Media Center automatically when SoftSled opens"/>
+                        <CheckBox x:Name="ChkWizAutoExit"
+                                  Style="{StaticResource WmcCheckBoxStyle}"
+                                  Content="Close SoftSled when Windows Media Center closes"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- ===== Footer band ===== -->
+                <Grid Grid.Row="2" Margin="80,0,80,0">
+                    <Rectangle Height="1" Fill="#40FFFFFF" VerticalAlignment="Top"/>
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center">
+                        <Button x:Name="BackButton"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="Back" MinWidth="150"
+                                Click="BackButton_Click"/>
+                        <Button x:Name="NextButton"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="Next" MinWidth="150"
+                                Click="NextButton_Click"/>
+                        <Button x:Name="CancelButton"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="Cancel" MinWidth="150"
+                                Click="CancelButton_Click"/>
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </Viewbox>
+    </Grid>
+</UserControl>

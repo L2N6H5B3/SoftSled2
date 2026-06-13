@@ -69,6 +69,37 @@ namespace SoftSled.Components.AudioVisual {
 
         public event EventHandler<EventData> NalUnitReady;
 
+        /// <summary>Optional diagnostic sink. When set, the first
+        /// <see cref="DiagMaxLines"/> MAUs that carry a Packet-Specific-Info
+        /// or MAU-Timing section get their parsed timing fields logged here
+        /// (RTP header ts, Send Time, Correspondence NTP↔RTP, Decode Time,
+        /// Presentation Time, NPT). Used to discover which timeline a given
+        /// server actually populates for x-wmf-pf, where the RTP header
+        /// timestamp may not be the reliable presentation clock.</summary>
+        public Action<string> DiagLog;
+        /// <summary>Per-MAU timing sample for the Correspondence-offset
+        /// cross-check: (NTP seconds, header RTP timestamp raw). Fired for every
+        /// first/complete MAU that carries a Correspondence field. Consumer
+        /// (RTSPClient) accumulates a steady-state fit. Does not affect sync.</summary>
+        public Action<double, long> TimingSample;
+        private int _diagCount;
+        private int _mauSeen;
+        private const int DiagMaxLines = 64;
+        // Log the first 12 MAUs (startup burst) then 1 in every 100 thereafter
+        // (≈ every 4 s of video) so we capture STEADY-STATE timing too — needed
+        // to tell whether Correspondence NTP is an encoder-content clock
+        // (Δhdr/Δntp → 1.0 at steady state, usable as an SR) or just a
+        // transmission wallclock (burst-rate slope, unusable).
+        private bool DiagShouldLog() => _mauSeen <= 12 || (_mauSeen % 100) == 0;
+
+        private static uint ReadU32(byte[] b, int o) =>
+            (uint)((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]);
+        private static ulong ReadU64(byte[] b, int o) =>
+            ((ulong)ReadU32(b, o) << 32) | ReadU32(b, o + 4);
+        // 32.32 NTP fixed-point → seconds (double), for readable diagnostics.
+        private static double NtpToSeconds(ulong ntp) =>
+            (ntp >> 32) + (ntp & 0xFFFFFFFF) / 4294967296.0;
+
         /// <summary>
         /// Clear all per-SSRC reassembly state. Called by RTSPClient
         /// after a server-side seek / rate change (PLAY-with-Range or
@@ -141,8 +172,20 @@ namespace SoftSled.Components.AudioVisual {
             bool r2Present  = (bitField1 & BF1_R2)  != 0;
             bool r3Present  = (bitField1 & BF1_R3)  != 0;
             bool b2pPresent = (bitField1 & BF1_B2P) != 0;
-            if (stPresent) currentOffset += 4;
-            if (cpPresent) currentOffset += 12;
+            // Capture the Packet-Specific-Info timing fields for diagnostics.
+            long  sendTime = -1; bool hasCorr = false; ulong corrNtp = 0; uint corrRtp = 0;
+            if (stPresent) {
+                if (currentOffset + 4 <= rtpPayloadLength) sendTime = ReadU32(rtpPayload, currentOffset);
+                currentOffset += 4;
+            }
+            if (cpPresent) {
+                if (currentOffset + 12 <= rtpPayloadLength) {
+                    corrNtp = ReadU64(rtpPayload, currentOffset);        // 64-bit NTP wallclock
+                    corrRtp = ReadU32(rtpPayload, currentOffset + 8);    // 32-bit RTP ts @ that NTP
+                    hasCorr = true;
+                }
+                currentOffset += 12;
+            }
             if (r1Present) currentOffset += 4;
             if (r2Present) currentOffset += 4;
             if (r3Present) currentOffset += 4;
@@ -162,6 +205,7 @@ namespace SoftSled.Components.AudioVisual {
             while (currentOffset < rtpPayloadLength) {
                 bool ok = ProcessOnePayload(rtpPayload, rtpPayloadLength, ref currentOffset,
                                              stream, rtpSsrc, rtpSequenceNumber, rtpTimestamp,
+                                             sendTime, hasCorr, corrNtp, corrRtp,
                                              out bool emittedMau);
                 if (!ok) return; // header parse failure, abandon the packet
                 if (emittedMau) sawAnyTerminator = true;
@@ -180,6 +224,7 @@ namespace SoftSled.Components.AudioVisual {
         /// </summary>
         private bool ProcessOnePayload(byte[] buf, int bufLen, ref int currentOffset,
                                         StreamState stream, uint ssrc, ushort seqNum, uint rtpTs,
+                                        long sendTime, bool hasCorr, ulong corrNtp, uint corrRtp,
                                         out bool emittedMau) {
             emittedMau = false;
             int payloadHeaderStart = currentOffset;
@@ -227,9 +272,27 @@ namespace SoftSled.Components.AudioVisual {
                 bool r8Present = (bitField3 & BF3_R8) != 0;
                 bool r9Present = (bitField3 & BF3_R9) != 0;
                 bool xPresent  = (bitField3 & BF3_X)  != 0;
-                if (d3Present) currentOffset += 4;
-                if (pPresent)  currentOffset += 4;
-                if (nPresent)  currentOffset += 8;
+                // Capture the MAU-Timing values for diagnostics before skipping.
+                long decodeTime = -1, presTime = -1; ulong npt = 0; bool hasNpt = false;
+                if (d3Present) { if (currentOffset + 4 <= bufLen) decodeTime = ReadU32(buf, currentOffset); currentOffset += 4; }
+                if (pPresent)  { if (currentOffset + 4 <= bufLen) presTime   = ReadU32(buf, currentOffset); currentOffset += 4; }
+                if (nPresent)  { if (currentOffset + 8 <= bufLen) { npt = ReadU64(buf, currentOffset); hasNpt = true; } currentOffset += 8; }
+                if (hasCorr && TimingSample != null
+                    && (fragType == F_FIRST_FRAGMENT || fragType == F_COMPLETE_MAU)) {
+                    try { TimingSample(NtpToSeconds(corrNtp), rtpTs); } catch { }
+                }
+                if (DiagLog != null && (fragType == F_FIRST_FRAGMENT || fragType == F_COMPLETE_MAU)) {
+                    _mauSeen++;
+                    if (_diagCount < DiagMaxLines && DiagShouldLog()) {
+                    _diagCount++;
+                    DiagLog($"[wmrpt-video] seq={seqNum} F={fragType} S={(sBit ? 1 : 0)} hdrRtpTs={rtpTs} " +
+                            $"sendTime={(sendTime < 0 ? "-" : sendTime.ToString())} " +
+                            $"corr={(hasCorr ? $"ntp={NtpToSeconds(corrNtp):F3}s/rtp={corrRtp}" : "-")} " +
+                            $"decodeTime={(decodeTime < 0 ? "-" : decodeTime.ToString())} " +
+                            $"presTime={(presTime < 0 ? "-" : presTime.ToString())} " +
+                            $"npt={(hasNpt ? NtpToSeconds(npt).ToString("F3") + "s" : "-")}");
+                    }
+                }
                 if (r6Present) currentOffset += 4;
                 if (r7Present) currentOffset += 4;
                 if (r8Present) currentOffset += 4;

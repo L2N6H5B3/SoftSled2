@@ -65,6 +65,27 @@ namespace SoftSled.Components.Splash {
             }
         }
 
+        /// <summary>
+        /// Enumerate every <see cref="Objects.SplashVisual"/> whose
+        /// <c>AppliedGradientHandle</c> matches the given gradient. Used
+        /// when a gradient's Offset / ColorMask is changed (statically
+        /// via Gradient_SetOffset / Gradient_SetColorMask, or dynamically
+        /// via an Animation[GradientOffset] / Animation[GradientColorMask]
+        /// tick) — every visual currently using that gradient as its
+        /// OpacityMask needs its WPF brush rebuilt with the new value.
+        /// O(N) scan; fine in practice because gradient mutations are
+        /// rare relative to the total visual count.
+        /// </summary>
+        public IEnumerable<SoftSled.Components.Splash.Objects.SplashVisual> EnumerateVisualsWithGradient(uint gradientHandle) {
+            if (gradientHandle == 0) yield break;
+            foreach (var kv in _objects) {
+                if (kv.Value is SoftSled.Components.Splash.Objects.SplashVisual v
+                    && v.AppliedGradientHandle == gradientHandle) {
+                    yield return v;
+                }
+            }
+        }
+
         public void RemoveObject(uint handle) {
             if (_objects.TryGetValue(handle, out var obj)) {
                 obj.OnDestroyed();
@@ -119,6 +140,8 @@ namespace SoftSled.Components.Splash {
                 case "HostWindow":            return SplashClassKind.HostWindow;
                 case "XAudSoundDevice":       return SplashClassKind.XAudSoundDevice;
                 case "Dx9Device":             return SplashClassKind.Dx9Device;
+                case "InputRouter":           return SplashClassKind.InputRouter;
+                case "DesktopManager":        return SplashClassKind.DesktopManager;
                 default:                      return SplashClassKind.Unknown;
             }
         }
@@ -138,6 +161,12 @@ namespace SoftSled.Components.Splash {
         WaitCursor, DynamicSurfaceFactory, ParticleSystem, NullDevice,
         SoundBuffer, Sound, SoundDevice, XeDevice, HostWindow,
         XAudSoundDevice, Dx9Device,
+        // Splash::Desktop subsystem — not in MS-RRSP2 §2.2.4 but observed
+        // on the wire (Broker_CreateObject of class
+        // "Splash::Desktop::InputRouter" / "Splash::Desktop::DesktopManager"
+        // during shell init). Configured once per session via a few
+        // singleton-style messages; no rendering side effects.
+        InputRouter, DesktopManager,
     }
 
     /// <summary>

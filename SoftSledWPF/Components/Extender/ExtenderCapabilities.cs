@@ -78,7 +78,7 @@ namespace SoftSled.Components.Extender {
             #region Unknown ###################################################
 
             // Unknown
-            Capabilities.Add(new DeviceCapability("FPD", "Is FPD allowed?", "Unknown", true));
+            Capabilities.Add(new DeviceCapability("FPD", "Is FPD allowed?", "Unknown", false));
 
             #endregion ########################################################
 
@@ -114,7 +114,7 @@ namespace SoftSled.Components.Extender {
 
             Capabilities.Add(new DeviceCapability("MAR", "Are over-scan margins needed?", "Display", config.EnableOverscanMargin));
             Capabilities.Add(new DeviceCapability("SCR", "Is a native screensaver required?", "Display", true));
-            Capabilities.Add(new DeviceCapability("WID", "Is wide screen enabled?", "Display", config.SessionWidth/config.SessionHeight > 1.5));
+            Capabilities.Add(new DeviceCapability("WID", "Is wide screen enabled?", "Display", (float)config.SessionWidth/(float)config.SessionHeight > 1.5));
             Capabilities.Add(new DeviceCapability("WIN", "Is window mode allowed?", "Display", false));
             Capabilities.Add(new DeviceCapability("SDM", "Is a screen data mode workaround needed? (Not Supported on Win7+)", "Display", false));
 
@@ -129,13 +129,13 @@ namespace SoftSled.Components.Extender {
 
             #region UI ########################################################
 
-            Capabilities.Add(new DeviceCapability("MUT", "Is mute ui allowed?", "UI", false));
-            Capabilities.Add(new DeviceCapability("VOL", "Is volume UI allowed?", "UI", false));
+            Capabilities.Add(new DeviceCapability("MUT", "Is mute ui allowed?", "UI", true));
+            Capabilities.Add(new DeviceCapability("VOL", "Is volume UI allowed?", "UI", true));
             Capabilities.Add(new DeviceCapability("POP", "Are Pop ups allowed?", "UI", config.EnablePopups));
             Capabilities.Add(new DeviceCapability("SOU", "Is UI sound supported?", "UI", config.EnableUiSounds));
             Capabilities.Add(new DeviceCapability("TBA", "Is a Toolbar allowed?", "UI", config.EnableToolbar));
             Capabilities.Add(new DeviceCapability("TBP", "Is Toolbar persistent?", "UI", false));
-            Capabilities.Add(new DeviceCapability("TVS", "Is a TV skin used?", "UI", false));
+            Capabilities.Add(new DeviceCapability("TVS", "Is a TV skin used?", "UI", config.UseTvSkin));
 
 
             #endregion ########################################################
@@ -144,7 +144,7 @@ namespace SoftSled.Components.Extender {
 
             Capabilities.Add(new DeviceCapability("VID", "Is video allowed?", "Video", true));
             Capabilities.Add(new DeviceCapability("ZOM", "Is video zoom mode allowed?", "Video", true));
-            Capabilities.Add(new DeviceCapability("NLZ", "Is nonlinear zoom supported?", "Video", false));
+            Capabilities.Add(new DeviceCapability("NLZ", "Is nonlinear zoom supported?", "Video", true));
             Capabilities.Add(new DeviceCapability("RSZ", "Is raw stretched zoom supported?", "Video", true));
 
             #endregion ########################################################
@@ -161,8 +161,7 @@ namespace SoftSled.Components.Extender {
             Capabilities.Add(new DeviceCapability("SUP", "Is RDP super blt allowed?", "Rendering", true));
             Capabilities.Add(new DeviceCapability("GDI", "Is GDI renderer used?", "Rendering", !config.EnableRemoteRendering));
             Capabilities.Add(new DeviceCapability("RUI", "Is remote UI rendering supported?", "Rendering", config.EnableRemoteRendering));
-            //Capabilities.Add(new DeviceCapability("BIG", "Is remote UI renderer big-endian? (NOTE: May need to be enabled to receive data over 'splash' VC, but currently breaks fastpath [0x0d] audio updates, potentially video playback movement updates too)", "Rendering", false));
-            Capabilities.Add(new DeviceCapability("BIG", "Is remote UI renderer big-endian? (NOTE: May need to be enabled to receive data over 'splash' VC, but currently breaks fastpath [0x0d] audio updates, potentially video playback movement updates too)", "Rendering", config.EnableRemoteRendering));
+            Capabilities.Add(new DeviceCapability("BIG", "Is remote UI renderer big-endian?", "Rendering", config.EnableRemoteRendering));
 
             #endregion ########################################################
 

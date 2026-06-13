@@ -20,7 +20,7 @@ namespace SoftSledWPF.Components.Shell {
     public partial class ConfigPage : UserControl {
 
         /// <summary>Sub-view currently visible. Used by ESC handler.</summary>
-        private enum View { Root, General, Pairing, Video, Ui, Debugging, About }
+        private enum View { Root, General, Pairing, Video, Audio, Ui, Debugging, About }
         private View _currentView = View.Root;
         private SoftSledConfig _config;
         private bool _suppressWrite;
@@ -34,6 +34,14 @@ namespace SoftSledWPF.Components.Shell {
         /// <summary>Raised when the user toggles the full-screen tickbox so
         /// the shell can re-apply window state without waiting for restart.</summary>
         public event EventHandler<bool> RunFullScreenChanged;
+
+        /// <summary>Raised when the user picks the "Setup" item — the shell
+        /// shows the first-run setup wizard over this page.</summary>
+        public event EventHandler SetupRequested;
+
+        /// <summary>Re-read config into the UI. Called by the shell after the
+        /// setup wizard returns so any changes it made are reflected here.</summary>
+        public void RefreshFromConfig() => ReloadConfigIntoUi();
 
         /// <summary>One row in the resolution picker.</summary>
         private struct Resolution {
@@ -128,7 +136,27 @@ namespace SoftSledWPF.Components.Shell {
                 ChkLogMcxSess.IsChecked        = _config.LogMcxSessChannel;
                 ChkLogAvCtrl.IsChecked         = _config.LogAvCtrlChannel;
                 ChkLogRdpFastpath.IsChecked    = _config.LogRdpFastpath;
+                ChkLogAvPlayback.IsChecked     = _config.LogAvPlayback;
+                ChkLogToFile.IsChecked         = _config.LogToFile;
+                LogFolderPath.Text             = SoftSledWPF.Components.Shell
+                                                          .ExtenderSessionControl
+                                                          .GetLogDirectoryForConfig()
+                                                  ?? "(default: %LocalAppData%/SoftSled/Logs)";
+
+                // Advanced env-var-driven toggles (Debugging sub-view).
+                ChkDumpSplashRaw.IsChecked     = _config.EnableSplashRawDump;
+                ChkDumpFastpathRaw.IsChecked   = _config.EnableFastpathRawDump;
+                ChkDumpAudio.IsChecked         = _config.EnableAudioDump;
+                ChkDumpRtspWire.IsChecked      = _config.EnableRtspWireDump;
+                ChkAudioTrace.IsChecked        = _config.EnableAudioTrace;
+                ChkAudioViaNAudio.IsChecked    = _config.EnableAudioViaNAudio;
+                DumpFolderPath.Text            = SoftSledWPF.Components.Shell
+                                                          .ExtenderSessionControl
+                                                          .GetDumpsRootDirectory()
+                                                  ?? "(default: %LocalAppData%/SoftSled/Dumps)";
                 RefreshResolutionButton();
+                RefreshAudioSyncDisplay();
+                RefreshJitterBufferDisplay();
                 UpdateAnimationDependencies();
 
                 PairingStatusText.Text = _config.IsPaired
@@ -151,6 +179,7 @@ namespace SoftSledWPF.Components.Shell {
             GeneralView.Visibility   = view == View.General   ? Visibility.Visible : Visibility.Collapsed;
             PairingView.Visibility   = view == View.Pairing   ? Visibility.Visible : Visibility.Collapsed;
             VideoView.Visibility     = view == View.Video     ? Visibility.Visible : Visibility.Collapsed;
+            AudioView.Visibility     = view == View.Audio     ? Visibility.Visible : Visibility.Collapsed;
             UiView.Visibility        = view == View.Ui        ? Visibility.Visible : Visibility.Collapsed;
             DebuggingView.Visibility = view == View.Debugging ? Visibility.Visible : Visibility.Collapsed;
             AboutView.Visibility     = view == View.About     ? Visibility.Visible : Visibility.Collapsed;
@@ -172,6 +201,9 @@ namespace SoftSledWPF.Components.Shell {
                     break;
                 case View.Video:
                     ChkRemoteRendering.Focus();
+                    break;
+                case View.Audio:
+                    BtnAudioSyncReset.Focus();
                     break;
                 case View.Ui:
                     ChkUiSounds.Focus();
@@ -204,9 +236,11 @@ namespace SoftSledWPF.Components.Shell {
         }
 
         private void ActivateRoot(ListBoxItem item) {
-            if (item == ItemGeneral)         ShowView(View.General);
+            if (item == ItemSetup)           SetupRequested?.Invoke(this, EventArgs.Empty);
+            else if (item == ItemGeneral)    ShowView(View.General);
             else if (item == ItemPairing)    ShowView(View.Pairing);
             else if (item == ItemVideo)      ShowView(View.Video);
+            else if (item == ItemAudio)      ShowView(View.Audio);
             else if (item == ItemUi)         ShowView(View.Ui);
             else if (item == ItemDebugging)  ShowView(View.Debugging);
             else if (item == ItemAbout)      ShowView(View.About);
@@ -237,6 +271,14 @@ namespace SoftSledWPF.Components.Shell {
             _config.LogMcxSessChannel       = ChkLogMcxSess.IsChecked == true;
             _config.LogAvCtrlChannel        = ChkLogAvCtrl.IsChecked == true;
             _config.LogRdpFastpath          = ChkLogRdpFastpath.IsChecked == true;
+            _config.LogAvPlayback           = ChkLogAvPlayback.IsChecked == true;
+            _config.LogToFile               = ChkLogToFile.IsChecked == true;
+            _config.EnableSplashRawDump     = ChkDumpSplashRaw.IsChecked == true;
+            _config.EnableFastpathRawDump   = ChkDumpFastpathRaw.IsChecked == true;
+            _config.EnableAudioDump         = ChkDumpAudio.IsChecked == true;
+            _config.EnableRtspWireDump      = ChkDumpRtspWire.IsChecked == true;
+            _config.EnableAudioTrace        = ChkAudioTrace.IsChecked == true;
+            _config.EnableAudioViaNAudio    = ChkAudioViaNAudio.IsChecked == true;
 
             try {
                 SoftSledConfigManager.WriteConfig(_config);
@@ -345,6 +387,189 @@ namespace SoftSledWPF.Components.Shell {
             if (_config == null) { BtnResolution.Content = "—"; return; }
             BtnResolution.Content =
                 $"{_config.SessionWidth} × {_config.SessionHeight}";
+        }
+
+        // ---- Audio sync offset adjuster -------------------------------
+
+        /// <summary>
+        /// Maximum allowed manual offset (per direction). 250 ms is
+        /// the upper end of what's plausible for HDMI / AVR latency;
+        /// anything beyond that is a pipeline problem, not an
+        /// offsettable display lag.
+        /// </summary>
+        // Widened from 250 → 500: the live in-session nudge (Ctrl+]/[) writes
+        // its dialled-in trim back here, and the residual pipeline lag can sit
+        // a little above the old ±250 "AVR latency" bound on some setups.
+        private const int AudioSyncOffsetClampMs = 500;
+
+        private void RefreshAudioSyncDisplay() {
+            if (_config == null) { AudioSyncValueText.Text = "0 ms"; return; }
+            int ms = _config.AudioSyncOffsetMs;
+            AudioSyncValueText.Text = ms > 0
+                ? $"+{ms} ms"
+                : (ms == 0 ? "0 ms" : $"{ms} ms");
+        }
+
+        /// <summary>
+        /// Apply a delta to the audio-sync offset, clamp, persist,
+        /// and refresh the display. Shared by the ±10/±50/reset
+        /// button handlers — reset passes the negated current value
+        /// to force back to zero.
+        /// </summary>
+        private void AdjustAudioSyncOffset(int deltaMs) {
+            if (_suppressWrite || _config == null) return;
+            int next = _config.AudioSyncOffsetMs + deltaMs;
+            if (next < -AudioSyncOffsetClampMs) next = -AudioSyncOffsetClampMs;
+            if (next >  AudioSyncOffsetClampMs) next =  AudioSyncOffsetClampMs;
+            if (next == _config.AudioSyncOffsetMs) return;
+            _config.AudioSyncOffsetMs = next;
+            try { SoftSledConfigManager.WriteConfig(_config); }
+            catch (Exception ex) {
+                MessageBox.Show("Failed to save audio sync offset: " + ex.Message);
+                return;
+            }
+            RefreshAudioSyncDisplay();
+            ConfigChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void BtnAudioSyncMinusBig_Click(object sender, RoutedEventArgs e) => AdjustAudioSyncOffset(-50);
+        private void BtnAudioSyncMinus_Click   (object sender, RoutedEventArgs e) => AdjustAudioSyncOffset(-10);
+        private void BtnAudioSyncPlus_Click    (object sender, RoutedEventArgs e) => AdjustAudioSyncOffset(+10);
+        private void BtnAudioSyncPlusBig_Click (object sender, RoutedEventArgs e) => AdjustAudioSyncOffset(+50);
+
+        private void BtnAudioSyncReset_Click(object sender, RoutedEventArgs e) {
+            if (_config == null) return;
+            AdjustAudioSyncOffset(-_config.AudioSyncOffsetMs);
+        }
+
+        // ----- Video jitter buffer (libav + D3DImage player) -----
+
+        private const int JitterBufferDefaultMs = 250;
+        private const int JitterBufferMaxMs = 4000;
+        private const int JitterBufferStepMs = 250;
+
+        private void RefreshJitterBufferDisplay() {
+            int ms = _config?.VideoJitterBufferMs ?? JitterBufferDefaultMs;
+            JitterBufferValueText.Text = $"{ms} ms";
+        }
+
+        private void AdjustJitterBuffer(int deltaMs) {
+            if (_suppressWrite || _config == null) return;
+            int next = _config.VideoJitterBufferMs + deltaMs;
+            if (next < 0) next = 0;
+            if (next > JitterBufferMaxMs) next = JitterBufferMaxMs;
+            if (next == _config.VideoJitterBufferMs) return;
+            _config.VideoJitterBufferMs = next;
+            try { SoftSledConfigManager.WriteConfig(_config); }
+            catch (Exception ex) {
+                MessageBox.Show("Failed to save video jitter buffer: " + ex.Message);
+                return;
+            }
+            RefreshJitterBufferDisplay();
+            ConfigChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void BtnJitterMinus_Click(object sender, RoutedEventArgs e) => AdjustJitterBuffer(-JitterBufferStepMs);
+        private void BtnJitterPlus_Click (object sender, RoutedEventArgs e) => AdjustJitterBuffer(+JitterBufferStepMs);
+
+        private void BtnJitterReset_Click(object sender, RoutedEventArgs e) {
+            if (_config == null) return;
+            AdjustJitterBuffer(JitterBufferDefaultMs - _config.VideoJitterBufferMs);
+        }
+
+        /// <summary>
+        /// Open the directory where session log files are written. Falls
+        /// back to launching the parent if the leaf doesn't exist yet
+        /// (it's created lazily when a session opens its first file).
+        /// </summary>
+        private void OnOpenLogFolderClick(object sender, RoutedEventArgs e) {
+            OpenFolderOrExplain("log",
+                SoftSledWPF.Components.Shell.ExtenderSessionControl.GetLogDirectoryForConfig());
+        }
+
+        /// <summary>
+        /// Open the root dump directory (siblings: splash/, fastpath/,
+        /// audio/). Auto-creates the directory if it doesn't exist yet —
+        /// individual sub-dirs are created lazily by the dumper that
+        /// owns them.
+        /// </summary>
+        private void OnOpenDumpFolderClick(object sender, RoutedEventArgs e) {
+            OpenFolderOrExplain("dump",
+                SoftSledWPF.Components.Shell.ExtenderSessionControl.GetDumpsRootDirectory());
+        }
+
+        /// <summary>
+        /// "Change log folder" — opens a folder picker, stores the
+        /// chosen path in <see cref="SoftSledConfig.LogFileDirectory"/>,
+        /// and refreshes the displayed path. Takes effect on next app
+        /// launch (the AppLog is opened at App.OnStartup; mid-session
+        /// changes don't move the open file).
+        /// </summary>
+        private void OnChangeLogFolderClick(object sender, RoutedEventArgs e) {
+            if (_config == null) return;
+            string chosen = PickFolder("Choose folder for SoftSled log files", _config.LogFileDirectory);
+            if (chosen == null) return;
+            _config.LogFileDirectory = chosen;
+            try { SoftSledConfigManager.WriteConfig(_config); }
+            catch (Exception ex) { MessageBox.Show("Couldn't save config: " + ex.Message); return; }
+            LogFolderPath.Text = chosen;
+        }
+
+        /// <summary>
+        /// "Change dumps folder" — same UX as above but stores into
+        /// <see cref="SoftSledConfig.DumpsDirectory"/>. Takes effect on
+        /// next session start (dump dirs are pushed into env vars at
+        /// session-start time, not app-start).
+        /// </summary>
+        private void OnChangeDumpFolderClick(object sender, RoutedEventArgs e) {
+            if (_config == null) return;
+            string chosen = PickFolder("Choose folder for SoftSled dump output", _config.DumpsDirectory);
+            if (chosen == null) return;
+            _config.DumpsDirectory = chosen;
+            try { SoftSledConfigManager.WriteConfig(_config); }
+            catch (Exception ex) { MessageBox.Show("Couldn't save config: " + ex.Message); return; }
+            DumpFolderPath.Text = chosen;
+        }
+
+        /// <summary>
+        /// Show a WinForms FolderBrowserDialog with the given title /
+        /// initial selection. Returns the chosen path, or null when the
+        /// user cancels. Uses WinForms because WPF on .NET Framework
+        /// 4.6.1 has no built-in folder picker — we already reference
+        /// System.Windows.Forms for related shell work, so no new dep.
+        /// </summary>
+        private static string PickFolder(string description, string initialPath) {
+            using (var dlg = new System.Windows.Forms.FolderBrowserDialog()) {
+                dlg.Description = description;
+                dlg.ShowNewFolderButton = true;
+                if (!string.IsNullOrWhiteSpace(initialPath)
+                    && System.IO.Directory.Exists(initialPath)) {
+                    dlg.SelectedPath = initialPath;
+                }
+                var result = dlg.ShowDialog();
+                if (result != System.Windows.Forms.DialogResult.OK) return null;
+                return dlg.SelectedPath;
+            }
+        }
+
+        /// <summary>Shared "open in explorer" plumbing for the Debugging-page folder buttons.</summary>
+        private static void OpenFolderOrExplain(string kind, string dir) {
+            if (string.IsNullOrEmpty(dir)) {
+                MessageBox.Show($"Couldn't resolve the {kind} folder path. " +
+                                "Check the config Debugging section.");
+                return;
+            }
+            try {
+                if (!System.IO.Directory.Exists(dir)) {
+                    System.IO.Directory.CreateDirectory(dir);
+                }
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
+                    FileName        = dir,
+                    UseShellExecute = true,
+                });
+            } catch (Exception ex) {
+                MessageBox.Show($"Couldn't open the {kind} folder:\n{dir}\n\n{ex.Message}");
+            }
         }
 
         private void BtnResolution_Click(object sender, RoutedEventArgs e) {

@@ -142,20 +142,81 @@ namespace SoftSled.Components.VirtualChannel {
                         switch (GetStringPropertyPayloadPropertyName.Replace("\0", "")) {
                             // Property Bag Service
                             case "NAM":
-                                // Initialise GetStringProperty Response
+                                // The "NAM" property is the friendly name the
+                                // WMC server uses to identify the extender in
+                                // its UI and logs (e.g. the "Extender connected:
+                                // <name>" toast). We were returning the
+                                // placeholder "McxClient" — recoverable from a
+                                // wire capture but not what a real Xbox sends.
+                                //
+                                // Confirmed against the Xbox 360 MCX XEX
+                                // decompilation in C:\Claude\xbox-360-xex —
+                                // the Xbox client binary embeds the literal
+                                // UTF-16 BE string "Xbox 360 Media Center
+                                // Extender" as its name property. Returning the
+                                // same string makes SoftSled visually
+                                // indistinguishable from an Xbox extender in
+                                // the WMC server's extender list, which has
+                                // observable effects: the server occasionally
+                                // gates capability negotiation on the name
+                                // string and (we suspect, untested) some
+                                // chrome flows assume "Xbox 360" branding.
                                 response = DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
-                                    "McxClient"
+                                    "Xbox 360 Media Center Extender"
                                 );
                                 break;
                             case "PRT":
-                                m_logger?.LogDebug($"{channelName.ToUpper()}: PRT String");
-                                // Initialise GetStringProperty Response
+                                // The "PRT" property is the extender's DLNA
+                                // protocol-info advertisement: a newline-
+                                // separated list of <transport>:*:<mime>:
+                                // <PN-list> entries the server uses to pick
+                                // which encoding to serve and which RTP
+                                // transport to negotiate.
+                                //
+                                // The 10 entries below are lifted verbatim
+                                // from the Xbox 360 MCX XEX (string-extract
+                                // pass over C:\Claude\xbox-360-xex). The
+                                // previous placeholder (one MP3 entry) made
+                                // the server fall back to its lowest-common-
+                                // denominator MP3-only profile, which is
+                                // why for a long time only audio playback
+                                // worked cleanly and recorded TV defaulted
+                                // to WMV transcoding instead of native
+                                // MPEG-2.
+                                //
+                                // Advertising the Xbox set unblocks the
+                                // following formats on our existing engines:
+                                //   audio:  WMA(Full/Pro/LSL), MP3, AC3, LPCM,
+                                //           WAV-PCM  (covers everything our
+                                //                     libav AudioDecoder
+                                //                     already handles —
+                                //                     see CodecRegistry.cs)
+                                //   video:  MPEG2-ES (DVRMS/PAL/NTSC ±XAC3),
+                                //           WMV-HIGH (VC-1 APL2/APL3),
+                                //           MPEG-4 ASP (audio: MP3 / AC3),
+                                //           H.264 MP @ HD (audio: MP3 / AC3),
+                                //           MPEG-PS (1, PAL, NTSC)
+                                //
+                                // Notes on safety: anything WMC streams us
+                                // here that we can't decode lands in the
+                                // libav decoder, which logs and skips rather
+                                // than crashing. Advertising the full Xbox
+                                // set is therefore strictly upside vs the
+                                // previous single-MP3 advertisement.
                                 response = DSLRCommunication.GetStringPropertyResponse(
                                    DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
-                                   @"rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3"
+                                   "rtsp-rtp-udp:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL;DLNA.ORG_PN=WMAPRO;MICROSOFT.COM_PN=WMALSL\n" +
+                                   "rtsp-rtp-udp:*:audio/mpeg:DLNA.ORG_PN=MP3\n" +
+                                   "rtsp-rtp-udp:*:audio/vnd.dolby.dd-rtp:DLNA.ORG_PN=AC3\n" +
+                                   "rtsp-rtp-udp:*:audio/L16:DLNA.ORG_PN=LPCM\n" +
+                                   "http-get:*:audio/L16:MICROSOFT.COM_PN=WAV_PCM\n" +
+                                   "rtsp-rtp-udp:*:video/mpeg:MICROSOFT.COM_PN=DVRMS_MPEG2;DLNA.ORG_PN=MPEG_ES_PAL;DLNA.ORG_PN=MPEG_ES_NTSC;DLNA.ORG_PN=MPEG_ES_PAL_XAC3;DLNA.ORG_PN=MPEG_ES_NTSC_XAC3\n" +
+                                   "rtsp-rtp-udp:*:video/x-ms-wmv:DLNA.ORG_PN=WMVHIGH_PRO;DLNA.ORG_PN=WMVHIGH_FULL;MICROSOFT.COM_PN=WMVHIGH_LSL;MICROSOFT.COM_PN=VC1_APL2_FULL;MICROSOFT.COM_PN=VC1_APL2_PRO;MICROSOFT.COM_PN=VC1_APL2_LSL;MICROSOFT.COM_PN=WMVIMAGE1_MED;MICROSOFT.COM_PN=WMVIMAGE2_MED;MICROSOFT.COM_PN=VC1_APL3_FULL;MICROSOFT.COM_PN=VC1_APL3_PRO\n" +
+                                   "rtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_MPEG1_L3;MICROSOFT.COM_PN=MPEG4_P2_MP4_ASP_L5_AC3\n" +
+                                   "rtsp-rtp-udp:*:video/mp4:MICROSOFT.COM_PN=AVC_MP4_MP_HD_MPEG1_L3;MICROSOFT.COM_PN=AVC_MP4_MP_HD_AC3\n" +
+                                   "http-get:*:video/mpeg:DLNA.ORG_PN=MPEG1;DLNA.ORG_PN=MPEG_PS_NTSC;DLNA.ORG_PN=MPEG_PS_PAL"
                                );
-                                //response = DSLRCommunication.GetStringPropertyNullResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
                                 break;
                                 //// Initialise GetStringProperty Response
                                 //response = DSLRCommunication.GetStringPropertyResponse(
@@ -169,15 +230,57 @@ namespace SoftSled.Components.VirtualChannel {
                                 ////response = DSLRCommunication.GetStringPropertyNullResponse(DataUtilities.GetByteSubArray(incomingBuff, 10, 4));
                                 //break;
                             case "XTY":
-                                m_logger?.LogDebug($"{channelName.ToUpper()}: XTY String");
-                                // Initialise GetStringProperty Response
+                                // The "XTY" property is the eXtender TYpe
+                                // token — a structured device-class
+                                // identifier WMC uses to route capability
+                                // negotiation and pick the right server-side
+                                // behavior profile. We were returning the
+                                // placeholder "McxClient", which works enough
+                                // for a session to come up but causes the
+                                // server to fall back to a generic-extender
+                                // profile.
+                                //
+                                // Confirmed against the Xbox 360 MCX XEX
+                                // decompilation in C:\Claude\xbox-360-xex —
+                                // the Xbox client binary embeds the literal
+                                // ASCII string "XBOX360XTT" as its extender-
+                                // type token. The "XTT" suffix matches the
+                                // pattern seen in the binary's
+                                // OEM_GetExtenderType handler (companion to
+                                // the also-embedded "Microsoft XBOX 360"
+                                // OEM identifier). Returning this string
+                                // makes WMC select the Xbox 360 extender
+                                // profile, which (per task #136-#141) we
+                                // already lean on for codec selection and
+                                // buffer-info handshakes — staying
+                                // consistent is a net positive even if
+                                // we're not on real Xbox hardware.
                                 response = DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
-                                    "McxClient"
+                                    "XBOX360XTT"
                                 );
                                 break;
                             case "PBV":
-                                // Initialise GetStringProperty Response
+                                // The "PBV" property is the Property Bag
+                                // Version. We've kept the existing value of
+                                // "1" because:
+                                //   - The Xbox 360 MCX XEX has "PBV" as a
+                                //     property *name* in its string table
+                                //     (right next to NAM, XTY, etc.) but
+                                //     the *value* is computed at runtime by
+                                //     OEM_GetPropertyBagVersion-style hooks,
+                                //     not embedded as a literal — so the
+                                //     XEX extraction couldn't authoritatively
+                                //     reveal it.
+                                //   - PBV is the major version of the
+                                //     property-bag schema; bumping it would
+                                //     imply we support a newer schema's
+                                //     extra properties (which we don't).
+                                //   - WMC accepts "1" without complaint in
+                                //     every captured handshake we've seen.
+                                // Leave at "1" unless / until a future XEX
+                                // pass or a server-side error reveals
+                                // otherwise.
                                 response = DSLRCommunication.GetStringPropertyResponse(
                                     DataUtilities.GetByteSubArray(incomingBuff, 10, 4),
                                     "1"
@@ -221,7 +324,7 @@ namespace SoftSled.Components.VirtualChannel {
                         byte[] encapsulatedResponse = DSLRCommunication.Encapsulate(response);
 
                         // Send the GetDWORDProperty Response
-                        VirtualChannelSend(this, new VirtualChannelSendArgs(channelName, encapsulatedResponse));
+                        VirtualChannelSend(this, new VirtualChannelSendArgs(channelName, encapsulatedResponse, GetDWORDPropertyPayloadPropertyName.Replace("\0", "")));
 
                     } else {
 

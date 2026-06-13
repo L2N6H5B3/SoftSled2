@@ -33,6 +33,12 @@ namespace SoftSled.Components.Splash {
         private readonly Action<byte[]>        _sendBytes; // may be null in unit tests
 
         private SplashRenderHost _host;
+        // Optional sink that receives HostWindow_SetBackgroundColor pushes
+        // (MS-RRSP2 §2.2.4.23.2). Wired by ExtenderSessionControl to a
+        // Rectangle that sits at the very bottom of the WPF Grid — see
+        // the layer comment in ExtenderSessionControl.xaml for the
+        // motivation. Null in tests / headless contexts.
+        private Action<System.Windows.Media.Color> _backgroundColorSink;
         private bool             _payloadBigEndian;  // dictated by DSPA BIG cap
         private uint             _windowHandle;      // most recently created Window (best-effort)
         private uint             _sceneRootHandle;   // visual handle declared by HostWindow_SetRoot
@@ -47,6 +53,27 @@ namespace SoftSled.Components.Splash {
             = new System.Collections.Generic.HashSet<Objects.SplashAnimation>();
         private readonly System.Diagnostics.Stopwatch _animClock = new System.Diagnostics.Stopwatch();
         private bool _animTickHooked;
+
+        // ---- Batch-synchronised animation start-time (task #170+) ----
+        // Without this, every Animation_Play inside a single message batch
+        // captured its own _animClock.Elapsed value the moment the message
+        // arrived — and because each message dispatch takes wall-clock
+        // microseconds-to-milliseconds, the StartTimeMs values for anims
+        // that the wire intended to run in lock-step drifted by a few ms.
+        // Visible symptom: on a home-screen-after-Recorded-TV transition,
+        // the fade-out of the previous row's label was a few ms ahead of
+        // the slide-in covering it, so a descender like the "y" in "movie
+        // library" was briefly visible past the new row's mask.
+        //
+        // Fix: every StartAnimation that fires while we're inside the
+        // outermost DispatchBatch shares ONE timestamp, latched at the
+        // first such call within the batch. Plays initiated outside a
+        // batch (e.g. chained from an OnComplete handler on the anim
+        // tick) still read the clock fresh — that's correct, those
+        // aren't part of any wire batch.
+        private int    _batchDepth;
+        private bool   _batchAnimStartLatched;
+        private double _batchAnimStartMs;
 
         // Context IDs assigned in the handshake. idContextApp is the
         // server-side app context (typically 1); idContextRender is the
@@ -82,13 +109,59 @@ namespace SoftSled.Components.Splash {
         // ============================================================
 
         /// <summary>
-        /// Look up the on-screen rectangle for a splash surface handle.
-        /// Returns false if the handle is unknown.
+        /// Look up the on-screen rectangle for a video / dynamic surface
+        /// identifier.
+        ///
+        /// <para>Accepts EITHER form of identifier:</para>
+        /// <list type="bullet">
+        ///   <item><description><b>DynamicSurfaceFactory uid</b> (preferred,
+        ///   used by MS-DMCT §2.2.1.1.1 OpenMedia SurfaceID — typically
+        ///   small ints like 101). Resolves through
+        ///   <see cref="_dynamicSurfaceByUid"/> to the splash Surface
+        ///   handle that arrived alongside the uid on the wire.</description></item>
+        ///   <item><description><b>Splash object handle</b> directly
+        ///   (legacy fall-through — caller hands us the registry handle
+        ///   straight). Useful for tests or any future caller that already
+        ///   walked the registry.</description></item>
+        /// </list>
+        ///
+        /// <para>Returns the host's full client rectangle for any
+        /// recognised surface (v1 assumption: video is always full-host).
+        /// Returns <c>false</c> when neither form matches.</para>
         /// </summary>
         public bool TryGetSurfaceScreenRect(uint surfaceId, out Rect rect) {
+            return TryGetSurfaceScreenRect(surfaceId, out rect, out _, out _);
+        }
+
+        /// <summary>
+        /// Detailed overload that also reports which splash handle (if
+        /// any) the caller's input was resolved to, plus whether the
+        /// resolution went through the DMCT-uid path. Used by
+        /// <see cref="AudioVisual.SurfaceRouter"/> to log an unambiguous
+        /// uid→splash-handle trace.
+        /// </summary>
+        public bool TryGetSurfaceScreenRect(uint surfaceId, out Rect rect,
+                                            out uint resolvedSplashHandle, out bool resolvedViaUid) {
             rect = Rect.Empty;
+            resolvedSplashHandle = 0;
+            resolvedViaUid = false;
             if (_host == null) return false;
-            if (!_registry.TryGetObject(surfaceId, out var obj)) return false;
+
+            // First try as a DynamicSurfaceFactory uid. The DMCT
+            // OpenMedia SurfaceID field per §2.2.1.1.1 is *this* uid,
+            // not a splash object handle — the surface lookup needs to
+            // bridge from one numbering space to the other before any
+            // registry check.
+            if (surfaceId <= int.MaxValue
+                && _dynamicSurfaceByUid.TryGetValue((int)surfaceId, out var dyn)) {
+                surfaceId = dyn.SurfaceHandle;  // hop to the splash handle
+                resolvedViaUid = true;
+            }
+            resolvedSplashHandle = surfaceId;
+
+            if (!_registry.TryGetObject(surfaceId, out var obj)) {
+                return false;
+            }
             if (!(obj is SoftSled.Components.Splash.Objects.SplashSurface)) {
                 // Handle exists but isn't a surface — ignore.
                 return false;
@@ -117,6 +190,364 @@ namespace SoftSled.Components.Splash {
         /// fanout is a follow-up.
         /// </summary>
         public event Action<uint /*surfaceId*/, Rect /*newRect*/> SurfaceScreenRectChanged;
+
+        /// <summary>
+        /// Fires when a likely PiP (picture-in-picture) destination
+        /// rectangle is identified during active video playback. Carries
+        /// the Visual handle that's hosting the PiP placeholder and its
+        /// absolute screen rect; empty rect means "no PiP, video should
+        /// revert to full canvas" (e.g. video closed, PiP placeholder
+        /// destroyed, or the WMC shell jumped back to fullscreen).
+        ///
+        /// Why a separate event from SurfaceScreenRectChanged: SSRC keys
+        /// on a real DMCT/DSF surface handle and broadcasts the host's
+        /// full bounds. PiP routing is a HEURISTIC — WMC doesn't emit
+        /// VideoPool_Draw on this corpus (confirmed: spec §2.2.4.13.1
+        /// messages never appear), so the destination has to be sniffed
+        /// from gradient-only Visuals with PiP-shaped geometry. Keeping
+        /// the two events apart means the existing surface-resolution
+        /// path stays clean.
+        /// </summary>
+        public event Action<uint /*visualHandle*/, Rect /*absoluteRect*/> VideoPipCandidateChanged;
+
+        // The Visual we're currently treating as the PiP target. Set
+        // when a strict PIP-CAND match fires the event; cleared when
+        // the visual is destroyed, when video playback closes, or when
+        // a better candidate replaces it.
+        private uint   _currentPipVisualHandle;
+        private double _currentPipFit;
+        private Rect   _currentPipRect;
+
+        // ============================================================
+        //  Video-bound Visual tracking (PIP-BINDING-driven, definitive)
+        // ------------------------------------------------------------
+        //  Captured at the moment a Visual_SetContent binds a Visual to
+        //  a RenderBuilder that was previously primed by VideoPool_Draw
+        //  (the [PIP-BINDING] event). The bound Visual IS the on-screen
+        //  rectangle where the video pool composites — every subsequent
+        //  geometry-mutating message (Visual_SetSize, _SetPosition,
+        //  _SetScale, _SetRotation, _SetCenterPoint*, _ChangeParent) on
+        //  this Visual OR any of its ancestors changes where the video
+        //  appears.
+        //
+        //  This is the deterministic alternative to the gradient/aspect
+        //  heuristic that gives false positives on Home-screen carousels.
+        //  When the heuristic and the binding agree the binding wins
+        //  silently; when they disagree we log loudly so the asymmetry
+        //  is visible in capture diffs.
+        //
+        //  Cleared when:
+        //   * the bound Visual is destroyed (Broker_DestroyObject)
+        //   * the bound video instance closes (DSF CloseInstance with
+        //     activeVideoCount → 0)
+        //   * a new [PIP-BINDING] fires on a different Visual handle
+        // ============================================================
+        private uint _videoBoundVisualHandle;
+        private uint _videoBoundPoolHandle;     // diagnostic — which pool primed the RB
+        private int  _videoBoundUid;            // diagnostic — which DSF uid this came from
+        private Rect _videoBoundLastRect;       // change-detection so unchanged rects don't spam
+        // Per-frame rect polling. WMC moves/resizes the PiP box via
+        // AnimationManager position/size animations, which update the visual's
+        // transform WITHOUT sending discrete SetPosition/SetSize messages — so
+        // RefreshVideoRectIfRelevant alone misses the motion and the video gets
+        // stranded at its bind-time rect. While bound we poll the bound visual's
+        // rendered rect on CompositionTarget.Rendering and re-route on change so
+        // the video follows the box through animations and layout shifts.
+        private bool _videoRectPollHooked;
+        private EventHandler _videoRectPollHandler;
+
+        // ============================================================
+        //  PiP-candidate lifespan tracking
+        // ------------------------------------------------------------
+        //  Pure diagnostic: every Visual the strict-criteria heuristic
+        //  fingerprints as a possible PiP placeholder is recorded here
+        //  with its birth timestamp. When Broker_DestroyObject reaps a
+        //  tracked handle, we log how long it lived. Short-lived
+        //  candidates (≤ a few seconds) are selector rings — they get
+        //  destroyed and re-created on every navigation. A real PiP
+        //  placeholder should live the WHOLE playback session.
+        //
+        //  The intent is to discover the distinguishing signal between
+        //  the selector ring (currently the only thing that matches our
+        //  heuristic) and the real PiP placeholder (which is presumably
+        //  longer-lived but we haven't fingerprinted yet).
+        // ============================================================
+        private sealed class PipCandidateBirth {
+            public uint Handle;
+            public Rect Rect;
+            public bool IsVert;
+            public double LbFit;
+            public double Aspect;
+            public System.DateTime BornUtc;
+        }
+        private readonly System.Collections.Generic.Dictionary<uint, PipCandidateBirth> _pipCandidateBirths
+            = new System.Collections.Generic.Dictionary<uint, PipCandidateBirth>();
+
+        private void RecordPipCandidateBirth(uint handle, Rect rect, bool isVert, double lbFit, double aspect) {
+            // Replace prior record on re-fire (the Visual got a new
+            // SetContent — most recent fingerprint wins).
+            _pipCandidateBirths[handle] = new PipCandidateBirth {
+                Handle = handle, Rect = rect, IsVert = isVert,
+                LbFit = lbFit, Aspect = aspect,
+                BornUtc = System.DateTime.UtcNow,
+            };
+        }
+
+        private void ReportPipCandidateDeath(uint handle) {
+            if (!_pipCandidateBirths.TryGetValue(handle, out var birth)) return;
+            _pipCandidateBirths.Remove(handle);
+            double lifespanMs = (System.DateTime.UtcNow - birth.BornUtc).TotalMilliseconds;
+            string lifespanTag = lifespanMs < 3000   ? "SHORT-LIVED (selector-like)" :
+                                 lifespanMs < 10000  ? "MEDIUM-LIVED" :
+                                                       "LONG-LIVED (PIP-like)";
+            _dumper?.OnEvent($"    [PIP-CAND-DEATH] vis=0x{handle:X8} lifespan={lifespanMs:F0}ms {lifespanTag} " +
+                             $"rect=({birth.Rect.X:F0},{birth.Rect.Y:F0} {birth.Rect.Width:F0}x{birth.Rect.Height:F0}) " +
+                             $"grad={(birth.IsVert ? "V" : "H")} aspect={birth.Aspect:F2}");
+            // Long-lived candidate destruction is the high-signal event —
+            // promote to the app log so we don't have to dig through the
+            // splash dump to find it.
+            if (lifespanMs >= 10000) {
+                _logger?.LogInfo($"[splash] PIP-CAND-DEATH long-lived vis=0x{handle:X8} " +
+                                 $"lifespan={lifespanMs/1000.0:F1}s " +
+                                 $"rect=({birth.Rect.X:F0},{birth.Rect.Y:F0} {birth.Rect.Width:F0}x{birth.Rect.Height:F0}) " +
+                                 $"— this lifetime pattern is consistent with a real PiP placeholder");
+            }
+        }
+
+        /// <summary>
+        /// True if <paramref name="v"/> is the currently-bound video Visual
+        /// or any of its ancestors (i.e. any geometry change on it moves
+        /// the video on screen). Walks the parent chain bounded to depth
+        /// 64.  Out-params let the caller include the chain in a diagnostic
+        /// log line.
+        /// </summary>
+        private bool IsVideoBoundOrAncestor(SplashVisual v, out int hopsToVideo, out uint videoVisualHandleResolved) {
+            hopsToVideo = -1;
+            videoVisualHandleResolved = 0;
+            if (v == null || _videoBoundVisualHandle == 0) return false;
+            int depth = 0;
+            for (var n = v; n != null && depth < 64; n = n.Parent, depth++) {
+                if (n.Handle == _videoBoundVisualHandle) {
+                    hopsToVideo = depth;
+                    videoVisualHandleResolved = n.Handle;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Compute the on-screen rectangle of the video-bound Visual using
+        /// WPF's actual transform composition (TransformToAncestor against
+        /// the SplashRenderHost). Folds in EVERY parent-chain transform —
+        /// translates, scales, rotations — which is what
+        /// <see cref="TryComputeVisualAbsoluteRect"/> can't do because it
+        /// only sums PosX/PosY. Returns false if the Visual isn't yet
+        /// rooted in the visual tree, or is sized to zero.
+        /// </summary>
+        private bool TryComputeVisualRenderedRect(SplashVisual v, out Rect rect) {
+            rect = Rect.Empty;
+            if (v == null || _host == null) return false;
+            Rect captured = Rect.Empty;
+            bool ok = false;
+            Action work = () => {
+                try {
+                    if (v.SizeX <= 0 || v.SizeY <= 0) return;
+                    // TransformToAncestor throws InvalidOperationException
+                    // if the descendant isn't in the host's tree yet.
+                    var t = v.DrawingVisual.TransformToAncestor(_host);
+                    captured = t.TransformBounds(new Rect(0, 0, v.SizeX, v.SizeY));
+                    ok = true;
+                } catch { /* not rooted yet — leave ok=false */ }
+            };
+            if (_uiDispatcher.CheckAccess()) work();
+            else { try { _uiDispatcher.Invoke(work); } catch { } }
+            if (ok) rect = captured;
+            return ok;
+        }
+
+        /// <summary>
+        /// Called by Visual msgid handlers after any geometry-mutating
+        /// change. If the touched Visual is the video-bound Visual itself
+        /// or any of its ancestors, recomputes the absolute rect and (if
+        /// it actually changed) emits a [VIDEO-RECT] diagnostic line +
+        /// re-raises <see cref="VideoPipCandidateChanged"/> so the
+        /// SurfaceRouter follows along.
+        ///
+        /// <para>The "trigger" string identifies which msgid caused the
+        /// refresh — invaluable when reading capture logs to see exactly
+        /// which wire message moved the video.</para>
+        /// </summary>
+        private void RefreshVideoRectIfRelevant(SplashVisual touched, string trigger) {
+            if (_videoBoundVisualHandle == 0 || touched == null) return;
+            if (!IsVideoBoundOrAncestor(touched, out int hops, out _)) return;
+
+            // Locate the actual bound Visual (touched may be an ancestor).
+            if (!_registry.TryGetObject(_videoBoundVisualHandle, out var obj)
+                || !(obj is SplashVisual bound)) return;
+
+            if (!TryComputeVisualRenderedRect(bound, out var newRect)) {
+                // Bound visual not yet rooted, or zero-sized. Don't
+                // clear — wait for a future tick to re-evaluate.
+                _dumper?.OnEvent($"    [VIDEO-RECT] {trigger} touched=0x{touched.Handle:X8} hops={hops} bound=0x{_videoBoundVisualHandle:X8} (unrooted/zero — skipped)");
+                return;
+            }
+
+            // Tolerance: <1 px change is noise from float rounding through
+            // composed transforms. Only fire when a real layout change.
+            const double EPS = 1.0;
+            bool changed = Math.Abs(newRect.X      - _videoBoundLastRect.X) >= EPS
+                        || Math.Abs(newRect.Y      - _videoBoundLastRect.Y) >= EPS
+                        || Math.Abs(newRect.Width  - _videoBoundLastRect.Width)  >= EPS
+                        || Math.Abs(newRect.Height - _videoBoundLastRect.Height) >= EPS;
+
+            if (!changed) {
+                // Still emit a quiet log line so we can see WHICH msgids
+                // touched the chain without firing a rect change — useful
+                // for finding e.g. SetAlpha or SetColor messages that the
+                // server sends to the video Visual that we might want to
+                // react to (transparency = "video hidden during menu").
+                _dumper?.OnEvent($"    [VIDEO-TOUCH] {trigger} touched=0x{touched.Handle:X8} hops={hops} bound=0x{_videoBoundVisualHandle:X8} rect-unchanged ({newRect.X:F0},{newRect.Y:F0} {newRect.Width:F0}x{newRect.Height:F0})");
+                return;
+            }
+
+            _dumper?.OnEvent($"    [VIDEO-RECT] {trigger} touched=0x{touched.Handle:X8} hops={hops} bound=0x{_videoBoundVisualHandle:X8} " +
+                             $"prev=({_videoBoundLastRect.X:F0},{_videoBoundLastRect.Y:F0} {_videoBoundLastRect.Width:F0}x{_videoBoundLastRect.Height:F0}) " +
+                             $"now=({newRect.X:F0},{newRect.Y:F0} {newRect.Width:F0}x{newRect.Height:F0})");
+            _logger?.LogInfo($"[splash] VIDEO-RECT moved via {trigger} on 0x{touched.Handle:X8} -> " +
+                             $"({newRect.X:F0},{newRect.Y:F0} {newRect.Width:F0}x{newRect.Height:F0}) " +
+                             $"(bound vis=0x{_videoBoundVisualHandle:X8} uid={_videoBoundUid} pool=0x{_videoBoundPoolHandle:X8})");
+
+            _videoBoundLastRect = newRect;
+
+            // Route through the same event the gradient-heuristic uses —
+            // SurfaceRouter is already subscribed. Bound-driven updates
+            // supersede the heuristic-driven lock so we also nudge the
+            // _currentPip* fields to match.
+            _currentPipVisualHandle = _videoBoundVisualHandle;
+            _currentPipRect         = newRect;
+            RaiseVideoPipCandidateChanged(_videoBoundVisualHandle, newRect);
+        }
+
+        /// <summary>
+        /// Capture a new video-bound Visual when [PIP-BINDING] fires.
+        /// Idempotent — calling with the same handle is a no-op. A new
+        /// handle replaces the previous binding (and broadcasts the new
+        /// rect via the normal refresh path).
+        /// </summary>
+        private void SetVideoBoundVisual(SplashVisual v, uint poolHandle, int uid) {
+            if (v == null) return;
+            if (_videoBoundVisualHandle == v.Handle) {
+                // Same Visual rebinding (WMC re-sends VideoPool_Draw +
+                // Visual_SetContent every frame). Just refresh in case the
+                // rect drifted.
+                _videoBoundPoolHandle = poolHandle;
+                _videoBoundUid        = uid;
+                RefreshVideoRectIfRelevant(v, "[PIP-BINDING rebind]");
+                return;
+            }
+            _dumper?.OnEvent($"    [VIDEO-BOUND] vis=0x{v.Handle:X8} replaces 0x{_videoBoundVisualHandle:X8} pool=0x{poolHandle:X8} uid={uid}");
+            _logger?.LogInfo($"[splash] VIDEO-BOUND captured vis=0x{v.Handle:X8} (uid={uid} pool=0x{poolHandle:X8}) — tracking geometry changes");
+            _videoBoundVisualHandle = v.Handle;
+            _videoBoundPoolHandle   = poolHandle;
+            _videoBoundUid          = uid;
+            _videoBoundLastRect     = Rect.Empty;  // force a change on first refresh
+            RefreshVideoRectIfRelevant(v, "[PIP-BINDING new]");
+            StartVideoRectPolling();   // follow animated moves/resizes of the box
+        }
+
+        /// <summary>
+        /// Drop the video-bound Visual tracking. Called on destroy and on
+        /// video-instance close. Idempotent.
+        /// </summary>
+        private void ClearVideoBoundVisual(string reason) {
+            if (_videoBoundVisualHandle == 0) return;
+            _dumper?.OnEvent($"    [VIDEO-UNBOUND] vis=0x{_videoBoundVisualHandle:X8} reason={reason}");
+            _logger?.LogInfo($"[splash] VIDEO-UNBOUND vis=0x{_videoBoundVisualHandle:X8} ({reason}) — video routing reverts to full canvas");
+            StopVideoRectPolling();
+            _videoBoundVisualHandle = 0;
+            _videoBoundPoolHandle   = 0;
+            _videoBoundUid          = 0;
+            _videoBoundLastRect     = Rect.Empty;
+            // Route an empty rect so SurfaceRouter reverts to the full
+            // canvas / host bounds.
+            RaiseVideoPipCandidateChanged(0, Rect.Empty);
+        }
+
+        // ---- Per-frame PiP rect polling (follows animated box moves) ----
+        private void StartVideoRectPolling() {
+            Action hook = () => {
+                if (_videoRectPollHooked) return;
+                _videoRectPollHandler = (s, e) => PollVideoRectTick();
+                System.Windows.Media.CompositionTarget.Rendering += _videoRectPollHandler;
+                _videoRectPollHooked = true;
+            };
+            if (_uiDispatcher.CheckAccess()) hook();
+            else { try { _uiDispatcher.BeginInvoke(hook); } catch { } }
+        }
+
+        private void StopVideoRectPolling() {
+            Action unhook = () => {
+                if (!_videoRectPollHooked) return;
+                if (_videoRectPollHandler != null)
+                    System.Windows.Media.CompositionTarget.Rendering -= _videoRectPollHandler;
+                _videoRectPollHandler = null;
+                _videoRectPollHooked = false;
+            };
+            if (_uiDispatcher.CheckAccess()) unhook();
+            else { try { _uiDispatcher.BeginInvoke(unhook); } catch { } }
+        }
+
+        // Runs on the UI thread (CompositionTarget.Rendering, ~per frame).
+        // Re-resolves the bound visual's rendered rect — which reflects the
+        // CURRENT animated transform — and re-routes when it changes, so the
+        // video tracks the PiP box smoothly through WMC's move/resize
+        // animations that send no discrete SetPosition/SetSize.
+        private void PollVideoRectTick() {
+            if (_videoBoundVisualHandle == 0) return;
+            if (!_registry.TryGetObject(_videoBoundVisualHandle, out var obj) || !(obj is SplashVisual bound)) return;
+            if (!TryComputeVisualRenderedRect(bound, out var r)) return;
+            const double EPS = 1.0;
+            if (Math.Abs(r.X - _videoBoundLastRect.X) < EPS
+                && Math.Abs(r.Y - _videoBoundLastRect.Y) < EPS
+                && Math.Abs(r.Width  - _videoBoundLastRect.Width)  < EPS
+                && Math.Abs(r.Height - _videoBoundLastRect.Height) < EPS) return;
+            _videoBoundLastRect     = r;
+            _currentPipVisualHandle = _videoBoundVisualHandle;
+            _currentPipRect         = r;
+            RaiseVideoPipCandidateChanged(_videoBoundVisualHandle, r);
+        }
+
+        private void RaiseVideoPipCandidateChanged(uint visualHandle, Rect rect) {
+            var h = VideoPipCandidateChanged;
+            if (h == null) return;
+            try { h(visualHandle, rect); }
+            catch (Exception ex) {
+                _logger?.LogError($"[splash] VideoPipCandidateChanged subscriber threw: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Walk a Visual's parent chain and accumulate position offsets
+        /// to produce an absolute screen rectangle. Ignores scale and
+        /// rotation transforms for v1 simplicity — captured PiP
+        /// placeholders sit at 1:1 transforms; if WMC ever introduces a
+        /// scaled PiP container we'll need to fold ScaleX/ScaleY in.
+        /// Returns false if the visual is null or unrooted.
+        /// </summary>
+        private bool TryComputeVisualAbsoluteRect(SplashVisual v, out Rect rect) {
+            rect = Rect.Empty;
+            if (v == null) return false;
+            double absX = 0, absY = 0;
+            int depth = 0;
+            for (var n = v; n != null && depth < 64; n = n.Parent, depth++) {
+                absX += n.PosX;
+                absY += n.PosY;
+            }
+            if (v.SizeX <= 0 || v.SizeY <= 0) return false;
+            rect = new Rect(absX, absY, v.SizeX, v.SizeY);
+            return true;
+        }
 
         /// <summary>
         /// Called by the host's size-changed handler (wired up in
@@ -148,12 +579,129 @@ namespace SoftSled.Components.Splash {
             return _registry.EnumerateSurfaceHandles();
         }
 
+        // Splash-channel UI sound player. Lazily constructed on the first
+        // SoundBuffer / Sound message so the NAudio output device isn't
+        // initialised in sessions that never trigger splash audio. Null
+        // when EnableSplashAudio is false — Sound_Play messages then
+        // still acknowledge but produce no audio.
+        private SplashSoundPlayer _soundPlayer;
+        private readonly bool _enableSplashAudio;
+
+        // ============================================================
+        //  DynamicSurfaceFactory uid → splash-handle registry
+        // ------------------------------------------------------------
+        //  MS-RRSP2 §2.2.4.18 — DynamicSurfaceFactory.CreateVideoInstance
+        //  (msgid=1) and .CreateSurfaceInstance (msgid=2) carry a
+        //  nUniqueID i32 ("uid") that the host application uses as a
+        //  stable token for "which dynamic surface" in its higher-layer
+        //  protocols. MS-DMCT §2.2.1.1.1 OpenMedia's SurfaceID field is
+        //  exactly this uid — *not* a splash object handle.
+        //
+        //  So DMCT OpenMedia(surfaceId=101) asks us to play to the
+        //  splash Surface whose dynamic-factory uid is 101 (i.e. the
+        //  surface handle that came in alongside uid=101 on the wire).
+        //  TryGetSurfaceScreenRect can use this map to translate.
+        //
+        //  Also tracked: the count of currently-live VIDEO instances
+        //  (msgid=1 specifically — not msgid=2 plain Surface
+        //  instances). While that count is >0, the splash host needs
+        //  to suppress its opaque background so the externally-fed
+        //  video surface (FFME element behind splashHost) can show
+        //  through. See SplashRenderHost.SetVideoActive.
+        // ============================================================
+        private sealed class DynamicSurfaceEntry {
+            public uint SurfaceHandle;
+            public uint PoolHandle;
+            public bool IsVideo;
+        }
+        private readonly System.Collections.Generic.Dictionary<int, DynamicSurfaceEntry>
+            _dynamicSurfaceByUid = new System.Collections.Generic.Dictionary<int, DynamicSurfaceEntry>();
+        private int _activeVideoInstanceCount;
+
+        // ---------------- Video-family handle tracking ----------------
+        //
+        // The WMC server allocates its video surface, pool, and the
+        // associated Visual subtree in a distinct handle namespace
+        // (different high byte from the regular UI scene graph). E.g.
+        // in one captured session: pool=0x0600005B, surface=0x0800007C,
+        // video subtree Visuals 0x0A00004D / 0x0600005A / 0x0700007D /
+        // 0x07000091 / 0x0700009B — all under high bytes 0x06/0x07/0x08/0x0A.
+        // The regular shell UI sits in 0x01/0x02/0x03/0x04/0x05.
+        //
+        // We can't see how WMC associates "video surface here" with the
+        // Visual subtree because that message (if any) is being silently
+        // swallowed by an "unhandled msgid" branch — none of the spec
+        // msgids on Surface/SurfacePool/VideoPool carry a target-rect
+        // payload. By tracking which high bytes belong to the active
+        // video family, every "unhandled" dispatch can self-tag the
+        // log line `[VFAM]` and emit the raw body hex so the missing
+        // message becomes greppable.
+        //
+        // Population rules:
+        //  * XeDevice_CreateVideoPool — pool's high byte added.
+        //  * DynamicSurfaceFactory_CreateVideoInstance — surface + pool
+        //    high bytes added.
+        //  * Visual_ChangeParent where the parent is in the family —
+        //    the child's high byte is added too (so the entire video
+        //    subtree gets covered, even when WMC reuses a namespace
+        //    we hadn't seen yet).
+        //
+        // Cleared on CloseInstance (only when activeVideoCount hits 0)
+        // so a fresh session starts clean.
+        private readonly System.Collections.Generic.HashSet<byte>
+            _videoFamilyHighBytes = new System.Collections.Generic.HashSet<byte>();
+
+        /// <summary>
+        /// Tracks RenderBuilders the WMC server primed via
+        /// <c>VideoPool_Draw</c> (MS-RRSP2 §2.2.4.13.1, msgid=0). When a
+        /// later <c>Visual_SetContent</c> binds one of these RBs to a
+        /// Visual, that Visual IS the on-screen target of the video pool
+        /// — the PiP destination we've been hunting for. The Visual's
+        /// pos+size at the time of binding give us the absolute rectangle.
+        /// </summary>
+        private sealed class VideoDrawBinding {
+            public uint  PoolHandle;
+            public int   VideoUid;
+            public float DstX, DstY, DstW, DstH;
+        }
+        private readonly System.Collections.Generic.Dictionary<uint, VideoDrawBinding>
+            _videoDrawByRb = new System.Collections.Generic.Dictionary<uint, VideoDrawBinding>();
+
+        private bool IsVideoFamilyHandle(uint handle) {
+            if (_videoFamilyHighBytes.Count == 0) return false;
+            return _videoFamilyHighBytes.Contains((byte)(handle >> 24));
+        }
+
+        /// <summary>
+        /// Try to add a handle's high byte to the video family. Returns
+        /// true if this is a NEW high byte (caller should log so we can
+        /// trace the family's growth in the splash log).
+        /// </summary>
+        private bool TryAddVideoFamilyHighByte(uint handle) {
+            byte hi = (byte)(handle >> 24);
+            return _videoFamilyHighBytes.Add(hi);
+        }
+
+        /// <summary>
+        /// Hex-dump the unread bytes from <paramref name="rdr"/> if the
+        /// subject is in the video family — appended to <paramref name="prefix"/>
+        /// with a [VFAM] marker. Used by every dispatcher's "unhandled"
+        /// default branch so the body of any message we silently drop
+        /// is captured for analysis.
+        /// </summary>
+        private void MaybeDumpVfamHex(uint subj, string prefix, SplashPayloadReader rdr) {
+            if (_dumper == null) return;
+            if (!IsVideoFamilyHandle(subj)) return;
+            _dumper.OnEvent($"    [VFAM] subj=0x{subj:X8} body={rdr.PeekRemainingHex(128)}");
+        }
+
         public SplashController(Logger logger, Dispatcher uiDispatcher, bool payloadBigEndian,
-                                Action<byte[]> sendBytes) {
+                                Action<byte[]> sendBytes, bool enableSplashAudio = true) {
             _logger          = logger;
             _uiDispatcher    = uiDispatcher ?? throw new ArgumentNullException(nameof(uiDispatcher));
             _payloadBigEndian = payloadBigEndian;
             _sendBytes       = sendBytes;
+            _enableSplashAudio = enableSplashAudio;
             _dumper          = SplashRawDumper.CreateFromEnv(logger);
 
             _wire.ServerHandshakeReceived += OnServerHandshake;
@@ -170,6 +718,19 @@ namespace SoftSled.Components.Splash {
             if (_host != null) {
                 _host.SizeChanged += HostSizeChanged;
             }
+        }
+
+        /// <summary>
+        /// Register a callback that receives <c>HostWindow_SetBackgroundColor</c>
+        /// (MS-RRSP2 §2.2.4.23.2) and <c>Window_SetBackgroundColor</c>
+        /// (§2.2.4.10.1) pushes. Wired by <see cref="Shell.ExtenderSessionControl"/>
+        /// to a Rectangle that sits at the very bottom of the WPF Grid so
+        /// the FFME video plane and the splash scene-graph naturally
+        /// composite over the background colour without any special
+        /// "transparent background during video" handling.
+        /// </summary>
+        public void SetBackgroundColorSink(Action<System.Windows.Media.Color> sink) {
+            _backgroundColorSink = sink;
         }
 
         private void HostSizeChanged(object sender, SizeChangedEventArgs e) {
@@ -193,12 +754,37 @@ namespace SoftSled.Components.Splash {
                 _playingAnimations.Clear();
                 _animClock.Reset(); // re-zero so the next session's StartTimeMs is 0
 
+                StopVideoRectPolling();   // drop the per-frame PiP rect hook
+                _videoBoundVisualHandle = 0;
+                _videoBoundLastRect = Rect.Empty;
+
                 _registry.Clear();
                 _host?.ClearAll();
                 _windowHandle    = 0;
                 _sceneRootHandle = 0;
                 _idContextApp    = 0;
                 _idContextRender = 0;
+                // Drop the dynamic-surface uid mapping — a fresh session
+                // re-issues DynamicSurfaceFactory_CreateXxxInstance for any
+                // surfaces it cares about. Leaving stale uids would cause
+                // the next session's DMCT OpenMedia lookup to resolve to
+                // a destroyed handle.
+                _dynamicSurfaceByUid.Clear();
+                _activeVideoInstanceCount = 0;
+                _videoFamilyHighBytes.Clear();
+                _videoDrawByRb.Clear();
+                _currentPipVisualHandle = 0;
+                _currentPipFit          = 0;
+                _currentPipRect         = Rect.Empty;
+                // Binding-driven tracker reset — drop the bound-Visual
+                // handle so the next session's [PIP-BINDING] starts clean.
+                _videoBoundVisualHandle = 0;
+                _videoBoundPoolHandle   = 0;
+                _videoBoundUid          = 0;
+                _videoBoundLastRect     = Rect.Empty;
+                // PiP-candidate birth registry: drop everything so the
+                // next session starts with a clean lifespan record.
+                _pipCandidateBirths.Clear();
             }));
         }
 
@@ -238,6 +824,11 @@ namespace SoftSled.Components.Splash {
         private void OnShutdown(object s, EventArgs e) {
             _logger?.LogDebug("SPLASH: Shutdown command received");
             _dumper?.OnEvent("Shutdown");
+            // Release the NAudio output device(s) — otherwise a fresh
+            // session would accumulate a stale player whose disposed
+            // outputs still hold device handles.
+            try { _soundPlayer?.Dispose(); } catch { }
+            _soundPlayer = null;
         }
 
         private void OnParseError(object s, SplashWireReassembler.ParseErrorArgs e) {
@@ -293,6 +884,24 @@ namespace SoftSled.Components.Splash {
                 _dumper?.OnEvent("Batch too short (no header)");
                 return;
             }
+            // Outermost batch resets the StartAnimation timestamp latch
+            // (see comment on _batchAnimStartLatched). Nested batches
+            // (from predicate-buffer reentry) share the outer batch's
+            // latched value so cross-batch animations stay lock-step
+            // with each other too — predicate buffers carry setup for
+            // the outer batch's Plays and conceptually belong to the
+            // same logical wire event.
+            bool isOutermostBatch = (_batchDepth == 0);
+            if (isOutermostBatch) _batchAnimStartLatched = false;
+            _batchDepth++;
+            try {
+                DispatchBatchInner(payload);
+            } finally {
+                _batchDepth--;
+            }
+        }
+
+        private void DispatchBatchInner(byte[] payload) {
             // MessageBatch header (8 B, BE per framing rules).
             uint idPredicateBuffer = ReadU32BE(payload, 0);
             uint uOffsetFirstEntry = ReadU32BE(payload, 4);
@@ -375,6 +984,17 @@ namespace SoftSled.Components.Splash {
             string subjClass = ClassifySubject(subj);
             _dumper?.OnEvent($"Msg subj=0x{subj:X8} ({subjClass}) msgid={msgid} size={size}");
 
+            // Loud trace for any message targeting a registered
+            // dynamic-surface / video-pool handle. WMC's PiP-position
+            // signal — if it exists in the splash protocol — would
+            // arrive as a message on one of these handles; surfacing
+            // every such message at INFO level makes the signal
+            // immediately visible in the captured log (task #178).
+            if (IsDynamicSurfaceOrPool(subj)) {
+                _logger?.LogInfo($"[splash] [DYNAMIC-{(IsDynamicSurface(subj) ? "SURFACE" : "POOL")}-TRACE] " +
+                                 $"subj=0x{subj:X8} class={subjClass} msgid={msgid} size={size}");
+            }
+
             // Slice 1 dispatch — keyed on the *subject's* class, not on
             // the raw msgid number. This is a deliberate simplification:
             // many msgids are unique per class so we can dispatch by
@@ -421,7 +1041,21 @@ namespace SoftSled.Components.Splash {
                     case SplashClassKind.Gradient:      DispatchGradient(obj as Objects.SplashGradient, rdr, msgid); break;
                     case SplashClassKind.DataBuffer:    DispatchDataBuffer(obj, rdr, msgid); break;
                     case SplashClassKind.XAudSoundDevice: DispatchXAudSoundDevice(rdr, msgid); break;
+                    case SplashClassKind.SoundBuffer:   DispatchSoundBuffer(obj as Objects.SplashSoundBuffer, rdr, msgid); break;
+                    case SplashClassKind.Sound:         DispatchSound(obj as Objects.SplashSound, rdr, msgid); break;
+                    case SplashClassKind.SoundDevice:   DispatchSoundDeviceLegacy(rdr, msgid); break;
                     case SplashClassKind.WaitCursor:    DispatchWaitCursor(obj as Objects.SplashWaitCursor, rdr, msgid); break;
+                    // Group 3 — defensive dispatchers. Spec-coded but
+                    // without observed wire activity in our test logs;
+                    // decode known fields cleanly so any future wire
+                    // activity is named rather than "Unknown msgid=N".
+                    case SplashClassKind.Line:                  DispatchLine(obj, rdr, msgid); break;
+                    case SplashClassKind.VideoPool:             DispatchVideoPool(obj, rdr, msgid); break;
+                    case SplashClassKind.ContextRelay:          DispatchContextRelay(obj, rdr, msgid); break;
+                    case SplashClassKind.DynamicSurfaceFactory: DispatchDynamicSurfaceFactory(obj, rdr, msgid); break;
+                    case SplashClassKind.ParticleSystem:        DispatchParticleSystem(obj, rdr, msgid); break;
+                    case SplashClassKind.InputRouter:           DispatchInputRouter(obj, rdr, msgid); break;
+                    case SplashClassKind.DesktopManager:        DispatchDesktopManager(obj, rdr, msgid); break;
                     default:
                         _dumper?.OnEvent($"  {obj.Kind} msgid={msgid} (unhandled, rem={rdr.Remaining})");
                         break;
@@ -578,6 +1212,38 @@ namespace SoftSled.Components.Splash {
                             && destroyed is Objects.SplashAnimation destroyedAnim) {
                             _playingAnimations.Remove(destroyedAnim);
                         }
+                        // Drop any video-pool-draw binding tracked on
+                        // this handle — RBs are short-lived (one per
+                        // frame on the busy WMC shell) so leaving stale
+                        // entries would falsely tag the next reused
+                        // handle as a video target.
+                        _videoDrawByRb.Remove(idObject);
+                        // PiP-candidate lifespan trace: if this destroyed
+                        // handle was previously fingerprinted as a PiP
+                        // candidate, report its lifespan. Short lifespans
+                        // (≤3s) flag selector-ring behaviour; long
+                        // lifespans (≥10s) flag genuine placeholder
+                        // behaviour. This is the highest-value signal for
+                        // separating the two.
+                        ReportPipCandidateDeath(idObject);
+                        // If the destroyed object is the Visual we
+                        // currently lock the video element onto, reset
+                        // the PiP state and broadcast an empty rect so
+                        // the SurfaceRouter can revert to full canvas.
+                        if (_currentPipVisualHandle != 0 && idObject == _currentPipVisualHandle) {
+                            _dumper?.OnEvent($"    [PIP-UNLOCK] vis=0x{idObject:X8} destroyed — reverting routing");
+                            _logger?.LogInfo($"[splash] PIP-UNLOCK vis=0x{idObject:X8} destroyed — reverting video to full canvas");
+                            _currentPipVisualHandle = 0;
+                            _currentPipFit          = 0;
+                            _currentPipRect         = Rect.Empty;
+                            RaiseVideoPipCandidateChanged(0, Rect.Empty);
+                        }
+                        // Same for the binding-driven tracker: if the
+                        // destroyed object is the video-bound Visual, clear
+                        // it so the next [PIP-BINDING] captures fresh.
+                        if (_videoBoundVisualHandle != 0 && idObject == _videoBoundVisualHandle) {
+                            ClearVideoBoundVisual("Visual destroyed");
+                        }
                         _registry.RemoveObject(idObject);
                     }
                     break;
@@ -693,6 +1359,12 @@ namespace SoftSled.Components.Splash {
                         uint argb = rdr.ReadU32();
                         var c = ArgbU32ToColor(argb);
                         w.SetBackgroundColor(c);
+                        // Window_SetBackgroundColor is functionally a
+                        // duplicate of HostWindow_SetBackgroundColor —
+                        // both target the host's background plane.
+                        // Route through the same sink so the layered
+                        // Rectangle picks up the colour.
+                        _backgroundColorSink?.Invoke(c);
                         _dumper?.OnEvent($"  Window_SetBackgroundColor argb=0x{argb:X8} -> A={c.A} R={c.R} G={c.G} B={c.B}");
                     }
                     break;
@@ -732,7 +1404,13 @@ namespace SoftSled.Components.Splash {
                     if (rdr.Remaining >= 4) {
                         uint argb = rdr.ReadU32();
                         var c = ArgbU32ToColor(argb);
-                        _host?.SetBackground(c);
+                        // Push to the layered background sink rather than
+                        // painting inside splashHost — this keeps the FFME
+                        // video plane and the splash scene graph cleanly
+                        // separated in z-order (background → video →
+                        // scene-graph). See the sink wiring comment in
+                        // ExtenderSessionControl.xaml.cs.
+                        _backgroundColorSink?.Invoke(c);
                         _dumper?.OnEvent($"  HostWindow_SetBackgroundColor argb=0x{argb:X8} -> A={c.A} R={c.R} G={c.G} B={c.B}");
                     }
                     break;
@@ -829,10 +1507,34 @@ namespace SoftSled.Components.Splash {
                         uint nMask  = rdr.ReadU32();
                         v.ApplyDataBits(nValue, nMask);
                         _dumper?.OnEvent($"  Visual_ChangeDataBits value=0x{nValue:X8} mask=0x{nMask:X8} -> bits=0x{v.DataBits:X8}");
+                        // During active video, emit DataBits changes that
+                        // touch bits OUTSIDE the well-known WMC envelope
+                        // (row-container/active-flag at 0x00700077, plus
+                        // bits 0..6 of the low byte ⇒ 0x00700077). The
+                        // tightening matters: the 0x00700077 mask trips
+                        // the high nibble of byte 2 (0x70) which would
+                        // otherwise yield false positives on every row
+                        // toggle. After this filter, any line that DOES
+                        // appear is genuinely a novel bit pattern that
+                        // could be a "this Visual is the video plane"
+                        // marker — the original motivation for the trace.
+                        if (_activeVideoInstanceCount > 0) {
+                            const uint knownMask = 0x00700077u;
+                            if (((nValue | nMask) & ~knownMask) != 0) {
+                                _dumper?.OnEvent($"    [BITS-DURING-VIDEO] subj=0x{v.Handle:X8} value=0x{nValue:X8} mask=0x{nMask:X8} NOVEL-BITS-OUTSIDE-0x00700077");
+                            }
+                        }
                     }
                     break;
                 case 1: // Visual_ChangeParent (visNewParent, visSibling, nOrder)
                     if (rdr.Remaining >= 12) {
+                        uint subjectH = v.Handle; // captured for log clarity
+                        // Capture the OLD parent before ChangeParent moves
+                        // the visual — we re-evaluate viewport-clip on
+                        // both the previous and new parents so a child
+                        // moving out of a virtual-strip viewport drops
+                        // the clip on the old viewport.
+                        SplashVisual oldParent = v.Parent;
                         uint parentH  = rdr.ReadU32();
                         uint siblingH = rdr.ReadU32();
                         int  nOrder   = rdr.ReadI32();
@@ -840,16 +1542,50 @@ namespace SoftSled.Components.Splash {
                         SplashVisual sibling = ResolveOrCreateVisual(siblingH);
                         var order = (SplashVisual.ChildOrder)nOrder;
                         v.ChangeParent(parent, order, sibling);
-                        _dumper?.OnEvent($"  Visual_ChangeParent parent=0x{parentH:X8} sibling=0x{siblingH:X8} order={order}");
+                        // After re-parenting, both the old and new parent
+                        // may need to flip their viewport-clip status.
+                        oldParent?.EvaluateViewportClip();
+                        parent?.EvaluateViewportClip();
+                        // Re-apply Layer ordering: if Visual_SetLayer
+                        // arrived BEFORE this ChangeParent (WMC sometimes
+                        // sets state then attaches), our nOrder insertion
+                        // above ignored the layer. ApplyLayer re-sorts
+                        // this visual amongst its new siblings.
+                        v.ApplyLayer();
+                        // Video-family auto-expansion: if we're parenting
+                        // into the video tree, the child inherits the
+                        // family even if it lives in a different handle
+                        // namespace (rare but possible). Lets us catch
+                        // any video-subtree Visual whose high byte we
+                        // didn't pre-seed at CreateVideoInstance time.
+                        if (parentH != 0 && IsVideoFamilyHandle(parentH) && !IsVideoFamilyHandle(subjectH)) {
+                            if (TryAddVideoFamilyHighByte(subjectH)) {
+                                _dumper?.OnEvent($"    [VFAM+ inherited] child 0x{subjectH:X8} hi=0x{(byte)(subjectH >> 24):X2} added via parent 0x{parentH:X8}");
+                            }
+                        }
+                        _dumper?.OnEvent($"  Visual_ChangeParent subj=0x{subjectH:X8} parent=0x{parentH:X8} sibling=0x{siblingH:X8} order={order}");
+                        // Re-parenting the video Visual (or any of its
+                        // ancestors) relocates it on screen even with no
+                        // SetPosition/SetSize. WMC's "transition to fullscreen
+                        // playback" sequence is conjectured to work this
+                        // way — reparent the video Visual from the row-tile
+                        // container into the fullscreen scene root.
+                        RefreshVideoRectIfRelevant(v, "ChangeParent");
                     } else if (rdr.Remaining >= 4) {
                         // Some encoders omit the sibling/order trailing fields.
+                        uint subjectH = v.Handle;
+                        SplashVisual oldParentShort = v.Parent;
                         uint parentH = rdr.ReadU32();
                         SplashVisual parent = null;
                         if (parentH != 0 && _registry.TryGetObject(parentH, out var p) && p is SplashVisual pv) {
                             parent = pv;
                         }
                         v.ChangeParent(parent);
-                        _dumper?.OnEvent($"  Visual_ChangeParent parent=0x{parentH:X8} (short)");
+                        oldParentShort?.EvaluateViewportClip();
+                        parent?.EvaluateViewportClip();
+                        v.ApplyLayer();
+                        _dumper?.OnEvent($"  Visual_ChangeParent subj=0x{subjectH:X8} parent=0x{parentH:X8} (short)");
+                        RefreshVideoRectIfRelevant(v, "ChangeParent(short)");
                     }
                     break;
                 case 4: // Visual_SetColor (ARGB u32)
@@ -864,11 +1600,27 @@ namespace SoftSled.Components.Splash {
                         v.AlphaByte = rdr.ReadByte();
                         v.ApplyAlpha();
                         _dumper?.OnEvent($"  Visual_SetAlpha={v.AlphaByte}");
+                        // SetAlpha on the video Visual or an ancestor —
+                        // emit a [VIDEO-TOUCH] line so we can correlate
+                        // alpha changes with the lifecycle. WMC could
+                        // fade the video out during transitions; if so
+                        // we want to mirror that in our renderer.
+                        if (_videoBoundVisualHandle != 0
+                            && IsVideoBoundOrAncestor(v, out int alphaHops, out _)) {
+                            _dumper?.OnEvent($"    [VIDEO-ALPHA] touched=0x{v.Handle:X8} hops={alphaHops} alpha={v.AlphaByte} (bound=0x{_videoBoundVisualHandle:X8})");
+                        }
                     }
                     break;
-                case 8: // Visual_SetLayer
+                case 8: // Visual_SetLayer (layer: u32)
+                        // Spec §2.2.4.6.6 — re-positions this visual in
+                        // its parent's z-order. Lower Layer = back,
+                        // higher = front. WMC ships this 580+ times per
+                        // session (mostly 0/1 toggles) so silently
+                        // logging it loses real ordering.
                     if (rdr.Remaining >= 4) {
                         uint layer = rdr.ReadU32();
+                        v.Layer = layer;
+                        v.ApplyLayer();
                         _dumper?.OnEvent($"  Visual_SetLayer={layer}");
                     }
                     break;
@@ -891,6 +1643,7 @@ namespace SoftSled.Components.Splash {
                         v.RotAngleDeg = rad * (180f / (float)Math.PI);
                         v.ApplyTransform();
                         _dumper?.OnEvent($"  Visual_SetRotation axis=({v.RotAxisX:F2},{v.RotAxisY:F2},{v.RotAxisZ:F2}) angleRad={rad:F4} angleDeg={v.RotAngleDeg:F1}");
+                        RefreshVideoRectIfRelevant(v, "SetRotation");
                     }
                     break;
                 case 12: // Visual_SetCenterPointScale (Vector3) — fraction of Size
@@ -898,6 +1651,7 @@ namespace SoftSled.Components.Splash {
                         rdr.ReadVector3(out v.CenterScaleX, out v.CenterScaleY, out v.CenterScaleZ);
                         v.ApplyTransform();
                         _dumper?.OnEvent($"  Visual_SetCenterPointScale=({v.CenterScaleX:F2},{v.CenterScaleY:F2},{v.CenterScaleZ:F2})");
+                        RefreshVideoRectIfRelevant(v, "SetCenterPointScale");
                     }
                     break;
                 case 14: // Visual_SetCenterPointOffset (Vector3) — absolute pixel offset
@@ -905,6 +1659,7 @@ namespace SoftSled.Components.Splash {
                         rdr.ReadVector3(out v.CenterOffsetX, out v.CenterOffsetY, out v.CenterOffsetZ);
                         v.ApplyTransform();
                         _dumper?.OnEvent($"  Visual_SetCenterPointOffset=({v.CenterOffsetX:F2},{v.CenterOffsetY:F2},{v.CenterOffsetZ:F2})");
+                        RefreshVideoRectIfRelevant(v, "SetCenterPointOffset");
                     }
                     break;
                 case 16: // Visual_SetScale (Vector3)
@@ -912,6 +1667,7 @@ namespace SoftSled.Components.Splash {
                         rdr.ReadVector3(out v.ScaleX, out v.ScaleY, out v.ScaleZ);
                         v.ApplyTransform();
                         _dumper?.OnEvent($"  Visual_SetScale=({v.ScaleX:F2},{v.ScaleY:F2},{v.ScaleZ:F2})");
+                        RefreshVideoRectIfRelevant(v, "SetScale");
                     }
                     break;
                 case 18: // Visual_SetSize (Vector3)
@@ -929,6 +1685,17 @@ namespace SoftSled.Components.Splash {
                         // outside the row. Re-apply on every SetSize so
                         // the clip tracks the live size.
                         v.ApplyBoundsClip();
+                        // Viewport-clip evaluation: this visual's own Size
+                        // changed — re-check whether any child overshoots
+                        // by the 3× threshold and update the viewport flag.
+                        v.EvaluateViewportClip();
+                        // And re-check the PARENT — this visual's Size
+                        // change might have just promoted/demoted it as
+                        // a virtual-strip child relative to its parent's
+                        // size (the 1001×16,777,220-inside-1001×733 case
+                        // fires here on the strip's SetSize, asking the
+                        // viewport to flip its clip on).
+                        v.Parent?.EvaluateViewportClip();
                         v.ApplyAlpha();
                         // If THIS visual is the declared HostWindow scene root,
                         // its size dictates the logical canvas the shell composes
@@ -938,6 +1705,14 @@ namespace SoftSled.Components.Splash {
                             _host?.SetLogicalCanvasSize(v.SizeX, v.SizeY);
                         }
                         _dumper?.OnEvent($"  Visual_SetSize=({v.SizeX:F2},{v.SizeY:F2},{v.SizeZ:F2})");
+                        // Diagnostic: when WMC sizes a popup-sized
+                        // container (≥800 px in either dimension and the
+                        // size just changed), dump its visual subtree so
+                        // we can correlate handles → parent chain → bits
+                        // → size. Throttled per-handle so a sub-pixel
+                        // animation on a popup-sized visual doesn't spam.
+                        MaybeDumpPopupSubtree(v);
+                        RefreshVideoRectIfRelevant(v, "SetSize");
                     }
                     break;
                 case 20: // Visual_SetPosition (Vector3)
@@ -951,6 +1726,7 @@ namespace SoftSled.Components.Splash {
                         // direct children.
                         ReapplyAlphaToDescendants(v, depth: 3);
                         _dumper?.OnEvent($"  Visual_SetPosition=({v.PosX:F2},{v.PosY:F2},{v.PosZ:F2})");
+                        RefreshVideoRectIfRelevant(v, "SetPosition");
                     }
                     break;
                 case 23: // Visual_SetContent (rbContent: u32 handle)
@@ -977,18 +1753,281 @@ namespace SoftSled.Components.Splash {
                             }
                             int opsBefore = rb.OpCount;
                             v.SetContentFromRenderBuilder(rb, pendingGradients);
-                            // Still track last-bound visual so the
-                            // diagnostic logging can correlate gradients
-                            // with their preceding content bind even
-                            // though application uses next-bound.
+                            // Track last-bound visual for diagnostic
+                            // logging (LB-chain fitness output) — and
+                            // for any future binding model that wants to
+                            // know which visual just consumed this RB.
                             rb.LastBoundVisualHandle = v.Handle;
                             if (pendingGradients != null && pendingGradients.Count > 0) {
                                 var lastG = pendingGradients[pendingGradients.Count - 1];
                                 string stopSummary = lastG == null ? "null" :
                                     $"{lastG.Stops.Count} stops, dir={lastG.Direction}";
-                                _dumper?.OnEvent($"  Visual_SetContent vis=0x{v.Handle:X8} size=({v.SizeX:F0}x{v.SizeY:F0}) rb=0x{rbH:X8} ops={opsBefore} gradients={pendingGradients.Count} lastGrad=0x{lastG?.Handle ?? 0:X8} [{stopSummary}]");
+                                // Fit score for the chosen NEXT-BOUND target — pairs
+                                // with the LB / LB.P / LB.PP fit lines emitted at
+                                // Gradient_Draw time so a popup-repro log can show
+                                // which candidate the wire actually meant.
+                                double nbFit = lastG?.FitScoreForVisual(v.SizeX, v.SizeY) ?? 0.0;
+                                _dumper?.OnEvent($"  Visual_SetContent vis=0x{v.Handle:X8} size=({v.SizeX:F0}x{v.SizeY:F0}) rb=0x{rbH:X8} ops={opsBefore} gradients={pendingGradients.Count} lastGrad=0x{lastG?.Handle ?? 0:X8} [{stopSummary}] NB.fit={nbFit:F2}");
                             } else {
                                 _dumper?.OnEvent($"  Visual_SetContent vis=0x{v.Handle:X8} size=({v.SizeX:F0}x{v.SizeY:F0}) rb=0x{rbH:X8} ops={opsBefore}");
+                            }
+                            // ---- THE definitive PiP-target signal ----
+                            // If this RB was primed by VideoPool_Draw
+                            // (msgid=0 on a video pool, captured in
+                            // _videoDrawByRb), then this very Visual_-
+                            // SetContent is what binds the video pool's
+                            // draw to its on-screen Visual. The Visual's
+                            // current SizeX/SizeY/PosX/PosY are the
+                            // absolute PiP rectangle. This is what the
+                            // SurfaceRouter needs to position the video
+                            // element correctly. (Combined with the
+                            // VideoPool_Draw dst rect: dst=(0,0,-1,-1)
+                            // means "stretch to visual" → Visual rect
+                            // is the destination; explicit dst means
+                            // the rect is anchored at the Visual's pos
+                            // but sized by dst.)
+                            if (_videoDrawByRb.TryGetValue(rbH, out var vd)) {
+                                uint parentH = v.Parent?.Handle ?? 0u;
+                                _dumper?.OnEvent($"    [PIP-BINDING] video uid={vd.VideoUid} pool=0x{vd.PoolHandle:X8} rb=0x{rbH:X8} " +
+                                                 $"-> vis=0x{v.Handle:X8} size=({v.SizeX:F0}x{v.SizeY:F0}) pos=({v.PosX:F0},{v.PosY:F0}) " +
+                                                 $"poolDst=({vd.DstX:F1},{vd.DstY:F1},{vd.DstW:F1},{vd.DstH:F1}) parent=0x{parentH:X8}");
+                                _logger?.LogInfo($"[splash] PIP-BINDING video uid={vd.VideoUid} -> vis=0x{v.Handle:X8} " +
+                                                 $"size=({v.SizeX:F0}x{v.SizeY:F0}) pos=({v.PosX:F0},{v.PosY:F0}) " +
+                                                 $"— this is where to position the video element");
+                                // ---- Definitive capture ----
+                                // Hand the bound Visual to the geometry
+                                // tracker. From now on every SetSize /
+                                // SetPosition / SetScale on this Visual
+                                // or any ancestor refreshes the video
+                                // rect and routes through SurfaceRouter.
+                                SetVideoBoundVisual(v, vd.PoolHandle, vd.VideoUid);
+                            }
+                            // ---- PiP-candidate sniffer (fallback) ----
+                            // During active video playback, any Visual that
+                            // gets a gradient-only fill (no Surface_Draw or
+                            // other ops) in a 16:9 aspect window is a
+                            // likely PiP-placeholder. Used when there's
+                            // no [PIP-BINDING] — i.e. WMC didn't issue a
+                            // VideoPool_Draw and instead relies on the
+                            // Xbox hardware-overlay convention. From our
+                            // captured corpus, the PiP placeholder is a
+                            // 256×144 gradient-only Visual at pos=(1,36)
+                            // inside a 258×180 tile wrapper.
+                            //
+                            // Three tiers of evidence:
+                            //   tier 1 — broad: any gradient-only Visual
+                            //     in 1.55..1.95 aspect, size ≥ 96×54.
+                            //     LOGGED as [PIP-CAND] for diagnosis.
+                            //   tier 2 — strict: aspect 1.70..1.85 (true
+                            //     16:9), vertical gradient (placeholders
+                            //     fade vertically), LB.fit ≥ 0.85 (the
+                            //     gradient's reference axis matches the
+                            //     visual's size — i.e. the gradient was
+                            //     SIZED for this rectangle). LOCKED as
+                            //     the routing target via VideoPipCandidateChanged.
+                            if (_activeVideoInstanceCount > 0
+                                && opsBefore == 0
+                                && pendingGradients != null
+                                && pendingGradients.Count > 0
+                                && v.SizeX > 96 && v.SizeY > 54) {
+                                double aspect = v.SizeX / (double)v.SizeY;
+                                // Widened 2026-06-12: the Recorded-TV video-window
+                                // placeholder is a ~4:3 gradient-only box (user-
+                                // confirmed: empty box, lighter-blue gradient,
+                                // bottom-left), NOT 16:9 — the old 1.55 lower bound
+                                // rejected it outright. Accept 4:3..16:9 so it gets
+                                // logged. DIAGNOSTIC ONLY — nothing routes off this.
+                                if (aspect >= 1.15 && aspect <= 1.95) {
+                                    uint parentH = v.Parent?.Handle ?? 0u;
+                                    var  lastGrad = pendingGradients[pendingGradients.Count - 1];
+                                    double lbFit  = lastGrad?.FitScoreForVisual(v.SizeX, v.SizeY) ?? 0.0;
+                                    bool   isVert = lastGrad?.Direction == Objects.SplashGradient.Orientation.Vertical;
+                                    uint   gradColor = lastGrad?.ColorMask ?? 0u;
+                                    int    gradStops = lastGrad?.Stops.Count ?? 0;
+                                    string aspectClass = (aspect >= 1.2 && aspect <= 1.45) ? "4:3"
+                                                       : (aspect >= 1.6 && aspect <= 1.95) ? "16:9" : "other";
+
+                                    // Compute absolute rect for diagnosis
+                                    // — wanted even on non-locking
+                                    // candidates so we can see where
+                                    // false-positive shapes land (e.g.
+                                    // Home screen carousel tiles vs the
+                                    // real Recorded TV PiP).
+                                    bool gotAbs = TryComputeVisualAbsoluteRect(v, out var candAbs);
+                                    string absTag = gotAbs
+                                        ? $"abs=({candAbs.X:F0},{candAbs.Y:F0} {candAbs.Width:F0}x{candAbs.Height:F0})"
+                                        : "abs=unresolved";
+
+                                    _dumper?.OnEvent($"    [PIP-CAND] vis=0x{v.Handle:X8} size=({v.SizeX:F0}x{v.SizeY:F0}) pos=({v.PosX:F0},{v.PosY:F0}) " +
+                                                     $"{absTag} aspect={aspect:F2}({aspectClass}) bits=0x{v.DataBits:X8} alpha={v.AlphaByte} parent=0x{parentH:X8} " +
+                                                     $"grad=({(isVert ? "V" : "H")},color=0x{gradColor:X8},stops={gradStops},LBfit={lbFit:F2}) vfam={(IsVideoFamilyHandle(v.Handle) ? "Y" : "N")}");
+
+                                    // ---- Strict locking ----
+                                    //
+                                    // The captured corpus has lots of
+                                    // PiP-shaped Visuals during active
+                                    // video — both on the Recorded TV
+                                    // screen (real PiP) AND on the Home
+                                    // screen (gallery carousel tiles).
+                                    // Geometry alone (256×144 Vertical-
+                                    // gradient) can't tell them apart;
+                                    // we also need POSITION.
+                                    //
+                                    // Discriminating signal (revised after
+                                    // the May 30 log capture showed the
+                                    // real PiP placeholder ships a
+                                    // HORIZONTAL gradient, not vertical —
+                                    // the earlier "vertical only" filter
+                                    // was rejecting the actual signal):
+                                    //   * Gradient direction is now
+                                    //     informational only (logged but
+                                    //     not gated).  The 258×145 16:9
+                                    //     visual at (288,502) — true PiP
+                                    //     slot — uses a horizontal
+                                    //     gradient.
+                                    //   * aspect 1.76..1.80 — true 16:9
+                                    //     (1.7778). Rejects the 256×148
+                                    //     metadata strip (1.73) seen at
+                                    //     the same pos=(1,36) within
+                                    //     Recent-media tiles.
+                                    //   * AlphaByte > 0 — visible
+                                    //   * Absolute rect in bottom-left
+                                    //     quadrant (Y ≥ host*0.5, X <
+                                    //     host*0.5) — Xbox PiP is anchored
+                                    //     at the bottom strip's left side
+                                    //     in every captured screen.
+                                    //   * Absolute rect is mostly
+                                    //     on-screen (rejects the
+                                    //     scrolled-away carousel tiles
+                                    //     whose chain-walked Y can land
+                                    //     at negative values like -94).
+                                    //
+                                    // First strict match per video
+                                    // session wins; subsequent rebinds
+                                    // of the same shape are ignored
+                                    // until the current PIP visual is
+                                    // destroyed or video closes.
+                                    bool aspectIs16x9 = aspect >= 1.76 && aspect <= 1.80;
+                                    bool inBottomLeft = false;
+                                    bool mostlyOnScreen = false;
+                                    bool inCorner = false;
+                                    double hostW = 0, hostH = 0;
+                                    if (_host != null) {
+                                        if (_uiDispatcher.CheckAccess()) {
+                                            hostW = _host.ActualWidth;
+                                            hostH = _host.ActualHeight;
+                                        } else {
+                                            double capW = 0, capH = 0;
+                                            try {
+                                                _uiDispatcher.Invoke(new Action(() => {
+                                                    capW = _host.ActualWidth;
+                                                    capH = _host.ActualHeight;
+                                                }));
+                                            } catch { }
+                                            hostW = capW;
+                                            hostH = capH;
+                                        }
+                                    }
+                                    // Geometry tests use the RENDERED rect (WPF
+                                    // coords via TransformToAncestor) vs the host's
+                                    // WPF size — consistent units. The earlier code
+                                    // mixed LOGICAL abs coords with WPF host dims,
+                                    // which mis-judged "on-screen" and made the
+                                    // suspect fire on a carousel tile.
+                                    bool gotRen = TryComputeVisualRenderedRect(v, out var renRect);
+                                    if (gotRen && hostW > 0 && hostH > 0) {
+                                        inBottomLeft = renRect.Y >= hostH * 0.5 && renRect.X < hostW * 0.5;
+                                        mostlyOnScreen = renRect.Y >= -8 && renRect.Y + renRect.Height <= hostH + 8
+                                                         && renRect.X >= -8 && renRect.X + renRect.Width <= hostW + 8;
+                                        // PiP video window = extreme bottom-LEFT
+                                        // CORNER, left portion only — excludes the
+                                        // recorded-TV carousel tiles (~17% from the
+                                        // left, arriving as a stepping column).
+                                        inCorner = renRect.X < hostW * 0.10 && renRect.Y > hostH * 0.55
+                                                   && renRect.X + renRect.Width < hostW * 0.55;
+                                    }
+                                    // Strict criteria: aspect 16:9, visible,
+                                    // in bottom-left quadrant of screen,
+                                    // and mostly on-screen. Direction-of-
+                                    // gradient is INFORMATIONAL only — May 30
+                                    // capture confirmed the WMC PiP slot
+                                    // ships a horizontal gradient (the
+                                    // 258×145 at abs=(288,502)). Earlier
+                                    // "vertical only" filter rejected that
+                                    // exact match.
+                                    bool isStrict = aspectIs16x9 && v.AlphaByte > 0
+                                                    && inBottomLeft && mostlyOnScreen;
+                                    // ---- DIAGNOSTIC-ONLY for now ----
+                                    // The May 30 second capture proved the
+                                    // 258×145 H-gradient at (288,502) that
+                                    // we'd been locking onto is the home-
+                                    // screen SELECTOR RING, not the PiP
+                                    // placeholder. The selector gets
+                                    // destroyed and re-created on every
+                                    // navigation (lifespan 7–16 s in the
+                                    // capture, three distinct handles in
+                                    // a single video session) — diagnostic
+                                    // signature of a transient highlight,
+                                    // not a stable container.
+                                    //
+                                    // Until we identify a positive marker
+                                    // for the real PiP, the heuristic
+                                    // refrains from binding — it logs as
+                                    // [PIP-STRICT-MATCH] so we can see what
+                                    // it WOULD have locked, plus the
+                                    // candidate's lifespan via the new
+                                    // CandidateBirth tracking below. The
+                                    // SurfaceRouter no longer receives a
+                                    // VideoPipCandidateChanged event on
+                                    // heuristic match, which means no
+                                    // mis-routing during this exploratory
+                                    // phase.
+                                    // Track lifespan for EVERY gradient-only
+                                    // candidate now (not just 16:9). The real
+                                    // video window lives the whole time on the
+                                    // page and never receives image content, so
+                                    // its [PIP-CAND-DEATH] lifespan will read
+                                    // LONG-LIVED — distinguishing it from transient
+                                    // tiles / selector rings.
+                                    RecordPipCandidateBirth(v.Handle, gotAbs ? candAbs : Rect.Empty, isVert, lbFit, aspect);
+
+                                    // ---- PiP video-window BIND (2026-06-12) ----
+                                    // The persistent PiP container is a gradient-only
+                                    // box in the bottom-left CORNER. Binding it routes
+                                    // the video plane to its rendered rect
+                                    // (SetVideoBoundVisual -> RefreshVideoRectIfRelevant
+                                    // -> VideoPipCandidateChanged -> SurfaceRouter).
+                                    // Binds only when nothing is bound yet; the bound
+                                    // visual's destroy (Broker_DestroyObject) reverts
+                                    // to fullscreen. Always active (no config gate).
+                                    if (_videoBoundVisualHandle == 0
+                                        && v.AlphaByte > 0
+                                        && aspect >= 1.2 && aspect <= 1.95
+                                        && gotRen && inCorner
+                                        && renRect.Width > 48 && renRect.Height > 32) {
+                                        _logger?.LogInfo($"[splash] PIP-CORNER-BIND vis=0x{v.Handle:X8} " +
+                                                         $"rendered=({renRect.X:F0},{renRect.Y:F0} {renRect.Width:F0}x{renRect.Height:F0}) " +
+                                                         $"aspect={aspect:F2} grad=0x{gradColor:X8} -- routing video to bottom-left PiP window");
+                                        _dumper?.OnEvent($"      [PIP-CORNER-BIND] vis=0x{v.Handle:X8} rendered=({renRect.X:F0},{renRect.Y:F0} {renRect.Width:F0}x{renRect.Height:F0})");
+                                        SetVideoBoundVisual(v, 0u, 0);
+                                    } else if (aspectClass == "4:3" && v.AlphaByte > 0
+                                               && inBottomLeft && mostlyOnScreen && gotRen) {
+                                        // Broader bottom-left 4:3 box that ISN'T the
+                                        // corner — log as diagnostic so we can tune
+                                        // the filter if the bind ever misses.
+                                        _logger?.LogInfo($"[splash] PIP-4x3-SUSPECT vis=0x{v.Handle:X8} " +
+                                                         $"rendered=({renRect.X:F0},{renRect.Y:F0} {renRect.Width:F0}x{renRect.Height:F0}) " +
+                                                         $"aspect={aspect:F2} grad=0x{gradColor:X8} inCorner={inCorner} " +
+                                                         $"parent=0x{parentH:X8} vfam={(IsVideoFamilyHandle(v.Handle) ? "Y" : "N")} (diagnostic)");
+                                        _dumper?.OnEvent($"      [PIP-4x3-SUSPECT] vis=0x{v.Handle:X8} rendered=({renRect.X:F0},{renRect.Y:F0} {renRect.Width:F0}x{renRect.Height:F0}) grad=0x{gradColor:X8} inCorner={inCorner}");
+                                    }
+
+                                    // Legacy 16:9 strict-match diagnostic (kept for
+                                    // continuity with the earlier captures).
+                                    if (isStrict) {
+                                        _dumper?.OnEvent($"      [PIP-STRICT-MATCH] vis=0x{v.Handle:X8} absRect=({candAbs.X:F0},{candAbs.Y:F0} {candAbs.Width:F0}x{candAbs.Height:F0}) aspect={aspect:F2} grad={(isVert ? "V" : "H")} host=({hostW:F0}x{hostH:F0}) (NO LOCK — diagnostic)");
+                                    }
+                                }
                             }
                         } else {
                             _dumper?.OnEvent($"  Visual_SetContent rb=0x{rbH:X8} (not found)");
@@ -1001,6 +2040,18 @@ namespace SoftSled.Components.Splash {
                         v.Visible = fVisible != 0;
                         v.ApplyVisibility();
                         _dumper?.OnEvent($"  Visual_SetVisible={v.Visible}");
+                        // Visibility change on the video Visual or an
+                        // ancestor: emphatically log — this is one of the
+                        // few ways WMC could "hide the video" without
+                        // sending position/size. The SurfaceRouter doesn't
+                        // currently key on visibility but the signal is
+                        // strong evidence about how WMC orchestrates
+                        // transitions.
+                        if (_videoBoundVisualHandle != 0
+                            && IsVideoBoundOrAncestor(v, out int visHops, out _)) {
+                            _dumper?.OnEvent($"    [VIDEO-VISIBLE] touched=0x{v.Handle:X8} hops={visHops} visible={v.Visible} (bound=0x{_videoBoundVisualHandle:X8})");
+                            _logger?.LogInfo($"[splash] VIDEO-VISIBLE change visible={v.Visible} on 0x{v.Handle:X8} (bound=0x{_videoBoundVisualHandle:X8})");
+                        }
                     }
                     break;
                 case 26: // Visual_Create — second-stage init, no body
@@ -1008,6 +2059,20 @@ namespace SoftSled.Components.Splash {
                     break;
                 default:
                     _dumper?.OnEvent($"  Visual msgid={msgid} (unhandled, rem={rdr.Remaining})");
+                    MaybeDumpVfamHex(v.Handle, "  Visual", rdr);
+                    // ---- Fishing pass ----
+                    // Any unhandled msgid landing on the video-bound Visual
+                    // or one of its ancestors is high-signal: it's a wire
+                    // message the spec might document that we silently
+                    // drop. Dump the full body in hex so we can match it
+                    // against MS-RRSP2 §2.2.4.6.x post-mortem. The wider
+                    // ancestor reach matters — WMC could push transforms
+                    // onto a group container above the video.
+                    if (_videoBoundVisualHandle != 0
+                        && IsVideoBoundOrAncestor(v, out int unhHops, out _)) {
+                        _dumper?.OnEvent($"    [VIDEO-VISUAL-UNHANDLED] touched=0x{v.Handle:X8} hops={unhHops} bound=0x{_videoBoundVisualHandle:X8} msgid={msgid} body={rdr.PeekRemainingHex(128)}");
+                        _logger?.LogInfo($"[splash] VIDEO-VISUAL-UNHANDLED msgid={msgid} on 0x{v.Handle:X8} (hops={unhHops} to bound=0x{_videoBoundVisualHandle:X8}) — possible PiP geometry signal");
+                    }
                     break;
             }
         }
@@ -1135,6 +2200,18 @@ namespace SoftSled.Components.Splash {
                         // wire surface is similar (Allocate, CreateSurface,
                         // SetEmptyColor, ...). The pixel-format choice is
                         // YUV but we don't yet handle dynamic video.
+                        //
+                        // NOTE: we DON'T extend the video family from
+                        // this call. The first XeDevice_CreateVideoPool
+                        // at session startup creates a *generic surface
+                        // pool* (handle 0x0100001E in the captured corpus)
+                        // for the initial DynamicSurfaceFactory_Create-
+                        // SurfaceInstance (uid=1) — not a video instance.
+                        // Tagging its 0x01 high byte as "video family"
+                        // would mark the entire root-window UI namespace
+                        // as video and ruin the diagnostic signal. Only
+                        // CreateVideoInstance (DSF msgid=1) extends the
+                        // family.
                         if (!_registry.TryGetObject(idNewVideo, out var existing2) || !(existing2 is Objects.SplashSurfacePool)) {
                             _registry.RegisterObject(idNewVideo,
                                 new Objects.SplashSurfacePool(idNewVideo, "VideoPool"));
@@ -1164,7 +2241,14 @@ namespace SoftSled.Components.Splash {
                     _dumper?.OnEvent($"  XeDevice_Create (post-init)");
                     break;
                 default:
-                    _dumper?.OnEvent($"  Device/XeDevice msgid={msgid} (unhandled, rem={rdr.Remaining})");
+                    // Device/XeDevice/Dx9Device default — always include
+                    // the body hex during active video. A "video plane
+                    // location" hint, if one exists, could plausibly ride
+                    // on a Device-class msgid we don't yet recognise.
+                    string deviceBodyHex = (_activeVideoInstanceCount > 0)
+                        ? $" body={rdr.PeekRemainingHex(128)}"
+                        : "";
+                    _dumper?.OnEvent($"  Device/XeDevice msgid={msgid} (unhandled, rem={rdr.Remaining}){deviceBodyHex}");
                     break;
             }
         }
@@ -1191,6 +2275,88 @@ namespace SoftSled.Components.Splash {
         //                                              per spec; SetPriority is 6
         private void DispatchSurfacePool(Objects.SplashSurfacePool pool, SplashPayloadReader rdr, int msgid) {
             switch (msgid) {
+                // ---- THE PiP-POSITIONING SIGNAL ----
+                // MS-RRSP2 §2.2.4.12.1 (SurfacePool_Draw) and §2.2.4.13.1
+                // (VideoPool_Draw) are the SAME msgid (0) with the SAME body
+                // shape: rb (4 B) + rcfSrcPxl (16 B) + rcfDestPxl (16 B).
+                //
+                // VideoPool's distinction from SurfacePool is purely class-
+                // level — both pools are registered as SplashSurfacePool in
+                // our object registry (see DispatchDevice case 7) because
+                // the wire surface is identical. The destination rectangle
+                // (rcfDestPxl) is THE message that tells the client where
+                // to composite the pool's content — including the PiP
+                // location for a video pool. We've been silently dropping
+                // every one of these.
+                //
+                // The companion Visual_SetContent that binds the
+                // SurfacePool_Draw's RenderBuilder to a Visual completes
+                // the binding: pool → RB → Visual → screen rectangle.
+                case 0:
+                    if (rdr.Remaining >= 4 + 16 + 16) {
+                        uint  rbH = rdr.ReadU32();
+                        float sx  = rdr.ReadFloat32(), sy = rdr.ReadFloat32(),
+                              sw  = rdr.ReadFloat32(), sh = rdr.ReadFloat32();
+                        float dx  = rdr.ReadFloat32(), dy = rdr.ReadFloat32(),
+                              dw  = rdr.ReadFloat32(), dh = rdr.ReadFloat32();
+                        bool isVideoPool = false;
+                        int  videoUid = -1;
+                        foreach (var kv in _dynamicSurfaceByUid) {
+                            if (kv.Value.PoolHandle == pool.Handle && kv.Value.IsVideo) {
+                                isVideoPool = true;
+                                videoUid = kv.Key;
+                                break;
+                            }
+                        }
+                        string tag = isVideoPool ? $" [VIDEO-POOL uid={videoUid}]" : "";
+                        _dumper?.OnEvent($"  SurfacePool_Draw pool=0x{pool.Handle:X8} rb=0x{rbH:X8} " +
+                                         $"src=({sx:F1},{sy:F1},{sw:F1},{sh:F1}) " +
+                                         $"dst=({dx:F1},{dy:F1},{dw:F1},{dh:F1}){tag}");
+                        // The destination rect IS the PiP signal — when
+                        // it's a video pool draw, surface this to the
+                        // app log too so SurfaceRouter can react. The
+                        // dest rect may be relative to the bound Visual
+                        // (dw=-1, dh=-1 in the Surface_Draw idiom means
+                        // "stretch to visual"); a Visual_SetContent on
+                        // the same RB pins the absolute rectangle.
+                        if (isVideoPool) {
+                            _logger?.LogInfo($"[splash] VideoPool_Draw uid={videoUid} pool=0x{pool.Handle:X8} " +
+                                             $"rb=0x{rbH:X8} dst=({dx:F1},{dy:F1},{dw:F1},{dh:F1}) " +
+                                             $"— PiP destination rectangle (spec §2.2.4.13.1)");
+                            // Remember so the next Visual_SetContent that
+                            // binds this RB to a Visual can name THIS as
+                            // the [PIP-BINDING] target — that Visual's
+                            // SizeX/SizeY/PosX/PosY then give the absolute
+                            // PiP rectangle, completing pool → RB → Visual.
+                            _videoDrawByRb[rbH] = new VideoDrawBinding {
+                                PoolHandle = pool.Handle,
+                                VideoUid   = videoUid,
+                                DstX = dx, DstY = dy, DstW = dw, DstH = dh,
+                            };
+                        }
+                    }
+                    break;
+                // VideoPool-only msgids (3.1.5.14.7/.8). These live on the
+                // same dispatcher because the pool is registered as
+                // SurfacePool in our registry. They never appear on a
+                // regular surface pool; if they do here, the pool was a
+                // video pool all along.
+                case 9: // VideoPool_SetContentOverscan (§2.2.4.13.7) —
+                        // body: flContentOverscan (float)
+                    if (rdr.Remaining >= 4) {
+                        float overscanPct = rdr.ReadFloat32();
+                        _dumper?.OnEvent($"  VideoPool_SetContentOverscan pool=0x{pool.Handle:X8} overscan={overscanPct:F3}");
+                    }
+                    break;
+                case 10: // VideoPool_NotifyVideoSizeChanged (§2.2.4.13.8) —
+                         // body: sizeTargetPxl (Size 8 B) — empirically ints
+                         // on the WMC wire like every other Size field.
+                    if (rdr.Remaining >= 8) {
+                        int tw = rdr.ReadI32();
+                        int th = rdr.ReadI32();
+                        _dumper?.OnEvent($"  VideoPool_NotifyVideoSizeChanged pool=0x{pool.Handle:X8} size=({tw}×{th})");
+                    }
+                    break;
                 case 1: // SurfacePool_CreateSurface — pre-register a Surface under this pool
                     if (rdr.Remaining >= 4) {
                         uint idNewSurface = rdr.ReadU32();
@@ -1242,8 +2408,36 @@ namespace SoftSled.Components.Splash {
                     break;
                 default:
                     _dumper?.OnEvent($"  SurfacePool msgid={msgid} (unhandled, rem={rdr.Remaining})");
+                    MaybeDumpVfamHex(pool.Handle, "  SurfacePool", rdr);
                     break;
             }
+        }
+
+        /// <summary>
+        /// True if <paramref name="surfaceHandle"/> is the display surface
+        /// (<c>surScene</c>) of an active VIDEO DynamicSurface instance — and
+        /// returns its DMCT uid + content pool. This is the crux of WMC's
+        /// pull-style video placement: CreateVideoInstance (§2.2.4.18.2) names
+        /// <c>surScene</c> as "the surface to display", and WMC places it on
+        /// screen through the ordinary scene-graph path — a <c>Surface_Draw</c>
+        /// of <c>surScene</c> into a RenderBuilder, which a later
+        /// <c>Visual_SetContent</c> binds to a Visual whose composed transform
+        /// IS the video's screen rectangle. (WMC does NOT issue VideoPool_Draw
+        /// for this — the pool only holds content; the surface is what gets
+        /// drawn.) Matching here lets us prime <see cref="_videoDrawByRb"/> off
+        /// the message WMC actually sends.
+        /// </summary>
+        private bool TryGetVideoSurfaceUid(uint surfaceHandle, out int uid, out uint poolHandle) {
+            foreach (var kv in _dynamicSurfaceByUid) {
+                if (kv.Value.IsVideo && kv.Value.SurfaceHandle == surfaceHandle) {
+                    uid = kv.Key;
+                    poolHandle = kv.Value.PoolHandle;
+                    return true;
+                }
+            }
+            uid = -1;
+            poolHandle = 0;
+            return false;
         }
 
         // msgid table for Surface (spec section 2.2.4.11):
@@ -1285,6 +2479,20 @@ namespace SoftSled.Components.Splash {
                                 gridDst, gridStretch);
                         }
                         _dumper?.OnEvent($"  Surface_DrawGrid surf=0x{surf.Handle:X8} rb=0x{rbH:X8} grid=({x1},{x2},{y1},{y2}) dst=({dx},{dy},{dw},{dh})");
+
+                        // Same video-placement priming as Surface_Draw, in case
+                        // WMC ever draws the video surScene 9-slice. Unlikely
+                        // for a video surface, but harmless and self-documenting.
+                        if (TryGetVideoSurfaceUid(surf.Handle, out int vGridUid, out uint vGridPool)) {
+                            _videoDrawByRb[rbH] = new VideoDrawBinding {
+                                PoolHandle = vGridPool,
+                                VideoUid   = vGridUid,
+                                DstX = dx, DstY = dy, DstW = dw, DstH = dh,
+                            };
+                            _logger?.LogInfo($"[splash] VIDEO-SURFACE-DRAWGRID uid={vGridUid} surScene=0x{surf.Handle:X8} " +
+                                             $"rb=0x{rbH:X8} dst=({dx:F1},{dy:F1},{dw:F1},{dh:F1})");
+                            _dumper?.OnEvent($"    [VIDEO-SURFACE-DRAWGRID] uid={vGridUid} surScene=0x{surf.Handle:X8} rb=0x{rbH:X8}");
+                        }
                     }
                     break;
                 case 1: // Surface_Draw
@@ -1333,6 +2541,29 @@ namespace SoftSled.Components.Splash {
                             _dumper?.OnEvent($"    (surface 0x{surf.Handle:X8} has bitmap but ContentValid=false — Surface_Draw skipped)");
                         }
                         _dumper?.OnEvent($"  Surface_Draw surf=0x{surf.Handle:X8} rb=0x{rbH:X8} src=({sx},{sy},{sw},{sh}) dst=({dx},{dy},{dw},{dh}) noStretch={fNeverStretch} stretchToVisual={stretchToVisual}");
+
+                        // ---- THE missing video-placement signal ----
+                        // If this surface is a video instance's surScene, THIS
+                        // Surface_Draw is what places the video on screen (the
+                        // surface has no CPU bitmap — it's live video on our D3D
+                        // plane — so the render above is correctly skipped; we
+                        // only need the rb→Visual binding). Prime _videoDrawByRb
+                        // exactly like the VideoPool_Draw path so the following
+                        // Visual_SetContent fires [PIP-BINDING] and hands the
+                        // bound Visual (its composed transform = the video rect)
+                        // to the geometry tracker → SurfaceRouter.
+                        if (TryGetVideoSurfaceUid(surf.Handle, out int vSurfUid, out uint vSurfPool)) {
+                            _videoDrawByRb[rbH] = new VideoDrawBinding {
+                                PoolHandle = vSurfPool,
+                                VideoUid   = vSurfUid,
+                                DstX = dx, DstY = dy, DstW = dw, DstH = dh,
+                            };
+                            _logger?.LogInfo($"[splash] VIDEO-SURFACE-DRAW uid={vSurfUid} surScene=0x{surf.Handle:X8} " +
+                                             $"rb=0x{rbH:X8} dst=({dx:F1},{dy:F1},{dw:F1},{dh:F1}) " +
+                                             $"— video placement via Surface_Draw; next Visual_SetContent pins the rect");
+                            _dumper?.OnEvent($"    [VIDEO-SURFACE-DRAW] uid={vSurfUid} surScene=0x{surf.Handle:X8} " +
+                                             $"rb=0x{rbH:X8} dst=({dx:F1},{dy:F1},{dw:F1},{dh:F1})");
+                        }
                     }
                     break;
                 case 2: // Surface_RemapContainer
@@ -1341,14 +2572,101 @@ namespace SoftSled.Components.Splash {
                         _dumper?.OnEvent($"  Surface_RemapContainer surf=0x{surf.Handle:X8} newPool=0x{surf.PoolHandle:X8}");
                     }
                     break;
+                case 3: // Surface_RemapLocation — spec §2.2.4.11.4
+                        // Body: rcContentPxl (Rectangle 16 B = x,y,w,h as i32).
+                        // Likely candidate for "tell the device where this
+                        // surface lives on screen" — log at INFO so we
+                        // can see if WMC fires it on the video surface
+                        // during a PiP transition (task #178).
+                    if (rdr.Remaining >= 16) {
+                        int rx = rdr.ReadI32();
+                        int ry = rdr.ReadI32();
+                        int rw = rdr.ReadI32();
+                        int rh = rdr.ReadI32();
+                        bool isDyn = IsDynamicSurface(surf.Handle);
+                        string tag = isDyn ? " [DYNAMIC-SURFACE]" : "";
+                        _logger?.LogInfo($"[splash] Surface_RemapLocation surf=0x{surf.Handle:X8}{tag} -> rect=({rx},{ry},{rw},{rh})");
+                        _dumper?.OnEvent($"  Surface_RemapLocation surf=0x{surf.Handle:X8} rect=({rx},{ry},{rw},{rh})");
+                        // If this is the dynamic video surface, notify
+                        // SurfaceRouter via the screen-rect change event
+                        // so FFME repositions.
+                        if (isDyn) {
+                            RaiseSurfaceScreenRectChanged();
+                        }
+                    }
+                    break;
                 case 4: // Surface_MarkContentValid
                     surf.ContentValid = true;
                     _dumper?.OnEvent($"  Surface_MarkContentValid surf=0x{surf.Handle:X8}");
                     break;
+                case 5: // Surface_Clear — spec §2.2.4.11.6
+                        // Body: rcContentPxl (16 B) + clrFill (u32 ARGB)
+                    if (rdr.Remaining >= 20) {
+                        int rx = rdr.ReadI32();
+                        int ry = rdr.ReadI32();
+                        int rw = rdr.ReadI32();
+                        int rh = rdr.ReadI32();
+                        uint argb = rdr.ReadU32();
+                        _dumper?.OnEvent($"  Surface_Clear surf=0x{surf.Handle:X8} rect=({rx},{ry},{rw},{rh}) argb=0x{argb:X8}");
+                    }
+                    break;
+                case 6: // Surface_SetRotation — spec §2.2.4.11.7
+                        // Body: dwRotation (u32)
+                    if (rdr.Remaining >= 4) {
+                        uint rot = rdr.ReadU32();
+                        _dumper?.OnEvent($"  Surface_SetRotation surf=0x{surf.Handle:X8} rotation={rot}");
+                    }
+                    break;
+                case 7: // Surface_SetStorageSize — spec §2.2.4.11.8
+                        // Body: sizeStoragePxl (Size 8 B)
+                    if (rdr.Remaining >= 8) {
+                        int sw = rdr.ReadI32();
+                        int sh = rdr.ReadI32();
+                        bool isDyn = IsDynamicSurface(surf.Handle);
+                        string tag = isDyn ? " [DYNAMIC-SURFACE]" : "";
+                        _logger?.LogInfo($"[splash] Surface_SetStorageSize surf=0x{surf.Handle:X8}{tag} -> {sw}x{sh}");
+                        _dumper?.OnEvent($"  Surface_SetStorageSize surf=0x{surf.Handle:X8} size=({sw}×{sh})");
+                    }
+                    break;
                 default:
+                    // Promote any unhandled msgid on a dynamic surface
+                    // (video) to INFO so we don't miss a PiP-position
+                    // signal hidden behind a quiet "msgid=N unhandled"
+                    // dump line.
+                    if (IsDynamicSurface(surf.Handle)) {
+                        _logger?.LogInfo($"[splash] Surface msgid={msgid} on DYNAMIC-SURFACE 0x{surf.Handle:X8} (unhandled, rem={rdr.Remaining}) — possible PiP-position signal?");
+                    }
                     _dumper?.OnEvent($"  Surface msgid={msgid} (unhandled, rem={rdr.Remaining})");
+                    MaybeDumpVfamHex(surf.Handle, "  Surface", rdr);
                     break;
             }
+        }
+
+        /// <summary>
+        /// Returns <c>true</c> when the given splash object handle is
+        /// currently registered as a DynamicSurfaceFactory video / surface
+        /// instance — i.e. it's a candidate target for "WMC just told us
+        /// the video should move" signals.
+        /// </summary>
+        private bool IsDynamicSurface(uint handle) {
+            foreach (var kv in _dynamicSurfaceByUid) {
+                if (kv.Value.SurfaceHandle == handle) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Returns <c>true</c> when the given handle is either a registered
+        /// dynamic-surface instance OR its owning pool — used by the
+        /// dispatch-entry trace to catch ANY wire activity on the
+        /// video-related handles.
+        /// </summary>
+        private bool IsDynamicSurfaceOrPool(uint handle) {
+            foreach (var kv in _dynamicSurfaceByUid) {
+                if (kv.Value.SurfaceHandle == handle) return true;
+                if (kv.Value.PoolHandle    == handle) return true;
+            }
+            return false;
         }
 
         // msgid table for Rasterizer (spec section 2.2.4.14):
@@ -1792,6 +3110,33 @@ namespace SoftSled.Components.Splash {
                         _dumper?.OnEvent($"  Animation[{anim.Kind}]_Stop anim=0x{anim.Handle:X8} (no cmd)");
                     }
                     break;
+                case 25: // Animation msgid=0x19 (25) — NOT in any published
+                         // MS-RRSP2 revision (verified across all 8 PDFs
+                         // 2013-2017; msgid catalogue tops out at 0x23 and
+                         // 0x19 is one of the gap slots, alongside 0x1C
+                         // 0x1F 0x20 0x22). Treating it as "Stop with the
+                         // stored SetStopCommand" — by analogy with
+                         // msgid=24 (Stop with explicit cmd) but without
+                         // a body — produced visually correct results
+                         // across the home / EPG / settings / Recorded TV
+                         // / FORMULA 1 flows. Wire pattern is unambiguous:
+                         //   * Body=0 (no cmd override)
+                         //   * Fires terminally — anims receiving msgid=25
+                         //     never get Played again
+                         //   * Fires when WMC starts NEW animations on the
+                         //     same target visual (so the old animation
+                         //     needs to be torn down)
+                         // Confirmed NOT the cause of a navigation-transition
+                         // bleed-through fragment we suspected earlier
+                         // (verified by toggling this to a no-op and
+                         // re-running; the fragment was still present,
+                         // which turned out to be a Movies-row tile-strip
+                         // mask leak — a "y" descender from "movie library"
+                         // poking past the row OpacityMask. Tracked
+                         // separately.).
+                    StopAnimation(anim);
+                    _dumper?.OnEvent($"  Animation[{anim.Kind}]_StopDefault anim=0x{anim.Handle:X8} cmd={anim.StopCommand} (msgid=25, no body)");
+                    break;
                 case 26: // Play
                     StartAnimation(anim);
                     _dumper?.OnEvent($"  Animation[{anim.Kind}]_Play anim=0x{anim.Handle:X8} target=0x{anim.TargetVisual:X8} kfs={anim.KeyframeCount}");
@@ -1879,7 +3224,32 @@ namespace SoftSled.Components.Splash {
         private void StartAnimation(Objects.SplashAnimation anim) {
             EnsureAnimTickHooked();
             if (!_animClock.IsRunning) _animClock.Start();
-            anim.StartTimeMs = _animClock.Elapsed.TotalMilliseconds;
+            // Batch-synchronised StartTimeMs: every Play inside a single
+            // DispatchBatch shares ONE timestamp, captured at the first
+            // Play within that batch. Animations the wire intended to
+            // start in lock-step (e.g. all show-anims for a single
+            // navigation: row-A fade-out + row-B slide-in + spinner
+            // fade-in + tile rotation) therefore see identical progress
+            // values on every tick. Without this, each anim captured
+            // its own _animClock.Elapsed at message-dispatch time and
+            // they drifted by a few ms — visible as a Movies-row "y"
+            // descender peeking past the new-row mask during the brief
+            // window where the fade-out lagged the slide-in.
+            //
+            // Outside a batch (e.g. anim chained from OnComplete on the
+            // anim tick), use the fresh clock — those are standalone
+            // chains, not co-scheduled wire events.
+            double startMs;
+            if (_batchDepth > 0) {
+                if (!_batchAnimStartLatched) {
+                    _batchAnimStartMs = _animClock.Elapsed.TotalMilliseconds;
+                    _batchAnimStartLatched = true;
+                }
+                startMs = _batchAnimStartMs;
+            } else {
+                startMs = _animClock.Elapsed.TotalMilliseconds;
+            }
+            anim.StartTimeMs = startMs;
             anim.CompletedRepeats = 0;
             anim.Playing = true;
             anim.OnCompleteFired = false; // re-arm for this Play cycle
@@ -2287,6 +3657,26 @@ namespace SoftSled.Components.Splash {
         /// matching property and re-issue the WPF transform.
         /// </summary>
         private void ApplyAnimationValue(Objects.SplashAnimation a, Objects.AnimationKeyframe kf) {
+            // Gradient-targeted animations: the AnimationManager_Build*
+            // call's viSubject was a Gradient handle, not a Visual.
+            // Resolve as Gradient, mutate the property, and rebuild every
+            // visual's OpacityMask that's currently using this gradient.
+            // The selection-sweep highlight in MCE menus (e.g. the
+            // "Recorder Storage" focus animation) uses this pattern —
+            // without it the gradient stays at its initial Offset (0)
+            // and the U-shape mask sits permanently centred over text.
+            if (a.Kind == Objects.AnimationKind.GradientOffset
+                || a.Kind == Objects.AnimationKind.GradientColorMask) {
+                if (!_registry.TryGetObject(a.TargetVisual, out var gObj)
+                    || !(gObj is Objects.SplashGradient g)) return;
+                if (a.Kind == Objects.AnimationKind.GradientOffset) {
+                    g.Offset = kf.FloatValue;
+                } else {
+                    g.ColorMask = kf.ArgbValue;
+                }
+                RebuildMasksForGradient(g.Handle);
+                return;
+            }
             if (!_registry.TryGetObject(a.TargetVisual, out var obj) || !(obj is SplashVisual v)) return;
             switch (a.Kind) {
                 case Objects.AnimationKind.Position:
@@ -2334,8 +3724,32 @@ namespace SoftSled.Components.Splash {
                     // We don't yet apply v.Color to rendering (no tint
                     // pipeline). Logged for visibility.
                     break;
-                // GradientColorMask/GradientOffset deferred — slice 5.3 if
-                // the MCE shell actually animates gradients.
+                // GradientColorMask / GradientOffset are handled at the
+                // top of this method (they target a Gradient, not a
+                // Visual) — see the gradient-animation early-return.
+            }
+        }
+
+        /// <summary>
+        /// Look up every <see cref="SplashVisual"/> whose OpacityMask
+        /// is currently sourced from the given gradient, and rebuild the
+        /// WPF brush against the visual's current Size. Called whenever
+        /// the gradient's Offset / ColorMask changes — either statically
+        /// (Gradient_SetOffset / Gradient_SetColorMask messages) or
+        /// dynamically (Animation[GradientOffset] / [GradientColorMask]
+        /// tick).
+        ///
+        /// Cheap in practice: the registry is small (a few thousand
+        /// objects), the per-visual cost is one WPF LinearGradientBrush
+        /// allocation which is then frozen, and gradient mutations are
+        /// rare relative to per-frame redraws.
+        /// </summary>
+        private void RebuildMasksForGradient(uint gradHandle) {
+            if (!_registry.TryGetObject(gradHandle, out var gObj)
+                || !(gObj is Objects.SplashGradient g)) return;
+            foreach (var v in _registry.EnumerateVisualsWithGradient(gradHandle)) {
+                if (v.SizeX <= 0 || v.SizeY <= 0) continue;
+                v.DrawingVisual.OpacityMask = g.BuildOpacityMask(v.SizeX, v.SizeY);
             }
         }
 
@@ -2450,23 +3864,39 @@ namespace SoftSled.Components.Splash {
         //   7 = SetColorMask       (clrMask u32 ARGB)
         //   9 = SetOrientation     (dir i32, 0=Horizontal / 1=Vertical)
         //
-        // Implementation: Push/Pop/Draw all attach this gradient to the
-        // target RenderBuilder's `PendingGradients` queue. The next
+        // Implementation — NEXT-BOUND model:
+        // Push/Pop/Draw attach this gradient to the target
+        // RenderBuilder's `PendingGradients` queue. The next
         // Visual_SetContent that consumes the RB picks up the queue and
         // builds a WPF LinearGradientBrush from the gradient stops to use
         // as the visual's OpacityMask. This is the spec's "soft fade
         // clipping" hook — the only built-in clipping mechanism in
         // MS-RRSP2 (Visual has no SetClip message).
+        //
+        // NEXT-BOUND was chosen empirically because it gives correct
+        // results for the home-row tile-window masks and the EPG
+        // right-side bounding gradient (both cases where the "next"
+        // visual is the container whose subtree needs masking). It does
+        // not always reach the right target for raised popup row
+        // containers — known issue, tracked separately. A naive
+        // "apply to both LAST-BOUND and NEXT-BOUND" workaround was
+        // tried and reverted because LAST-BOUND apply broke the home
+        // strip (single-item rows) and the EPG bound (gradient to
+        // nothing); the LAST-BOUND visual is frequently a content tile
+        // whose mask sizing doesn't match the wire-supplied gradient
+        // stops. The right fix likely involves walking the parent chain
+        // to a container size that matches the gradient's coordinate
+        // span — left for follow-up.
         private void DispatchGradient(Objects.SplashGradient g, SplashPayloadReader rdr, int msgid) {
             if (g == null) {
                 _dumper?.OnEvent($"  Gradient msgid={msgid} (no instance — ignored, rem={rdr.Remaining})");
                 return;
             }
             switch (msgid) {
-                case 0: // Pop — for our current next-bound model this is
-                        // a no-op; the queue is consumed by the next
-                        // SetContent, so popping before that just shrinks
-                        // the queue. Logged only.
+                case 0: // Pop — for the NEXT-BOUND model this just shrinks
+                        // the pending-queue (the queue is consumed by the
+                        // next SetContent so popping before that drops
+                        // the gradient unobtrusively).
                     if (rdr.Remaining >= 4) {
                         uint rbH = rdr.ReadU32();
                         if (_registry.TryGetObject(rbH, out var rbObj) && rbObj is SplashRenderBuilder rb) {
@@ -2480,7 +3910,22 @@ namespace SoftSled.Components.Splash {
                     if (rdr.Remaining >= 4) {
                         uint rbH = rdr.ReadU32();
                         if (_registry.TryGetObject(rbH, out var rbObj) && rbObj is SplashRenderBuilder rb) {
+                            // NEXT-BOUND queue: the next Visual_SetContent
+                            // on this RB consumes the queue and applies
+                            // the most recent gradient as that visual's
+                            // OpacityMask. Empirically correct for the
+                            // home-row tile-window masks, EPG bound, and
+                            // most title overlays. Popup row containment
+                            // is a known open issue tracked separately
+                            // — the items still escape because the
+                            // gradient's intended target isn't picked up
+                            // by either LB-chain walk or NEXT-BOUND.
                             rb.PendingGradients.Add(g.Handle);
+                            // Diagnostic only — log the gradient's
+                            // effective pixel span and fitness across
+                            // the LB ancestor chain. NEXT-BOUND fit is
+                            // logged at SetContent time as NB.fit.
+                            LogGradientFitness(rbH, rb, g, msgid);
                         }
                         _dumper?.OnEvent($"  Gradient_{(msgid==1?"Push":"Draw")} rb=0x{rbH:X8} grad=0x{g.Handle:X8} stops={g.Stops.Count} dir={g.Direction}");
                     }
@@ -2502,6 +3947,10 @@ namespace SoftSled.Components.Splash {
                     if (rdr.Remaining >= 4) {
                         float o = rdr.ReadFloat32();
                         g.Offset = o;
+                        // If the gradient was already bound as a mask on
+                        // any visual, rebuild — Offset shifts the stop
+                        // positions and changes which pixels are masked.
+                        RebuildMasksForGradient(g.Handle);
                         _dumper?.OnEvent($"  Gradient_SetOffset grad=0x{g.Handle:X8} off={o:F3}");
                     }
                     break;
@@ -2509,6 +3958,12 @@ namespace SoftSled.Components.Splash {
                     if (rdr.Remaining >= 4) {
                         uint argb = rdr.ReadU32();
                         g.ColorMask = argb;
+                        // ColorMask doesn't affect the current alpha-only
+                        // BuildOpacityMask output, but rebuild defensively
+                        // — if BuildOpacityMask ever starts honouring it
+                        // (e.g. for tinted overlays), the existing masks
+                        // would otherwise be stale until next SetContent.
+                        RebuildMasksForGradient(g.Handle);
                         _dumper?.OnEvent($"  Gradient_SetColorMask grad=0x{g.Handle:X8} argb=0x{argb:X8}");
                     }
                     break;
@@ -2528,29 +3983,187 @@ namespace SoftSled.Components.Splash {
         }
 
         /// <summary>
-        /// Apply (or clear, when <paramref name="isPop"/> is true) a gradient
-        /// as the WPF <c>OpacityMask</c> on the visual most recently bound
-        /// to RB <paramref name="rbHandle"/>. Used by <c>Gradient_Push</c> /
-        /// <c>Gradient_Draw</c> / <c>Gradient_Pop</c> — the wire ships these
-        /// AFTER the corresponding <c>Visual_SetContent</c> rather than
-        /// before, so the "target" is the just-bound visual rather than
-        /// the next one.
+        /// Best-fit gradient binder. At Gradient_Push/Draw time, walk the
+        /// last-bound visual's ancestor chain (LB → LB.P → LB.PP → …) and
+        /// apply the gradient as <c>OpacityMask</c> to the visual whose
+        /// <see cref="SplashGradient.FitScoreForVisual"/> is highest.
         ///
-        /// Silently no-ops if the RB has never been bound, or if the
-        /// most-recent target has since been destroyed.
+        /// <para><b>Why best-fit:</b> the wire pattern is invariant — WMC
+        /// ships <c>(Surface_Draw → Visual_SetContent vis=A → Gradient_Draw
+        /// → Visual_SetContent vis=B [ops=0])</c>. The gradient's stop
+        /// coordinates are sized for some specific visual in the
+        /// neighbourhood (sometimes vis A itself, sometimes vis A's
+        /// content panel parent, sometimes the eventual vis B container);
+        /// the fit-score directly measures how well the gradient's pixel
+        /// span maps onto each candidate's Size, so the highest-scoring
+        /// candidate is almost always the intended target.</para>
+        ///
+        /// <para>This unifies the previous three competing models —
+        /// LAST-BOUND, NEXT-BOUND, and per-context heuristics — into one
+        /// principled rule that the wire data directly validates.</para>
+        ///
+        /// <para>Silently no-ops if no candidate scores above
+        /// <see cref="kMinAcceptableFit"/>; that prevents a gradient
+        /// intended for a totally different visual (e.g. shipped between
+        /// unrelated subtrees) from accidentally masking whichever
+        /// container happens to be closest in the chain.</para>
         /// </summary>
         private void ApplyGradientToLastBound(uint rbHandle, Objects.SplashGradient g, bool isPop) {
             if (!_registry.TryGetObject(rbHandle, out var rbObj)
                 || !(rbObj is SplashRenderBuilder rb)
                 || rb.LastBoundVisualHandle == 0) return;
             if (!_registry.TryGetObject(rb.LastBoundVisualHandle, out var vObj)
-                || !(vObj is SplashVisual v)) return;
+                || !(vObj is SplashVisual lb)) return;
             if (isPop) {
-                v.DrawingVisual.OpacityMask = null;
+                // For pop, walk the chain and clear masks on every
+                // candidate that might have received this gradient.
+                // Cheaper: just clear LB and parents up to depth 8.
+                int popDepth = 0;
+                for (var p = lb; p != null && popDepth < 8; p = p.Parent, popDepth++) {
+                    p.DrawingVisual.OpacityMask = null;
+                }
                 return;
             }
-            var mask = g.BuildOpacityMask(v.SizeX, v.SizeY);
-            v.DrawingVisual.OpacityMask = mask;
+
+            // Walk LB → LB.P → … up to 8 levels and find the highest-fit
+            // candidate. Track size so we can size the mask correctly.
+            SplashVisual best = null;
+            double bestFit = -1;
+            int depth = 0;
+            for (var cand = lb; cand != null && depth < 8; cand = cand.Parent, depth++) {
+                if (cand.SizeX <= 0 || cand.SizeY <= 0) continue;
+                double fit = g.FitScoreForVisual(cand.SizeX, cand.SizeY);
+                if (fit > bestFit) { bestFit = fit; best = cand; }
+            }
+
+            if (best == null || bestFit < kMinAcceptableFit) {
+                _dumper?.OnEvent($"    GradApply grad=0x{g.Handle:X8} (no candidate above fit>={kMinAcceptableFit:F2}, bestFit={bestFit:F2})");
+                return;
+            }
+
+            var mask = g.BuildOpacityMask(best.SizeX, best.SizeY);
+            best.DrawingVisual.OpacityMask = mask;
+            _dumper?.OnEvent($"    GradApply grad=0x{g.Handle:X8} -> vis=0x{best.Handle:X8} size=({best.SizeX:F0}x{best.SizeY:F0}) fit={bestFit:F2}");
+        }
+
+        // Minimum FitScoreForVisual a candidate must achieve to receive
+        // the OpacityMask. Below this threshold, the gradient is
+        // considered too poorly aligned with any candidate to be
+        // confidently bound and is dropped (silently — the diagnostic
+        // log records the decision). 0.30 catches well-aligned edge
+        // fades and band-pass masks while rejecting strays.
+        private const double kMinAcceptableFit = 0.30;
+
+        /// <summary>
+        /// Diagnostic-only — emits one event-log line per Gradient_Push /
+        /// Gradient_Draw showing the gradient's effective pixel span and a
+        /// fitness score (0..1, higher = better fit) for each candidate
+        /// target visual. The "candidates" are the visual most recently
+        /// bound to this RB (LAST-BOUND), its parent, and its grandparent
+        /// — i.e. the path up from where the wire just rendered content.
+        ///
+        /// Output format (one line):
+        ///   GradFit grad=0x.. dir=H stops=N span=(min..max)
+        ///     LB     vis=0x.. size=(WxH) fit=0.93
+        ///     LB.P   vis=0x.. size=(WxH) fit=0.18
+        ///     LB.PP  vis=0x.. size=(WxH) fit=0.04
+        ///
+        /// Reading rule: the candidate with fit ≈ 1.0 is the visual whose
+        /// Size best matches the gradient's coordinate range — most
+        /// likely the intended mask target. The current NEXT-BOUND model
+        /// applies the gradient to whatever visual happens to consume the
+        /// RB next, regardless of fit; comparing the next-bound apply log
+        /// line against these LAST-BOUND fit scores reveals when the
+        /// chosen target is wrong.
+        /// </summary>
+        private void LogGradientFitness(uint rbHandle, SplashRenderBuilder rb,
+                                        Objects.SplashGradient g, int msgid) {
+            if (_dumper == null) return;
+            if (g.Stops.Count == 0) return;
+
+            // Resolve LAST-BOUND and walk the full ancestor chain up to
+            // 8 levels — enough to cross a typical popup body, dialog
+            // root, and scene root without flooding the log.
+            SplashVisual lbVis = null;
+            if (rb.LastBoundVisualHandle != 0
+                && _registry.TryGetObject(rb.LastBoundVisualHandle, out var lbObj)
+                && lbObj is SplashVisual v) {
+                lbVis = v;
+            }
+
+            // Compute span against LB's size if available, otherwise pick
+            // a 1×1 reference so the per-stop position values dominate.
+            double refW = lbVis?.SizeX ?? 1.0;
+            double refH = lbVis?.SizeY ?? 1.0;
+            g.GetEffectiveSpan(refW, refH, out double minPx, out double maxPx, out double axisLen);
+
+            _dumper.OnEvent($"  GradFit grad=0x{g.Handle:X8} dir={(g.Direction == Objects.SplashGradient.Orientation.Horizontal ? "H" : "V")} "
+                          + $"stops={g.Stops.Count} span=({minPx:F1}..{maxPx:F1}) ref_axisLen={axisLen:F1}");
+
+            // Walk the chain LB → LB.P → LB.PP → ... up to 8 levels and
+            // emit the candidate's size + bits + fit score. Stops at the
+            // first null Parent (scene root).
+            SplashVisual cand = lbVis;
+            int depth = 0;
+            while (cand != null && depth < 8) {
+                double fit = g.FitScoreForVisual(cand.SizeX, cand.SizeY);
+                string tag = depth == 0 ? "LB" : ("LB." + new string('P', depth));
+                _dumper.OnEvent($"    {tag,-12} vis=0x{cand.Handle:X8} size=({cand.SizeX:F0}x{cand.SizeY:F0}) "
+                              + $"pos=({cand.PosX:F0},{cand.PosY:F0}) bits=0x{cand.DataBits:X8} "
+                              + $"alpha={cand.AlphaByte} clip={(cand.DrawingVisual.Clip != null ? "Y" : "N")} "
+                              + $"fit={fit:F2}");
+                cand = cand.Parent;
+                depth++;
+            }
+            if (cand != null) {
+                _dumper.OnEvent("    ... (chain truncated at 8 levels)");
+            }
+        }
+
+        // Set of visuals we've already dumped subtrees for, so that
+        // animated SetSize on a popup-sized visual (e.g. the popup
+        // expand-in scale) doesn't dump the subtree on every frame.
+        // Cleared on session reset.
+        private readonly System.Collections.Generic.HashSet<uint> _dumpedSubtrees
+            = new System.Collections.Generic.HashSet<uint>();
+
+        /// <summary>
+        /// Diagnostic — if this visual is "popup-sized" (≥800 px in
+        /// either dimension), dump the full visual subtree starting at
+        /// THIS visual to the event log. Throttled per-handle so a popup
+        /// being scaled in an animation only dumps once.
+        /// </summary>
+        private void MaybeDumpPopupSubtree(SplashVisual v) {
+            if (_dumper == null || v == null) return;
+            if (v.SizeX < 800 && v.SizeY < 800) return;
+            if (!_dumpedSubtrees.Add(v.Handle)) return; // already dumped
+            _dumper.OnEvent($"  VTREE-root vis=0x{v.Handle:X8} size=({v.SizeX:F0}x{v.SizeY:F0}) bits=0x{v.DataBits:X8}");
+            DumpVisualSubtree(v, depth: 1, maxDepth: 12);
+        }
+
+        /// <summary>
+        /// Recursive walk of a visual's children, indented by depth.
+        /// Emits one event-log line per visual showing handle, size,
+        /// pos, bits, alpha, clip, child count. Stops at
+        /// <paramref name="maxDepth"/> to avoid runaway logs on deep
+        /// trees. Cycles are prevented by the WPF parent/child contract
+        /// (a visual can't be a child of two parents).
+        /// </summary>
+        private void DumpVisualSubtree(SplashVisual v, int depth, int maxDepth) {
+            if (v == null || depth > maxDepth) return;
+            string indent = new string(' ', depth * 2 + 4);
+            foreach (var child in v.Children) {
+                _dumper.OnEvent(
+                    $"{indent}vis=0x{child.Handle:X8} "
+                    + $"size=({child.SizeX:F0}x{child.SizeY:F0}) "
+                    + $"pos=({child.PosX:F0},{child.PosY:F0}) "
+                    + $"bits=0x{child.DataBits:X8} "
+                    + $"alpha={child.AlphaByte} "
+                    + $"vis={(child.Visible ? "Y" : "N")} "
+                    + $"clip={(child.DrawingVisual.Clip != null ? "Y" : "N")} "
+                    + $"children={child.Children.Count}");
+                DumpVisualSubtree(child, depth + 1, maxDepth);
+            }
         }
 
         // -------- DataBuffer (spec §2.2.4.1) --------
@@ -2573,29 +4186,32 @@ namespace SoftSled.Components.Splash {
         }
 
         // -------- XAudSoundDevice (spec §2.2.4.24) --------
-        // We don't render audio via splash (the AV pipeline handles that),
-        // but acknowledging keeps the event log clean.
+        // Drives the splash UI sound system. CreateSound and
+        // CreateSoundBuffer set up the playback objects; the actual
+        // playback path is in DispatchSound / DispatchSoundBuffer.
         //   0 = CreateSound        (idNewSound u32, soundBuffer u32) — body=8
         //   1 = CreateSoundBuffer  (idNewBuffer i32, info SoundHeader 22B, _priv_objcb u32, _priv_ctxcb u32)
         //   6 = Create             (post-init)
         private void DispatchXAudSoundDevice(SplashPayloadReader rdr, int msgid) {
             switch (msgid) {
-                case 0: // CreateSound
+                case 0: // CreateSound — binds a new Sound to an existing
+                        // SoundBuffer. The pairing must be captured here so
+                        // Sound_Play (which carries no buffer reference) can
+                        // resolve back to the source bytes.
                     if (rdr.Remaining >= 8) {
                         uint idNewSound = rdr.ReadU32();
                         uint sndBuf     = rdr.ReadU32();
-                        // Register the new sound so a later message on it
-                        // isn't an "unknown handle".
                         _registry.RegisterObject(idNewSound,
-                            new SplashGenericObject(idNewSound, SplashClassKind.Sound, "Sound"));
+                            new Objects.SplashSound(idNewSound, sndBuf, "Sound"));
                         _dumper?.OnEvent($"  XAudSoundDevice_CreateSound -> sound=0x{idNewSound:X8} buf=0x{sndBuf:X8}");
                     }
                     break;
-                case 1: // CreateSoundBuffer
+                case 1: // CreateSoundBuffer — empty buffer awaiting
+                        // SoundBuffer_LoadSoundData to populate its bytes.
                     if (rdr.Remaining >= 4) {
                         int idNewBuf = rdr.ReadI32();
                         _registry.RegisterObject((uint)idNewBuf,
-                            new SplashGenericObject((uint)idNewBuf, SplashClassKind.SoundBuffer, "SoundBuffer"));
+                            new Objects.SplashSoundBuffer((uint)idNewBuf, "SoundBuffer"));
                         _dumper?.OnEvent($"  XAudSoundDevice_CreateSoundBuffer -> buf=0x{idNewBuf:X8}");
                     }
                     break;
@@ -2606,6 +4222,88 @@ namespace SoftSled.Components.Splash {
                     _dumper?.OnEvent($"  XAudSoundDevice msgid={msgid} (unhandled, rem={rdr.Remaining})");
                     break;
             }
+        }
+
+        // -------- SoundBuffer (spec §2.2.4.19) --------
+        //   0 = LoadSoundData (dataBuffer u32) — references a DataBuffer
+        //       whose bytes become this SoundBuffer's payload. Spec body
+        //       is documented as 4 bytes (the dataBuffer ref) but the
+        //       wire ships 8 — the extra 4 are probably a format hint;
+        //       reading just the first u32 is sufficient.
+        private void DispatchSoundBuffer(Objects.SplashSoundBuffer sb, SplashPayloadReader rdr, int msgid) {
+            if (sb == null) {
+                _dumper?.OnEvent($"  SoundBuffer msgid={msgid} (no instance — ignored, rem={rdr.Remaining})");
+                return;
+            }
+            switch (msgid) {
+                case 0: // LoadSoundData
+                    if (rdr.Remaining >= 4) {
+                        uint dataBufferH = rdr.ReadU32();
+                        sb.DataBufferHandle = dataBufferH;
+                        if (_registry.TryGetObject(dataBufferH, out var dbObj)
+                            && dbObj is Objects.SplashDataBuffer db) {
+                            sb.Bytes = db.Bytes;
+                            _dumper?.OnEvent($"  SoundBuffer_LoadSoundData buf=0x{sb.Handle:X8} data=0x{dataBufferH:X8} bytes={db.Bytes.Length}");
+                        } else {
+                            _dumper?.OnEvent($"  SoundBuffer_LoadSoundData buf=0x{sb.Handle:X8} data=0x{dataBufferH:X8} (DataBuffer not found — sound will be silent)");
+                        }
+                    }
+                    break;
+                default:
+                    _dumper?.OnEvent($"  SoundBuffer msgid={msgid} (unhandled, rem={rdr.Remaining})");
+                    break;
+            }
+        }
+
+        // -------- Sound (spec §2.2.4.20) --------
+        //   0 = Stop — stops playback, releases lock from Play
+        //   1 = Play — starts playback (restarts if already playing)
+        private void DispatchSound(Objects.SplashSound snd, SplashPayloadReader rdr, int msgid) {
+            if (snd == null) {
+                _dumper?.OnEvent($"  Sound msgid={msgid} (no instance — ignored, rem={rdr.Remaining})");
+                return;
+            }
+            switch (msgid) {
+                case 0: // Stop
+                    _dumper?.OnEvent($"  Sound_Stop sound=0x{snd.Handle:X8}");
+                    if (_enableSplashAudio) _soundPlayer?.Stop(snd.Handle);
+                    break;
+                case 1: // Play
+                    if (_enableSplashAudio) {
+                        if (_soundPlayer == null) {
+                            // Lazy init — defer NAudio device opening until
+                            // the first Play. Saves resources in sessions
+                            // that never trigger splash audio.
+                            _soundPlayer = new SplashSoundPlayer(_logger);
+                        }
+                        byte[] bytes = ResolveSoundBytes(snd);
+                        if (bytes != null && bytes.Length > 0) {
+                            _soundPlayer.Play(snd.Handle, bytes);
+                            _dumper?.OnEvent($"  Sound_Play sound=0x{snd.Handle:X8} buf=0x{snd.SoundBufferHandle:X8} bytes={bytes.Length}");
+                        } else {
+                            _dumper?.OnEvent($"  Sound_Play sound=0x{snd.Handle:X8} buf=0x{snd.SoundBufferHandle:X8} (no bytes — skipped)");
+                        }
+                    } else {
+                        _dumper?.OnEvent($"  Sound_Play sound=0x{snd.Handle:X8} (audio disabled by config)");
+                    }
+                    break;
+                default:
+                    _dumper?.OnEvent($"  Sound msgid={msgid} (unhandled, rem={rdr.Remaining})");
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Resolve a Sound's playable bytes by walking
+        /// Sound.SoundBufferHandle → SoundBuffer.Bytes. Returns null if
+        /// any link is missing (the SoundBuffer was destroyed, never had
+        /// LoadSoundData called, etc.).
+        /// </summary>
+        private byte[] ResolveSoundBytes(Objects.SplashSound snd) {
+            if (snd.SoundBufferHandle == 0) return null;
+            if (!_registry.TryGetObject(snd.SoundBufferHandle, out var sbObj)
+                || !(sbObj is Objects.SplashSoundBuffer sb)) return null;
+            return sb.Bytes;
         }
 
         // -------- WaitCursor (spec §2.2.4.8) --------
@@ -2791,6 +4489,252 @@ namespace SoftSled.Components.Splash {
                 sb.Append(data[i].ToString("X2"));
             }
             return sb.ToString();
+        }
+
+        // ================================================================
+        // Group 3 — Spec-coded, low-activity / unobserved class dispatchers.
+        //
+        // Each handler decodes the spec-documented fields and logs cleanly
+        // so any wire activity is named rather than "Unknown msgid=N". None
+        // of these have functional rendering hooks yet — they're stubs ready
+        // to be promoted to real handlers when WMC's MCE shell actually
+        // exercises them. The decoded field names + handle references in the
+        // logs make that promotion straightforward: when a class fires, the
+        // log already tells us what bytes to interpret.
+        // ================================================================
+
+        // -------- Line (spec §2.2.4.16) — never observed --------
+        //   0 = SetThickness   (flThickness f32)
+        //   1 = SetColor       (clr u32 ARGB)
+        //   2 = CommitLine     (rb u32)     — adds the line to a RB
+        //   3 = DrawPoint      (rb u32)     — adds a polyline vertex
+        private void DispatchLine(ISplashObject obj, SplashPayloadReader rdr, int msgid) {
+            switch (msgid) {
+                case 0:
+                    if (rdr.Remaining >= 4) {
+                        float th = rdr.ReadFloat32();
+                        _dumper?.OnEvent($"  Line_SetThickness line=0x{obj.Handle:X8} flThickness={th:F2}");
+                    }
+                    break;
+                case 1:
+                    if (rdr.Remaining >= 4) {
+                        uint argb = rdr.ReadU32();
+                        _dumper?.OnEvent($"  Line_SetColor line=0x{obj.Handle:X8} argb=0x{argb:X8}");
+                    }
+                    break;
+                case 2:
+                    if (rdr.Remaining >= 4) {
+                        uint rbH = rdr.ReadU32();
+                        _dumper?.OnEvent($"  Line_CommitLine line=0x{obj.Handle:X8} rb=0x{rbH:X8} (no-op stub)");
+                    }
+                    break;
+                case 3:
+                    if (rdr.Remaining >= 4) {
+                        uint rbH = rdr.ReadU32();
+                        _dumper?.OnEvent($"  Line_DrawPoint line=0x{obj.Handle:X8} rb=0x{rbH:X8} (no-op stub)");
+                    }
+                    break;
+                default:
+                    _dumper?.OnEvent($"  Line msgid={msgid} (unhandled, rem={rdr.Remaining})");
+                    break;
+            }
+        }
+
+        // -------- VideoPool (spec §2.2.4.13) — never observed --------
+        // Mirrors SurfacePool structurally (Allocate/Free/CreateSurface/etc.)
+        // but specifically for video frame surfaces. Promoting to a real
+        // handler requires plumbing into the playback surface allocator.
+        //   0 = Draw, 1 = CreateSurface, 2 = Free, 3 = Allocate,
+        //   4 = SetEmptyColor, 5 = SetPriority, 7 = NotifyVideoSizeChanged
+        private void DispatchVideoPool(ISplashObject obj, SplashPayloadReader rdr, int msgid) {
+            // VideoPool messages are interesting: this class is declared
+            // in MS-RRSP2 but we've observed zero msgs on a VideoPool-
+            // typed handle in any of our test captures (the pool object
+            // created via XeDevice_CreateVideoPool is registered as
+            // SurfacePool — see DispatchDevice case 7 — so SurfacePool
+            // takes its dispatch). If WMC ever sends a real VideoPool_*
+            // message it goes here; hex-dump it unconditionally so the
+            // bytes are recoverable.
+            _dumper?.OnEvent($"  VideoPool pool=0x{obj.Handle:X8} msgid={msgid} rem={rdr.Remaining} " +
+                             $"body={rdr.PeekRemainingHex(128)}");
+        }
+
+        // -------- ContextRelay (spec §2.2.4.2) — never observed --------
+        //   0 = UnlinkContext  (idExisting u32, idAlias u32)
+        //   1 = LinkContext    (idExisting u32, idAlias u32)
+        //   2 = Create         (protocol i32, stServer BLOBREF, stSession BLOBREF)
+        // Inter-context message routing for multi-app scenarios; our
+        // implementation is single-context so these are metadata only.
+        private void DispatchContextRelay(ISplashObject obj, SplashPayloadReader rdr, int msgid) {
+            switch (msgid) {
+                case 0:
+                case 1:
+                    if (rdr.Remaining >= 8) {
+                        uint existing = rdr.ReadU32();
+                        uint alias    = rdr.ReadU32();
+                        string op = msgid == 1 ? "Link" : "Unlink";
+                        _dumper?.OnEvent($"  ContextRelay_{op}Context relay=0x{obj.Handle:X8} existing=0x{existing:X8} alias=0x{alias:X8}");
+                    }
+                    break;
+                case 2:
+                    if (rdr.Remaining >= 4) {
+                        int proto = rdr.ReadI32();
+                        string protoName = proto == 1 ? "RDP-VC"
+                                         : proto == 2 ? "TCP"
+                                         : proto == 3 ? "UDP"
+                                         : proto == 4 ? "NamedPipes"
+                                         : $"?({proto})";
+                        _dumper?.OnEvent($"  ContextRelay_Create relay=0x{obj.Handle:X8} protocol={protoName} (BLOBREFs unread, rem={rdr.Remaining})");
+                    }
+                    break;
+                default:
+                    _dumper?.OnEvent($"  ContextRelay msgid={msgid} (unhandled, rem={rdr.Remaining})");
+                    break;
+            }
+        }
+
+        // -------- DynamicSurfaceFactory (spec §2.2.4.18) --------
+        //   0 = CloseInstance         (nUniqueID i32)
+        //   1 = CreateVideoInstance   (nUniqueID, idClassContext, devOwner, surScene, poolScene) — 20 B
+        //   2 = CreateSurfaceInstance (nUniqueID, idClassContext, devOwner, surScene, poolScene) — 20 B
+        //
+        // Real handler: maintains the uid → (surface, pool, isVideo)
+        // mapping that MS-DMCT OpenMedia (SurfaceID = uid) needs to
+        // resolve the splash Surface handle for video positioning.
+        // The composition layering is handled by the XAML Grid z-order
+        // (splashBackgroundFill → MediaCanvas → splashHost) — this
+        // handler doesn't need to twiddle anything at the host to
+        // achieve "video appears on top of background, underneath the
+        // splash scene graph". _activeVideoInstanceCount is tracked
+        // purely for diagnostic logging now.
+        private void DispatchDynamicSurfaceFactory(ISplashObject obj, SplashPayloadReader rdr, int msgid) {
+            switch (msgid) {
+                case 0: // CloseInstance
+                    if (rdr.Remaining >= 4) {
+                        int uid = rdr.ReadI32();
+                        if (_dynamicSurfaceByUid.TryGetValue(uid, out var entry)) {
+                            _dynamicSurfaceByUid.Remove(uid);
+                            if (entry.IsVideo) {
+                                _activeVideoInstanceCount--;
+                                if (_activeVideoInstanceCount < 0) _activeVideoInstanceCount = 0;
+                            }
+                            // Clear the video-family tracking when the
+                            // last active video instance closes — the
+                            // next session re-issues CreateVideoInstance
+                            // and we repopulate from fresh handle high
+                            // bytes (which may differ from this session).
+                            string vfamCleared = "";
+                            if (_activeVideoInstanceCount == 0 && _videoFamilyHighBytes.Count > 0) {
+                                _videoFamilyHighBytes.Clear();
+                                vfamCleared = "   [VFAM cleared]";
+                            }
+                            // Also drop any PiP lock and tell the router
+                            // to revert. The Visual that hosted the PiP
+                            // placeholder is usually destroyed in the
+                            // same batch (it's part of the chrome that
+                            // appears with playback), but firing here
+                            // ensures the router state matches the video
+                            // lifecycle even if the host's tree teardown
+                            // races us.
+                            string pipCleared = "";
+                            if (_activeVideoInstanceCount == 0 && _currentPipVisualHandle != 0) {
+                                _currentPipVisualHandle = 0;
+                                _currentPipFit          = 0;
+                                _currentPipRect         = Rect.Empty;
+                                pipCleared = "   [PIP cleared]";
+                                RaiseVideoPipCandidateChanged(0, Rect.Empty);
+                            }
+                            // Binding-driven tracker cleanup: clear when
+                            // the last active video instance closes.
+                            if (_activeVideoInstanceCount == 0 && _videoBoundVisualHandle != 0) {
+                                ClearVideoBoundVisual("video instance closed");
+                            }
+                            _dumper?.OnEvent($"  DynamicSurfaceFactory_CloseInstance dsf=0x{obj.Handle:X8} uid={uid} " +
+                                             $"(was {(entry.IsVideo ? "Video" : "Surface")} → surface=0x{entry.SurfaceHandle:X8}, " +
+                                             $"activeVideoCount={_activeVideoInstanceCount}){vfamCleared}{pipCleared}");
+                        } else {
+                            _dumper?.OnEvent($"  DynamicSurfaceFactory_CloseInstance dsf=0x{obj.Handle:X8} uid={uid} (no mapping)");
+                        }
+                    }
+                    break;
+                case 1: // CreateVideoInstance
+                case 2: // CreateSurfaceInstance
+                    if (rdr.Remaining >= 20) {
+                        int  uid       = rdr.ReadI32();
+                        uint clsCtx    = rdr.ReadU32();
+                        uint devOwner  = rdr.ReadU32();
+                        uint surScene  = rdr.ReadU32();
+                        uint poolScene = rdr.ReadU32();
+                        bool isVideo   = (msgid == 1);
+                        string kind    = isVideo ? "Video" : "Surface";
+
+                        // Replace any pre-existing entry for this uid —
+                        // CreateXxxInstance is rare but defensive against
+                        // a wire that fails to send CloseInstance first.
+                        _dynamicSurfaceByUid[uid] = new DynamicSurfaceEntry {
+                            SurfaceHandle = surScene,
+                            PoolHandle    = poolScene,
+                            IsVideo       = isVideo,
+                        };
+                        if (isVideo) _activeVideoInstanceCount++;
+                        // When a video instance starts, extend the video
+                        // family with the surface + pool high bytes so
+                        // unhandled msgids on either get [VFAM] tagged
+                        // and hex-dumped — see _videoFamilyHighBytes.
+                        string vfamTrail = "";
+                        if (isVideo) {
+                            bool addSurf = TryAddVideoFamilyHighByte(surScene);
+                            bool addPool = TryAddVideoFamilyHighByte(poolScene);
+                            if (addSurf || addPool) {
+                                vfamTrail = $"   [VFAM+ surfHi=0x{(byte)(surScene >> 24):X2}{(addSurf ? "*" : "")}" +
+                                            $" poolHi=0x{(byte)(poolScene >> 24):X2}{(addPool ? "*" : "")}]";
+                            }
+                        }
+                        _logger?.LogInfo($"[splash] DynamicSurfaceFactory_Create{kind}Instance uid={uid} " +
+                                         $"-> surface=0x{surScene:X8} pool=0x{poolScene:X8} " +
+                                         $"(this is the DMCT OpenMedia SurfaceID for video binding)");
+                        _dumper?.OnEvent($"  DynamicSurfaceFactory_Create{kind}Instance dsf=0x{obj.Handle:X8} uid={uid} " +
+                                         $"clsCtx=0x{clsCtx:X8} dev=0x{devOwner:X8} surface=0x{surScene:X8} pool=0x{poolScene:X8} " +
+                                         $"activeVideoCount={_activeVideoInstanceCount}{vfamTrail}");
+                    }
+                    break;
+                default:
+                    _dumper?.OnEvent($"  DynamicSurfaceFactory msgid={msgid} (unhandled, rem={rdr.Remaining}) " +
+                                     $"body={rdr.PeekRemainingHex(128)}");
+                    break;
+            }
+        }
+
+        // -------- ParticleSystem — never observed, not in our extract of spec --------
+        // Decorative class for particle effects. Probably unused in the MCE
+        // shell. Logged only.
+        private void DispatchParticleSystem(ISplashObject obj, SplashPayloadReader rdr, int msgid) {
+            _dumper?.OnEvent($"  ParticleSystem ps=0x{obj.Handle:X8} msgid={msgid} rem={rdr.Remaining} (stub — class not in spec extract)");
+        }
+
+        // -------- SoundDevice (spec §2.2.4.21) — legacy, superseded by XAudSoundDevice --------
+        // Older WMC builds used SoundDevice for audio; this WMC build
+        // uses XAudSoundDevice exclusively (we handle that elsewhere).
+        // Kept as a stub for compatibility with older WMC server builds.
+        //   0 = CreateSound, 1 = CreateSoundBuffer, 2 = EvictExternalResources, 3 = CreateExternalResources
+        private void DispatchSoundDeviceLegacy(SplashPayloadReader rdr, int msgid) {
+            _dumper?.OnEvent($"  SoundDevice msgid={msgid} rem={rdr.Remaining} (legacy stub — XAudSoundDevice is primary)");
+        }
+
+        // -------- InputRouter (Splash::Desktop::InputRouter) --------
+        // Not in MS-RRSP2 spec. Observed during shell init: 2 messages
+        // (msgid=1, 2; both 8-byte body) on a single instance, never
+        // touched again. Configuration only — no rendering side effects.
+        private void DispatchInputRouter(ISplashObject obj, SplashPayloadReader rdr, int msgid) {
+            _dumper?.OnEvent($"  InputRouter ir=0x{obj.Handle:X8} msgid={msgid} rem={rdr.Remaining} (Splash::Desktop — spec undocumented, ack only)");
+        }
+
+        // -------- DesktopManager (Splash::Desktop::DesktopManager) --------
+        // Not in MS-RRSP2 spec. Observed during shell init: msgid=2 (body=0)
+        // and msgid=4 (body=8) on a single instance, never touched again.
+        // Configuration only — no rendering side effects.
+        private void DispatchDesktopManager(ISplashObject obj, SplashPayloadReader rdr, int msgid) {
+            _dumper?.OnEvent($"  DesktopManager dm=0x{obj.Handle:X8} msgid={msgid} rem={rdr.Remaining} (Splash::Desktop — spec undocumented, ack only)");
         }
     }
 }

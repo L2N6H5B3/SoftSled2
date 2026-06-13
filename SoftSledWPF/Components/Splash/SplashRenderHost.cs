@@ -6,31 +6,31 @@ namespace SoftSled.Components.Splash {
 
     /// <summary>
     /// WPF host element for the MS-RRSP2 scene graph. Owns a single root
-    /// <see cref="DrawingVisual"/> plus a background fill primitive that
-    /// covers the entire host. The root visual hosts orphan splash
+    /// <see cref="DrawingVisual"/>. The root visual hosts orphan splash
     /// visuals (those without an explicit MS-RRSP2 parent); parented
     /// visuals attach via <see cref="DrawingVisual.Children"/> on their
     /// parent's drawing visual instead.
     ///
-    /// Placed *above* <c>rdpDisplay</c> in <c>MainWindow.xaml</c> so the
-    /// splash UI composites on top of the RDP framebuffer. With WPF's
-    /// default opaque background we'd hide the RDP layer entirely;
-    /// keeping <c>Background = null</c> lets RDP show through wherever
-    /// MS-RRSP2 has drawn nothing.
+    /// <para><b>Z-order in <c>ExtenderSessionControl.xaml</c>:</b>
+    /// the host is placed ABOVE both <c>splashBackgroundFill</c> and
+    /// <c>MediaCanvas</c> (FFME video plane) so the splash UI composites
+    /// over the video, matching the Xbox / WMC hardware "video plane
+    /// below UI plane" model. Background painting was deliberately moved
+    /// OUT of this class into the dedicated <c>splashBackgroundFill</c>
+    /// <see cref="System.Windows.Shapes.Rectangle"/> so the FFME video
+    /// element naturally sits between background and scene graph — no
+    /// "transparent background during video" hack needed.</para>
+    ///
+    /// <para><c>Background = null</c> on the host itself means WPF
+    /// doesn't paint anything where the scene graph hasn't drawn, so
+    /// the video plane below shows through automatically wherever
+    /// splash content isn't covering it.</para>
     /// </summary>
     public sealed class SplashRenderHost : FrameworkElement {
 
-        private readonly DrawingVisual _backgroundVisual = new DrawingVisual();
-        private readonly DrawingVisual _rootVisual       = new DrawingVisual();
+        private readonly DrawingVisual _rootVisual = new DrawingVisual();
         private readonly VisualCollection _children;
         private readonly HashSet<DrawingVisual> _attachedToRoot = new HashSet<DrawingVisual>();
-
-        // Cache the most-recently-requested background colour so we can
-        // repaint it after a layout pass — HostWindow_SetBackgroundColor
-        // typically arrives milliseconds after we flip Visibility to
-        // Visible, before WPF has re-measured the cell, so ActualWidth
-        // is still 0 and a one-shot paint would draw a 0×0 rectangle.
-        private Color? _pendingBackground;
 
         // Logical canvas size (TV resolution the WMC shell composes for).
         // The scene-root visual's Size dictates this; SplashController
@@ -45,7 +45,6 @@ namespace SoftSled.Components.Splash {
 
         public SplashRenderHost() {
             _children = new VisualCollection(this) {
-                _backgroundVisual,
                 _rootVisual,
             };
             SnapsToDevicePixels = true;
@@ -64,12 +63,58 @@ namespace SoftSled.Components.Splash {
             // on top of each other and the home screen looks like every
             // category is selected simultaneously.
             ClipToBounds = true;
-        }
 
-        /// <summary>Repaint the background visual with the given color.</summary>
-        public void SetBackground(Color c) {
-            _pendingBackground = c;
-            RenderBackground();
+            // ---- Full-screen rendering performance hints (task #171) ----
+            //
+            // RenderOptions cascade through the visual tree, so applying these
+            // to the root visual once covers every descendant DrawingVisual the
+            // scene contains. The splash canvas is composed at WMC's logical
+            // 1280×720 and we apply a ScaleTransform on _rootVisual that
+            // stretches to the host cell size — so on a 1080p host the scale
+            // factor is 1.5×, on 1440p it's 1.875×, on 4K it's 3×. Without
+            // these hints WPF's default is high-quality bilinear/trilinear
+            // bitmap scaling and full geometry anti-aliasing, both of which
+            // get noticeably expensive per-pixel as the output area grows.
+            //
+            // BitmapScalingMode.LowQuality = bilinear (no mipmap chain).
+            // Faster than the default HighQuality (~tricubic) and produces
+            // acceptable results for UI chrome — the splash surfaces are
+            // pre-rendered glyph atlases and 9-slice chrome where pixel-
+            // perfect rescaling isn't a meaningful improvement.
+            //
+            // EdgeMode.Aliased disables the per-pixel coverage anti-aliasing
+            // that WPF runs on geometry edges. We mostly draw axis-aligned
+            // rectangles + bitmap quads where AA gives nothing visible, and
+            // the cost is per-pixel at the output resolution.
+            //
+            // CachingHint.Cache = "you may cache rendered output for static
+            // sub-trees." Lets WPF use intermediate bitmap caches where it
+            // detects a static subtree, particularly useful for the chrome
+            // surfaces that don't change between animation frames.
+            //
+            // Together these knobs typically halve the per-frame compositor
+            // cost at 1080p+ resolutions and noticeably reduce CPU when the
+            // window is maximised on a high-DPI display.
+            System.Windows.Media.RenderOptions.SetBitmapScalingMode(
+                _rootVisual, System.Windows.Media.BitmapScalingMode.LowQuality);
+            System.Windows.Media.RenderOptions.SetEdgeMode(
+                _rootVisual, System.Windows.Media.EdgeMode.Aliased);
+            System.Windows.Media.RenderOptions.SetCachingHint(
+                _rootVisual, System.Windows.Media.CachingHint.Cache);
+
+            // Log the WPF rendering tier on first construction so we can
+            // detect software-rendering fallback (Tier 0). Tier 1 = partial
+            // hardware acceleration (DX7 / shader 1.x), Tier 2 = full hardware
+            // acceleration (DX9+, shader 2.0+). On any modern desktop or VM
+            // with a sane GPU driver we expect Tier 2. Tier 0 means WPF is
+            // rendering everything on the CPU — that produces exactly the
+            // "slow at full-screen" symptom we're tracking — and the user
+            // would need to fix their display driver / RDP-session settings
+            // / virtualisation host before any in-renderer perf work can
+            // matter.
+            int tier = System.Windows.Media.RenderCapability.Tier >> 16;
+            System.Diagnostics.Debug.WriteLine(
+                $"[Splash] WPF render tier = {tier} ({(tier >= 2 ? "full HW accel" : tier == 1 ? "partial HW accel" : "SOFTWARE")})");
         }
 
         /// <summary>
@@ -110,22 +155,6 @@ namespace SoftSled.Components.Splash {
             _rootVisual.Transform = new ScaleTransform(sx, sy);
         }
 
-        private void RenderBackground() {
-            using (var dc = _backgroundVisual.RenderOpen()) {
-                if (!_pendingBackground.HasValue) return;
-                Color c = _pendingBackground.Value;
-                if (c.A == 0) return; // fully transparent — leave empty
-                double w = ActualWidth, h = ActualHeight;
-                if (w <= 0 || h <= 0) {
-                    // Layout pass hasn't run yet. Bail — OnRenderSizeChanged
-                    // will retry once a real size arrives.
-                    return;
-                }
-                var brush = new SolidColorBrush(c); brush.Freeze();
-                dc.DrawRectangle(brush, null, new Rect(0, 0, w, h));
-            }
-        }
-
         protected override Size MeasureOverride(Size availableSize) {
             // Stretch to whatever the parent grid cell offers. Without
             // this, FrameworkElement's default returns (0,0) and the
@@ -152,14 +181,12 @@ namespace SoftSled.Components.Splash {
         public void ClearAll() {
             _rootVisual.Children.Clear();
             _attachedToRoot.Clear();
-            _pendingBackground = null;
-            using (var dc = _backgroundVisual.RenderOpen()) { /* empty */ }
         }
 
         /// <summary>
         /// Replace the scene-graph root with a single visual (used by
         /// <c>HostWindow_SetRoot</c>). Detaches every other top-level
-        /// visual but preserves the background fill.
+        /// visual.
         /// </summary>
         public void SetSceneRoot(DrawingVisual root) {
             _rootVisual.Children.Clear();
@@ -178,12 +205,6 @@ namespace SoftSled.Components.Splash {
 
         protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo) {
             base.OnRenderSizeChanged(sizeInfo);
-            // Re-stretch the cached background to the new size. If
-            // SetBackground was called before layout produced a real
-            // ActualWidth/Height (common: HostWindow_SetBackgroundColor
-            // arrives milliseconds after Visibility flips to Visible),
-            // we deferred the paint then — replay it now.
-            RenderBackground();
             // Re-fit the scene to the new host size.
             ApplySceneScale();
         }

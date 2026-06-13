@@ -7,13 +7,30 @@
     <ProjectGuid>{036D6D13-5395-4721-AB0F-0F63130BE7FE}</ProjectGuid>
     <OutputType>WinExe</OutputType>
     <RootNamespace>SoftSledWPF</RootNamespace>
-    <AssemblyName>SoftSledWPF</AssemblyName>
+    <AssemblyName>SoftSled</AssemblyName>
     <TargetFrameworkVersion>v4.6.1</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <ProjectTypeGuids>{60dc8134-eba5-43b8-bcc9-bb4bc16c2548};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
     <WarningLevel>4</WarningLevel>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <Deterministic>true</Deterministic>
+    <IsWebBootstrapper>false</IsWebBootstrapper>
+    <PublishUrl>C:\Claude\Publish\</PublishUrl>
+    <Install>true</Install>
+    <InstallFrom>Disk</InstallFrom>
+    <UpdateEnabled>false</UpdateEnabled>
+    <UpdateMode>Foreground</UpdateMode>
+    <UpdateInterval>7</UpdateInterval>
+    <UpdateIntervalUnits>Days</UpdateIntervalUnits>
+    <UpdatePeriodically>false</UpdatePeriodically>
+    <UpdateRequired>false</UpdateRequired>
+    <MapFileExtensions>true</MapFileExtensions>
+    <AutorunEnabled>true</AutorunEnabled>
+    <ApplicationRevision>1</ApplicationRevision>
+    <ApplicationVersion>1.0.0.%2a</ApplicationVersion>
+    <UseApplicationTrust>false</UseApplicationTrust>
+    <PublishWizardCompleted>true</PublishWizardCompleted>
+    <BootstrapperEnabled>true</BootstrapperEnabled>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
@@ -93,12 +110,21 @@
   <PropertyGroup>
     <ApplicationIcon>wmc.ico</ApplicationIcon>
   </PropertyGroup>
+  <PropertyGroup>
+    <ManifestCertificateThumbprint>5BB58262C6A2E6E35B9BBEB9912669CB6C658E9D</ManifestCertificateThumbprint>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ManifestKeyFile>SoftSledWPF_TemporaryKey.pfx</ManifestKeyFile>
+  </PropertyGroup>
+  <PropertyGroup>
+    <GenerateManifests>true</GenerateManifests>
+  </PropertyGroup>
+  <PropertyGroup>
+    <SignManifests>true</SignManifests>
+  </PropertyGroup>
   <ItemGroup>
     <Reference Include="BouncyCastle.Crypto, Version=1.9.0.0, Culture=neutral, PublicKeyToken=0e99375e54769942, processorArchitecture=MSIL">
       <HintPath>..\packages\Portable.BouncyCastle.1.9.0\lib\net40\BouncyCastle.Crypto.dll</HintPath>
-    </Reference>
-    <Reference Include="ffme.win, Version=4.4.350.0, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>..\packages\FFME.Windows.4.4.350\lib\net461\ffme.win.dll</HintPath>
     </Reference>
     <Reference Include="FFmpeg.AutoGen, Version=4.4.0.0, Culture=neutral, PublicKeyToken=9b7632533a381715, processorArchitecture=MSIL">
       <HintPath>..\packages\FFmpeg.AutoGen.4.4.0\lib\net45\FFmpeg.AutoGen.dll</HintPath>
@@ -112,20 +138,11 @@
     <Reference Include="SharpDX">
       <HintPath>..\packages\SharpDX.4.2.0\lib\net45\SharpDX.dll</HintPath>
     </Reference>
-    <Reference Include="SharpDX.Mathematics">
-      <HintPath>..\packages\SharpDX.Mathematics.4.2.0\lib\net45\SharpDX.Mathematics.dll</HintPath>
-    </Reference>
-    <Reference Include="SharpDX.MediaFoundation">
-      <HintPath>..\packages\SharpDX.MediaFoundation.4.2.0\lib\net45\SharpDX.MediaFoundation.dll</HintPath>
-    </Reference>
     <Reference Include="SharpDX.Direct3D9">
       <HintPath>..\packages\SharpDX.Direct3D9.4.2.0\lib\net45\SharpDX.Direct3D9.dll</HintPath>
     </Reference>
-    <Reference Include="SharpDX.Direct3D11">
-      <HintPath>..\packages\SharpDX.Direct3D11.4.2.0\lib\net45\SharpDX.Direct3D11.dll</HintPath>
-    </Reference>
-    <Reference Include="SharpDX.DXGI">
-      <HintPath>..\packages\SharpDX.DXGI.4.2.0\lib\net45\SharpDX.DXGI.dll</HintPath>
+    <Reference Include="SharpDX.Mathematics">
+      <HintPath>..\packages\SharpDX.Mathematics.4.2.0\lib\net45\SharpDX.Mathematics.dll</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Data" />
@@ -177,6 +194,10 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
+    <Page Include="Components\Shell\FirstRunSetupPage.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
     <Page Include="Components\Shell\PairingPage.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
@@ -185,18 +206,27 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
+    <Page Include="Components\AudioVisual\VideoFpsLab\VideoFpsLabWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
     <Compile Include="App.xaml.cs">
       <DependentUpon>App.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Components\AudioVisual\AsfFfmeInputStream.cs" />
-    <Compile Include="Components\AudioVisual\AsfStreamProducer.cs" />
-    <Compile Include="Components\AudioVisual\AudioSilenceInjector.cs" />
+    <Compile Include="Components\AudioVisual\VideoFpsLab\LibAvVideoDecoder.cs" />
+    <Compile Include="Components\AudioVisual\VideoFpsLab\LibAvVideoPushDecoder.cs" />
+    <Compile Include="Components\AudioVisual\VideoFpsLab\LiveVideoTap.cs" />
+    <Compile Include="Components\AudioVisual\VideoFpsLab\PtsFramePacer.cs" />
+    <Compile Include="Components\AudioVisual\VideoFpsLab\D3DImagePresenter.cs" />
+    <Compile Include="Components\AudioVisual\ExternalSync\ExternalAudioFormat.cs" />
+    <Compile Include="Components\AudioVisual\ExternalSync\LibAvAudioDecoder.cs" />
+    <Compile Include="Components\AudioVisual\ExternalSync\NAudioMasterRenderer.cs" />
+    <Compile Include="Components\AudioVisual\ExternalSync\ExternalSyncMediaController.cs" />
     <Compile Include="Components\AudioVisual\FormatStructures\AM_Media_Format.cs" />
     <Compile Include="Components\AudioVisual\FormatStructures\VIDEOINFOHEADER.cs" />
     <Compile Include="Components\AudioVisual\FormatStructures\VIDEOINFOHEADER2.cs" />
     <Compile Include="Components\AudioVisual\FormatStructures\WAVEFORMATEX.cs" />
-    <Compile Include="Components\AudioVisual\MsWmsRtspClient.cs" />
     <Compile Include="Components\AudioVisual\WindowsSystemAudio.cs" />
     <Compile Include="Components\AudioVisual\WmrptAudioDepacketizer.cs" />
     <Compile Include="Components\AudioVisual\WmrptAudioDepacketizerAsync.cs" />
@@ -205,29 +235,9 @@
     <Compile Include="Components\AudioVisual\WmcFastpathRawDumper.cs" />
     <Compile Include="Components\AudioVisual\WmcFastpathOverlayRegionDecoder.cs" />
     <Compile Include="Components\AudioVisual\IMediaController.cs" />
-    <Compile Include="Components\AudioVisual\FfmeMediaController.cs" />
     <Compile Include="Components\AudioVisual\PtsErrorInfo.cs" />
     <Compile Include="Components\AudioVisual\SkewInfo.cs" />
     <Compile Include="Components\AudioVisual\SurfaceRouter.cs" />
-    <Compile Include="Components\AudioVisual\Playback\PlaybackClock.cs" />
-    <Compile Include="Components\AudioVisual\Playback\LibAvDecoder.cs" />
-    <Compile Include="Components\AudioVisual\Playback\VideoFrameSample.cs" />
-    <Compile Include="Components\AudioVisual\Playback\VideoDecoder.cs" />
-    <Compile Include="Components\AudioVisual\Playback\IVideoRenderer.cs" />
-    <Compile Include="Components\AudioVisual\Playback\WpfVideoRenderer.cs" />
-    <Compile Include="Components\AudioVisual\Playback\D3D9Interop.cs" />
-    <Compile Include="Components\AudioVisual\Playback\D3DImageVideoRenderer.cs" />
-    <Compile Include="Components\AudioVisual\Playback\AudioFrameSample.cs" />
-    <Compile Include="Components\AudioVisual\Playback\AudioDecoder.cs" />
-    <Compile Include="Components\AudioVisual\Playback\NAudioRenderer.cs" />
-    <Compile Include="Components\AudioVisual\Playback\CodecRegistry.cs" />
-    <Compile Include="Components\AudioVisual\Playback\SoftSledPlaybackEngine.cs" />
-    <Compile Include="Components\AudioVisual\Playback\MediaFoundation\MediaFoundationProducerStream.cs" />
-    <Compile Include="Components\AudioVisual\Playback\MediaFoundation\MediaFoundationController.cs" />
-    <Compile Include="Components\AudioVisual\WmrptPcmNAudioSink.cs" />
-    <Compile Include="Components\AudioVisual\Mp3OverRtpAudioSink.cs" />
-    <Compile Include="Components\AudioVisual\MpegPsMuxer.cs" />
-    <Compile Include="Components\AudioVisual\MpegTsMuxer.cs" />
     <Compile Include="Components\AudioVisual\WmrptVideoDepacketizer.cs" />
     <Compile Include="Components\AudioVisual\WmrptVideoDepacketizerAsync.cs" />
     <Compile Include="Components\Communication\DSLRCommunication.cs" />
@@ -236,6 +246,8 @@
     <Compile Include="Components\Communication\SoftSledNative.cs" />
     <Compile Include="Components\Configuration\SoftSledConfig.cs" />
     <Compile Include="Components\Configuration\SoftSledConfigManager.cs" />
+    <Compile Include="Components\Diagnostics\CompositeLogger.cs" />
+    <Compile Include="Components\Diagnostics\FileLogger.cs" />
     <Compile Include="Components\Diagnostics\Logger.cs" />
     <Compile Include="Components\Diagnostics\RtspWireDumper.cs" />
     <Compile Include="Components\Diagnostics\TextBoxLogger.cs" />
@@ -248,13 +260,6 @@
     <Compile Include="Components\Extender\RemotedExperienceService.cs" />
     <Compile Include="Components\Extender\Archive\RSAEncoder.cs" />
     <Compile Include="Components\Extender\TrustAgreementService.cs" />
-    <Compile Include="Components\RTSP\AACPayload.cs" />
-    <Compile Include="Components\RTSP\AMRPayload.cs" />
-    <Compile Include="Components\RTSP\Authentication.cs" />
-    <Compile Include="Components\RTSP\BitStream.cs" />
-    <Compile Include="Components\RTSP\G711Payload.cs" />
-    <Compile Include="Components\RTSP\H264Payload.cs" />
-    <Compile Include="Components\RTSP\H265Payload.cs" />
     <Compile Include="Components\RTSP\IRTSPTransport.cs" />
     <Compile Include="Components\RTSP\Messages\PortCouple.cs" />
     <Compile Include="Components\RTSP\Messages\RTSPChunk.cs" />
@@ -279,9 +284,9 @@
     <Compile Include="Components\RTSP\RTSPMessageEventArgs.cs" />
     <Compile Include="Components\RTSP\RTSPTCPTransport.cs" />
     <Compile Include="Components\RTSP\RTSPUtils.cs" />
-    <Compile Include="Components\RTSP\Sdp\Attribut.cs" />
-    <Compile Include="Components\RTSP\Sdp\AttributFmtp.cs" />
-    <Compile Include="Components\RTSP\Sdp\AttributRtpMap.cs" />
+    <Compile Include="Components\RTSP\Sdp\Attribute.cs" />
+    <Compile Include="Components\RTSP\Sdp\AttributeFmtp.cs" />
+    <Compile Include="Components\RTSP\Sdp\AttributeRtpMap.cs" />
     <Compile Include="Components\RTSP\Sdp\Bandwidth.cs" />
     <Compile Include="Components\RTSP\Sdp\Connection.cs" />
     <Compile Include="Components\RTSP\Sdp\ConnectionIP4.cs" />
@@ -295,6 +300,7 @@
     <Compile Include="Components\RTSP\Sdp\SdpTimeZone.cs" />
     <Compile Include="Components\RTSP\Sdp\Timing.cs" />
     <Compile Include="Components\RTSP\UdpSocket.cs" />
+    <Compile Include="Components\RTSP\WMFPayloadData.cs" />
     <Compile Include="Components\Utility\DataUtilities.cs" />
     <Compile Include="Components\Utility\Enums.cs" />
     <Compile Include="Components\Utility\Utility.cs" />
@@ -304,6 +310,7 @@
     <Compile Include="Components\Splash\SplashPayloadReader.cs" />
     <Compile Include="Components\Splash\SplashRawDumper.cs" />
     <Compile Include="Components\Splash\SplashRenderHost.cs" />
+    <Compile Include="Components\Splash\SplashSoundPlayer.cs" />
     <Compile Include="Components\Splash\SplashWireReassembler.cs" />
     <Compile Include="Components\VirtualChannel\VirtualChannelAvCtrlHandler.cs" />
     <Compile Include="Components\VirtualChannel\VirtualChannelSplashHandler.cs" />
@@ -322,12 +329,21 @@
       <DependentUpon>ConfigPage.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="Components\Shell\FirstRunSetupPage.xaml.cs">
+      <DependentUpon>FirstRunSetupPage.xaml</DependentUpon>
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="Components\Configuration\ScreenResolution.cs" />
     <Compile Include="Components\Shell\PairingPage.xaml.cs">
       <DependentUpon>PairingPage.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="Components\Shell\ExtenderSessionControl.xaml.cs">
       <DependentUpon>ExtenderSessionControl.xaml</DependentUpon>
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="Components\AudioVisual\VideoFpsLab\VideoFpsLabWindow.xaml.cs">
+      <DependentUpon>VideoFpsLabWindow.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
   </ItemGroup>
@@ -376,7 +392,7 @@
     <None Include="native\x64\libssl-3-x64.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="native\x64\zd.dll">
+    <None Include="native\x64\z.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <!-- OpenH264 runtime decoder, loaded by freerdp3.dll at session start
@@ -399,20 +415,10 @@
       <Generator>SettingsSingleFileGenerator</Generator>
       <LastGenOutput>Settings.Designer.cs</LastGenOutput>
     </None>
+    <None Include="SoftSledWPF_TemporaryKey.pfx" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
-  </ItemGroup>
-  <ItemGroup>
-    <COMReference Include="MSTSCLib">
-      <Guid>{8C11EFA1-92C3-11D1-BC1E-00C04FA31489}</Guid>
-      <VersionMajor>1</VersionMajor>
-      <VersionMinor>0</VersionMinor>
-      <Lcid>0</Lcid>
-      <WrapperTool>tlbimp</WrapperTool>
-      <Isolated>False</Isolated>
-      <EmbedInteropTypes>True</EmbedInteropTypes>
-    </COMReference>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\UPnP\UPnP.csproj">
@@ -436,7 +442,7 @@
     <Content Include="native\x86\openh264-7.dll" />
     <Content Include="native\x86\softsled-rdp.dll" />
     <Content Include="native\x86\winpr3.dll" />
-    <Content Include="native\x86\zd.dll" />
+    <Content Include="native\x86\z.dll" />
     <Content Include="Tools\ffmpeg\x64\avcodec-58.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -472,6 +478,12 @@
     </Content>
     <Resource Include="wmc.bmp" />
   </ItemGroup>
-  <ItemGroup />
+  <ItemGroup>
+    <BootstrapperPackage Include="Microsoft.Net.Framework.3.5.SP1">
+      <Visible>False</Visible>
+      <ProductName>.NET Framework 3.5 SP1</ProductName>
+      <Install>false</Install>
+    </BootstrapperPackage>
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
