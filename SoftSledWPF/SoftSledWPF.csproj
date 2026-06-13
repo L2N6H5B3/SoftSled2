@@ -219,6 +219,7 @@
     <Compile Include="Components\AudioVisual\VideoFpsLab\LiveVideoTap.cs" />
     <Compile Include="Components\AudioVisual\VideoFpsLab\PtsFramePacer.cs" />
     <Compile Include="Components\AudioVisual\VideoFpsLab\D3DImagePresenter.cs" />
+    <Compile Include="Components\AudioVisual\VideoFpsLab\FfmpegRuntime.cs" />
     <Compile Include="Components\AudioVisual\ExternalSync\ExternalAudioFormat.cs" />
     <Compile Include="Components\AudioVisual\ExternalSync\LibAvAudioDecoder.cs" />
     <Compile Include="Components\AudioVisual\ExternalSync\NAudioMasterRenderer.cs" />
@@ -443,37 +444,10 @@
     <Content Include="native\x86\softsled-rdp.dll" />
     <Content Include="native\x86\winpr3.dll" />
     <Content Include="native\x86\z.dll" />
-    <Content Include="Tools\ffmpeg\x64\avcodec-58.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Tools\ffmpeg\x64\avdevice-58.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Tools\ffmpeg\x64\avfilter-7.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Tools\ffmpeg\x64\avformat-58.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Tools\ffmpeg\x64\avutil-56.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Tools\ffmpeg\x64\ffmpeg.exe">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Tools\ffmpeg\x64\ffplay.exe">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Tools\ffmpeg\x64\ffprobe.exe">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Tools\ffmpeg\x64\postproc-55.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Tools\ffmpeg\x64\swresample-3.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Tools\ffmpeg\x64\swscale-5.dll">
+    <!-- Bundle the native FFmpeg DLLs for BOTH architectures, preserving the
+         x64\ / x86\ subfolders in the output. FfmpegRuntime.NativeDir() selects
+         the set matching the current process bitness at runtime. -->
+    <Content Include="Tools\ffmpeg\**\*.*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Resource Include="wmc.bmp" />

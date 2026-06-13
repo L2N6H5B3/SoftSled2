@@ -67,9 +67,7 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             // Point FFmpeg.AutoGen at the same native DLLs FFME uses. Safe to
             // set even if FFME already loaded them (AutoGen resolves lazily).
             try {
-                string ffmpegDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
-                                   + "\\Tools\\ffmpeg\\x64";
-                if (string.IsNullOrEmpty(ffmpeg.RootPath)) ffmpeg.RootPath = ffmpegDir;
+                if (string.IsNullOrEmpty(ffmpeg.RootPath)) ffmpeg.RootPath = FfmpegRuntime.NativeDir();
             } catch (Exception ex) {
                 _log?.LogError($"[libav-video] could not set ffmpeg.RootPath: {ex.Message}");
             }

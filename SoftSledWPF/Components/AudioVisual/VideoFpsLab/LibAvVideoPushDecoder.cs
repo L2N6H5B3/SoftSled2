@@ -65,9 +65,7 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         public void Start() {
             if (_worker != null) return;
             try {
-                string ffmpegDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
-                                   + "\\Tools\\ffmpeg\\x64";
-                if (string.IsNullOrEmpty(ffmpeg.RootPath)) ffmpeg.RootPath = ffmpegDir;
+                if (string.IsNullOrEmpty(ffmpeg.RootPath)) ffmpeg.RootPath = FfmpegRuntime.NativeDir();
             } catch (Exception ex) {
                 _log?.LogError($"[libav-vpush] could not set ffmpeg.RootPath: {ex.Message}");
             }

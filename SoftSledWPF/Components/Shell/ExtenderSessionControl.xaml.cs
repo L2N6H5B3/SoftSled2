@@ -759,8 +759,7 @@ namespace SoftSledWPF.Components.Shell {
             // ffmpeg.RootPath, which must be set process-wide before the first
             // ffmpeg call. Safe to set repeatedly.
             try {
-                string ffmpegDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
-                                   + "\\Tools\\ffmpeg\\x64";
+                string ffmpegDir = SoftSled.Components.AudioVisual.VideoFpsLab.FfmpegRuntime.NativeDir();
                 FFmpeg.AutoGen.ffmpeg.RootPath = ffmpegDir;
                 _avLogger?.LogInfo($"[ffmpeg] RootPath set to {ffmpegDir} " +
                                    $"(exists={System.IO.Directory.Exists(ffmpegDir)})");
