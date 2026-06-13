@@ -91,7 +91,7 @@ namespace SoftSled.Components.Extender {
             X509Certificate2 deviceCert = new X509Certificate2(_DeviceCertificatePath);
             string certDeviceId = null;
             foreach (X509Extension certExtension in deviceCert.Extensions) {
-                if (certExtension.Oid.FriendlyName != null && certExtension.Oid.FriendlyName.Equals("Subject Alternative Name")) {
+                if (certExtension.Oid.Value == "2.5.29.17") {
                     certDeviceId = Encoding.ASCII.GetString(certExtension.RawData).Remove(0, 9);
                     m_logger.LogInfo("[ExtenderDevice] UUID from Extender Certificate: " + certDeviceId);
                     break;
