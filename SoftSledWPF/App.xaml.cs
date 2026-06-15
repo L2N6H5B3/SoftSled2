@@ -123,6 +123,14 @@ namespace SoftSledWPF {
             // the .NET DllImport exception cites.
             ProbeNativeDlls(nativeDir);
 
+            // Suppress the screen-saver and display/system sleep idle timers
+            // for the lifetime of the app. A WMC extender often plays video or
+            // idles on a menu with no input, which would otherwise blank the
+            // screen mid-session. Held on the UI thread (this call site) so the
+            // request lives as long as the process; released in OnExit.
+            SoftSled.Components.Utility.DisplayKeepAwake.Acquire();
+            try { AppLog?.LogInfo("[app] DisplayKeepAwake acquired — screen will stay awake while running"); } catch { }
+
             try { AppLog?.LogInfo("[app] OnStartup completed — entering main message loop"); } catch { }
 
             base.OnStartup(e);
@@ -450,6 +458,9 @@ namespace SoftSledWPF {
 
         protected override void OnExit(ExitEventArgs e) {
             try { AppLog?.LogInfo($"[app] OnExit fired (exit code = {e.ApplicationExitCode}) — graceful shutdown"); } catch { }
+            // Let the normal screen-saver / sleep idle timers resume now that
+            // we're shutting down.
+            try { SoftSled.Components.Utility.DisplayKeepAwake.Release(); } catch { }
             try { AppLog?.Dispose(); } catch { }
             AppLog = null;
             base.OnExit(e);
