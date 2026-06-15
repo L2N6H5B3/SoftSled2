@@ -124,6 +124,20 @@ namespace SoftSledWPF.Components.Shell {
         private ushort _pressedXFlags;
         private int _lastSentRX = -1, _lastSentRY = -1;
 
+        // Master toggle for the cursor auto-hide behaviour. Flip to false to
+        // restore the previous policy (cursor stays hidden whenever forwarding
+        // is on, never revealed by movement). Handy if the mouse-move-triggered
+        // WMC on-screen display misbehaves.
+        private const bool CursorAutoHideEnabled = true;
+
+        // Cursor auto-hide (couch UX): with forwarding on, the pointer is
+        // hidden by default, appears on movement, and fades away again after
+        // this much mouse-idle time. _cursorShown tracks the current state so
+        // we don't reset the Cursor property on every (frequent) MouseMove.
+        private static readonly TimeSpan CursorIdleHide = TimeSpan.FromSeconds(5);
+        private System.Windows.Threading.DispatcherTimer _cursorHideTimer;
+        private bool _cursorShown;
+
         /// <summary>
         /// Raised when the live session ends — either because FreeRDP
         /// transitioned to Disconnected/Failed, or because the user
@@ -209,6 +223,10 @@ namespace SoftSledWPF.Components.Shell {
             MouseInputLayer.MouseWheel += RdpDisplay_MouseWheel;
             MouseInputLayer.MouseLeave += RdpDisplay_MouseLeave;
             MouseInputLayer.Focusable   = true;
+            if (CursorAutoHideEnabled && _cursorHideTimer == null) {
+                _cursorHideTimer = new System.Windows.Threading.DispatcherTimer { Interval = CursorIdleHide };
+                _cursorHideTimer.Tick += CursorHideTimer_Tick;
+            }
             ApplyMouseCursorPolicy();
         }
 
@@ -218,16 +236,53 @@ namespace SoftSledWPF.Components.Shell {
             try { MouseInputLayer.MouseUp    -= RdpDisplay_MouseUp;    } catch { }
             try { MouseInputLayer.MouseWheel -= RdpDisplay_MouseWheel; } catch { }
             try { MouseInputLayer.MouseLeave -= RdpDisplay_MouseLeave; } catch { }
+            try { _cursorHideTimer?.Stop(); } catch { }
+            _cursorShown = false;
             MouseInputLayer.Cursor = null;
         }
 
-        // Hide the local cursor when forwarding is on, so the server-painted
-        // remote cursor is the only one the user sees. When mouse forwarding
-        // is disabled, restore the default arrow so it is obvious nothing is
-        // being forwarded. Applied to the input layer so it covers the entire
-        // session region (including the splash overlay area).
+        // Cursor policy, applied to the input layer so it covers the whole
+        // session region (RDP + splash overlay):
+        //   * Forwarding ON  → auto-hide. Start hidden; movement reveals the
+        //     arrow and re-arms a 5 s idle timer that hides it again. This is
+        //     the couch-friendly "pointer appears when you move, fades when you
+        //     stop" behaviour.
+        //   * Forwarding OFF → a persistent arrow, so it's obvious nothing is
+        //     being forwarded.
         private void ApplyMouseCursorPolicy() {
-            MouseInputLayer.Cursor = _mouseEnabled ? Cursors.None : Cursors.Arrow;
+            _cursorHideTimer?.Stop();
+            if (_mouseEnabled) {
+                MouseInputLayer.Cursor = Cursors.None;
+                _cursorShown = false;
+            } else {
+                MouseInputLayer.Cursor = Cursors.Arrow;
+                _cursorShown = true;
+            }
+        }
+
+        // Reveal the cursor (if hidden) and (re)start the idle-hide countdown.
+        // Called on every mouse move/click/wheel while a session is active and
+        // forwarding is on. Cheap on the hot MouseMove path — only touches the
+        // Cursor property when the visible state actually changes.
+        private void ShowCursorAndArmHide() {
+            if (!CursorAutoHideEnabled) return;
+            if (!_sessionActive || !_mouseEnabled) return;
+            if (!_cursorShown) {
+                MouseInputLayer.Cursor = Cursors.Arrow;
+                _cursorShown = true;
+            }
+            if (_cursorHideTimer != null) {
+                _cursorHideTimer.Stop();
+                _cursorHideTimer.Start();
+            }
+        }
+
+        private void CursorHideTimer_Tick(object sender, EventArgs e) {
+            _cursorHideTimer.Stop();
+            if (_mouseEnabled && _cursorShown) {
+                MouseInputLayer.Cursor = Cursors.None;
+                _cursorShown = false;
+            }
         }
 
         // Map a WPF point on rdpDisplay back to RDP framebuffer pixels.
@@ -277,12 +332,14 @@ namespace SoftSledWPF.Components.Shell {
 
         private void RdpDisplay_MouseMove(object sender, MouseEventArgs e) {
             if (!MouseGatesOpen()) return;
+            ShowCursorAndArmHide();
             if (!TryMapToRdp(e.GetPosition(rdpDisplay), out var x, out var y)) return;
             SendMouseMove(x, y);
         }
 
         private void RdpDisplay_MouseDown(object sender, MouseButtonEventArgs e) {
             if (!MouseGatesOpen()) return;
+            ShowCursorAndArmHide();
             if (!TryMapToRdp(e.GetPosition(rdpDisplay), out var x, out var y)) return;
             // Ensure focus is on the session so subsequent keyboard input is gated
             // correctly through ForwardKey (shell-level capture also requires it).
@@ -344,6 +401,7 @@ namespace SoftSledWPF.Components.Shell {
 
         private void RdpDisplay_MouseWheel(object sender, MouseWheelEventArgs e) {
             if (!MouseGatesOpen()) return;
+            ShowCursorAndArmHide();
             if (!TryMapToRdp(e.GetPosition(rdpDisplay), out var x, out var y)) return;
 
             // WPF Delta is signed, ±120 per notch. RDP packs a 9-bit signed
