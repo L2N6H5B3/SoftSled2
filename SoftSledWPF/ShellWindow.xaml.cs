@@ -2,9 +2,11 @@ using SoftSled.Components.Configuration;
 using SoftSled.Components.Diagnostics;
 using SoftSledWPF.Components.Shell;
 using System;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media.Animation;
 
 namespace SoftSledWPF {
@@ -36,6 +38,18 @@ namespace SoftSledWPF {
         // RunFullScreen config tickbox.
         private bool _isFullScreen;
 
+        // ---- Window aspect-ratio lock ---------------------------------
+        // When enabled, interactive resize is constrained (via WM_SIZING)
+        // so the CLIENT area keeps the selected resolution's aspect ratio.
+        // Because every page (and the live RDP framebuffer) is stretched
+        // Uniform, matching the client ratio removes the black bars on the
+        // edges. _lockedAspectRatio is client width / client height.
+        private bool _aspectLockEnabled;
+        private double _lockedAspectRatio = 16.0 / 9.0;
+        // Guards the programmatic resize in ApplyAspectRatioToCurrentWindow
+        // against re-entrancy from the SizeChanged it triggers.
+        private bool _applyingAspect;
+
         public ShellWindow() {
             InitializeComponent();
             this.Loaded += ShellWindow_Loaded;
@@ -44,11 +58,20 @@ namespace SoftSledWPF {
         }
 
         private void ShellWindow_Loaded(object sender, RoutedEventArgs e) {
+            // Install the WM_SIZING hook so interactive resize can be
+            // constrained to the selected aspect ratio. Done once, here,
+            // because the HWND only exists after the window is sourced.
+            InstallSizingHook();
+
             // Apply the persisted window mode preference. Doing this in
             // Loaded (after the window is on screen) avoids the flicker
             // you'd get from changing WindowStyle pre-show.
             var cfg = SoftSledConfigManager.ReadConfig();
+            RefreshAspectLockFromConfig(cfg);
             ApplyFullScreen(cfg.RunFullScreen);
+            // Snap the initial windowed size to the locked ratio (no-op in
+            // full screen, where ApplyAspectRatioToCurrentWindow bails).
+            ApplyAspectRatioToCurrentWindow();
 
             // First launch: run the setup wizard before anything else. It
             // replaces itself with the landing page on finish/skip.
@@ -150,6 +173,9 @@ namespace SoftSledWPF {
                 this.WindowStyle = WindowStyle.SingleBorderWindow;
                 this.ResizeMode  = ResizeMode.CanResize;
                 this.WindowState = WindowState.Normal;
+                // Returning to windowed mode — re-snap to the locked ratio
+                // so the restored window doesn't keep a stale shape.
+                ApplyAspectRatioToCurrentWindow();
             }
         }
 
@@ -337,7 +363,14 @@ namespace SoftSledWPF {
         private void Landing_SettingsRequested(object sender, EventArgs e) {
             var cfgPage = new ConfigPage();
             cfgPage.CloseRequested        += (s, _) => PopPage();
-            cfgPage.ConfigChanged         += (s, _) => { /* future hook */ };
+            cfgPage.ConfigChanged         += (s, _) => {
+                // Resolution and the aspect-lock toggle live here — re-read
+                // and re-apply so a new ratio (or enable/disable) takes
+                // effect immediately without a restart.
+                var c = SoftSledConfigManager.ReadConfig();
+                RefreshAspectLockFromConfig(c);
+                ApplyAspectRatioToCurrentWindow();
+            };
             cfgPage.RunFullScreenChanged  += (s, full) => ApplyFullScreen(full);
             cfgPage.SetupRequested        += (s, _) => ShowFirstRunSetup(firstRun: false);
             PushPage(cfgPage);
@@ -381,6 +414,121 @@ namespace SoftSledWPF {
             };
             PushPage(session);
             session.Start();
+        }
+
+        // ---- Window aspect-ratio lock (WM_SIZING) ---------------------
+
+        private const int WM_SIZING = 0x0214;
+        // wParam edge codes passed with WM_SIZING (winuser.h WMSZ_*).
+        private const int WMSZ_LEFT = 1, WMSZ_RIGHT = 2, WMSZ_TOP = 3,
+                          WMSZ_TOPLEFT = 4, WMSZ_TOPRIGHT = 5, WMSZ_BOTTOM = 6,
+                          WMSZ_BOTTOMLEFT = 7, WMSZ_BOTTOMRIGHT = 8;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int left, top, right, bottom; }
+
+        [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+        [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
+
+        private void InstallSizingHook() {
+            try {
+                var hwnd = new WindowInteropHelper(this).Handle;
+                var src = HwndSource.FromHwnd(hwnd);
+                src?.AddHook(WndProcHook);
+            } catch (Exception ex) {
+                System.Diagnostics.Debug.WriteLine("[shell] InstallSizingHook failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Pull the aspect-lock enable flag + target ratio from config. The
+        /// ratio is the selected session resolution's width:height — the same
+        /// shape the RDP framebuffer and the Uniform-stretched pages render at.
+        /// </summary>
+        private void RefreshAspectLockFromConfig(SoftSledConfig cfg) {
+            _aspectLockEnabled = cfg.LockWindowAspectRatio;
+            if (cfg.SessionWidth > 0 && cfg.SessionHeight > 0) {
+                _lockedAspectRatio = (double)cfg.SessionWidth / cfg.SessionHeight;
+            }
+        }
+
+        /// <summary>
+        /// WM_SIZING handler: rewrite the proposed window rect so the CLIENT
+        /// area keeps <see cref="_lockedAspectRatio"/>. The proposed rect and
+        /// GetWindowRect/GetClientRect are all in physical pixels, so the
+        /// non-client overhead (border + caption) cancels cleanly and no DPI
+        /// conversion is needed. Returns TRUE and marks handled when we adjust.
+        /// </summary>
+        private IntPtr WndProcHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled) {
+            if (msg != WM_SIZING) return IntPtr.Zero;
+            if (!_aspectLockEnabled || _isFullScreen || _lockedAspectRatio <= 0) return IntPtr.Zero;
+
+            var rc = (RECT)Marshal.PtrToStructure(lParam, typeof(RECT));
+            int edge = wParam.ToInt32();
+
+            // Constant non-client overhead (window rect minus client rect).
+            if (!GetWindowRect(hwnd, out RECT wr) || !GetClientRect(hwnd, out RECT cr))
+                return IntPtr.Zero;
+            int ncW = (wr.right - wr.left) - (cr.right - cr.left);
+            int ncH = (wr.bottom - wr.top) - (cr.bottom - cr.top);
+
+            int clientW = (rc.right - rc.left) - ncW;
+            int clientH = (rc.bottom - rc.top) - ncH;
+            if (clientW < 1) clientW = 1;
+            if (clientH < 1) clientH = 1;
+
+            // Horizontal handles drive height from width; vertical handles
+            // drive width from height; corners drive height from width.
+            bool driveFromWidth = edge != WMSZ_TOP && edge != WMSZ_BOTTOM;
+            if (driveFromWidth) clientH = (int)Math.Round(clientW / _lockedAspectRatio);
+            else                clientW = (int)Math.Round(clientH * _lockedAspectRatio);
+
+            int newW = clientW + ncW;
+            int newH = clientH + ncH;
+
+            // Anchor the edges the user is NOT dragging so the window grows
+            // from the grabbed handle rather than jumping.
+            switch (edge) {
+                case WMSZ_LEFT:        rc.left = rc.right - newW;  rc.bottom = rc.top + newH; break;
+                case WMSZ_RIGHT:       rc.right = rc.left + newW;  rc.bottom = rc.top + newH; break;
+                case WMSZ_TOP:         rc.top = rc.bottom - newH;  rc.right = rc.left + newW; break;
+                case WMSZ_BOTTOM:      rc.bottom = rc.top + newH;  rc.right = rc.left + newW; break;
+                case WMSZ_TOPLEFT:     rc.left = rc.right - newW;  rc.top = rc.bottom - newH; break;
+                case WMSZ_TOPRIGHT:    rc.right = rc.left + newW;  rc.top = rc.bottom - newH; break;
+                case WMSZ_BOTTOMLEFT:  rc.left = rc.right - newW;  rc.bottom = rc.top + newH; break;
+                case WMSZ_BOTTOMRIGHT: rc.right = rc.left + newW;  rc.bottom = rc.top + newH; break;
+            }
+
+            Marshal.StructureToPtr(rc, lParam, false);
+            handled = true;
+            return (IntPtr)1; // TRUE — we modified the rect
+        }
+
+        /// <summary>
+        /// Snap the current windowed size to the locked ratio by adjusting
+        /// the height to match the width. No-op in full screen (the window
+        /// fills the monitor and isn't resizable) or when the lock is off.
+        /// Operates in DIPs using the root layout's measured size to subtract
+        /// the window chrome — DPI-independent because the ratio is scale-free.
+        /// </summary>
+        private void ApplyAspectRatioToCurrentWindow() {
+            if (!_aspectLockEnabled || _isFullScreen || _lockedAspectRatio <= 0) return;
+            if (!this.IsLoaded || _applyingAspect) return;
+            if (RootLayout == null || RootLayout.ActualWidth <= 0 || RootLayout.ActualHeight <= 0) return;
+
+            double chromeW = this.ActualWidth  - RootLayout.ActualWidth;
+            double chromeH = this.ActualHeight - RootLayout.ActualHeight;
+            double clientW = this.ActualWidth - chromeW;          // == RootLayout.ActualWidth
+            double targetClientH = clientW / _lockedAspectRatio;
+            double targetWindowH = targetClientH + chromeH;
+            if (targetWindowH <= 0 || double.IsNaN(targetWindowH)) return;
+
+            // Only write if it actually differs — avoids a layout churn loop.
+            if (Math.Abs(targetWindowH - this.ActualHeight) < 1.0) return;
+
+            _applyingAspect = true;
+            try { this.Height = targetWindowH; }
+            finally { _applyingAspect = false; }
         }
 
         // ---- Event teardown -------------------------------------------

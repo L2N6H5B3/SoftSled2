@@ -127,9 +127,19 @@ namespace SoftSledWPF {
             // for the lifetime of the app. A WMC extender often plays video or
             // idles on a menu with no input, which would otherwise blank the
             // screen mid-session. Held on the UI thread (this call site) so the
-            // request lives as long as the process; released in OnExit.
-            SoftSled.Components.Utility.DisplayKeepAwake.Acquire();
-            try { AppLog?.LogInfo("[app] DisplayKeepAwake acquired — screen will stay awake while running"); } catch { }
+            // request lives as long as the process; released in OnExit. Gated
+            // on the KeepScreenAwake config toggle (General settings) — the
+            // page also flips it live, so this only sets the initial state.
+            try {
+                if (SoftSledConfigManager.ReadConfig().KeepScreenAwake) {
+                    SoftSled.Components.Utility.DisplayKeepAwake.Acquire();
+                    AppLog?.LogInfo("[app] DisplayKeepAwake acquired — screen will stay awake while running");
+                } else {
+                    AppLog?.LogInfo("[app] DisplayKeepAwake disabled by config — normal idle timers apply");
+                }
+            } catch (Exception ex) {
+                try { AppLog?.LogError("[app] DisplayKeepAwake startup gate threw: " + ex); } catch { }
+            }
 
             try { AppLog?.LogInfo("[app] OnStartup completed — entering main message loop"); } catch { }
 

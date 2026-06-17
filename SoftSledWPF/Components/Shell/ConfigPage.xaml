@@ -58,6 +58,20 @@
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Run full screen"
                               Click="OnConfigChanged"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                              Foreground="{StaticResource WmcSubtleTextBrush}"
+                              Margin="10,16,0,0"
+                              Text="Tip: press F11 at any time to toggle full screen without changing this setting."/>
+                    <CheckBox x:Name="ChkLockAspect"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Lock window shape to selected resolution"
+                              Margin="0,16,0,0"
+                              Click="OnConfigChanged"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="10,4,0,0"
+                               TextWrapping="Wrap"
+                               Text="Constrains window resizing to the aspect ratio of the resolution chosen in Video settings, removing the black bars on the edges. Has no effect in full screen."/>
                     <CheckBox x:Name="ChkAutoStart"
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Auto-start the extender session on launch"
@@ -66,10 +80,16 @@
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Close SoftSled when Windows Media Center closes"
                               Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkKeepScreenAwake"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Keep the screen awake while running"
+                              Click="OnConfigChanged"/>
                     <TextBlock Style="{StaticResource WmcBodyStyle}"
                                Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="10,16,0,0"
-                               Text="Tip: press F11 at any time to toggle full screen without changing this setting."/>
+                               Margin="10,4,0,0"
+                               TextWrapping="Wrap"
+                               Text="Prevents the Windows screen-saver and display/sleep timers from blanking the screen during playback or while idling on a menu."/>
+                    
                 </StackPanel>
             </Grid>
 

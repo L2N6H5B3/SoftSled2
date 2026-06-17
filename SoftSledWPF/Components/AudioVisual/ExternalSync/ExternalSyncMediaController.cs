@@ -540,7 +540,20 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
 
         public Task PlayAsync() {
             _playRequested = true;
+
+            // Resume the LOCAL pipeline FIRST so playback continues INSTANTLY
+            // from the retained buffers (no waiting on the server). Order:
+            // unfreeze video decode + pacer, then the audio decoder, then start
+            // the audio device — which un-freezes the master clock so the pacer
+            // releases video again. The RTSP PLAY below only refills the buffers
+            // in the background.
+            lock (_videoGate) {
+                _videoDecoder?.Resume();
+                _pacer?.SetPaused(false);
+            }
+            _decoder?.Resume();
             _renderer?.Play();   // video resumes automatically as the clock advances
+
             // Resume the RTSP SERVER if we paused it. PauseAsync sends an RTSP
             // PAUSE (stopping RTP); without a matching PLAY here the server stays
             // stopped and playback freezes once the buffered audio drains (the
@@ -555,7 +568,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 ResetMasterSmoothing();   // re-sync the smoothed clock after the pause gap
                 try { _rtsp?.Play(-1L, _lastRequestedRate); }
                 catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP resume PLAY failed: {ex.Message}"); }
-                _log?.LogInfo("[ext-sync] resume from pause — RTSP PLAY");
+                _log?.LogInfo("[ext-sync] resume from pause — local pipeline resumed, RTSP PLAY (background refill)");
             }
             return Task.CompletedTask;
         }
@@ -563,13 +576,27 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         public Task PauseAsync() {
             _playRequested = false;
             _paused = true;
+
+            // Freeze the LOCAL pipeline FIRST, retaining every buffer so the
+            // resume is instant. Pausing the audio device stalls the master
+            // clock → the pacer holds the last video frame; explicitly pausing
+            // the decoders + pacer stops any further decode/release so the
+            // already-decoded PCM (in NAudio's BufferedWaveProvider) and the
+            // queued video frames stay intact.
+            lock (_videoGate) {
+                _videoDecoder?.Pause();
+                _pacer?.SetPaused(true);
+            }
+            _decoder?.Pause();
             _renderer?.Pause();  // master clock stalls → video holds on its last frame
-            // Also PAUSE the RTSP server so it stops sending RTP — otherwise it
-            // keeps streaming into a non-draining buffer, the honest BFR W3 goes
-            // full, and the server throttles/stops on its own (messy resume).
+
+            // THEN PAUSE the RTSP server so it stops sending RTP — otherwise it
+            // keeps streaming into a now-frozen (non-draining) buffer, which
+            // overflows on a long pause, the honest BFR W3 goes full, and the
+            // server throttles/stops on its own (messy resume).
             try { _rtsp?.Pause(); }
             catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP PAUSE failed: {ex.Message}"); }
-            _log?.LogInfo("[ext-sync] pause — RTSP PAUSE");
+            _log?.LogInfo("[ext-sync] pause — local pipeline frozen (buffers retained), RTSP PAUSE");
             return Task.CompletedTask;
         }
 

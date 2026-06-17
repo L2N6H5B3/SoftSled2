@@ -115,6 +115,15 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         }
         public void SetFreeRun(bool freeRun) { _freeRun = freeRun; }
 
+        // Pause: hold the release loop without touching the queue or the
+        // anchor. Queued frames are retained; no frame is released, no
+        // underflow is counted, and the offset slew is frozen. The master
+        // clock (audio device position) freezes during a pause anyway, so on
+        // resume the timeline simply continues from where it stopped — no
+        // re-anchor needed.
+        private volatile bool _paused;
+        public void SetPaused(bool paused) { _paused = paused; }
+
         /// <summary>Drop the timeline anchor so the next frame re-anchors both
         /// the video PTS and the master clock (used after a seek, where both
         /// streams jump). Also clears any queued frames so stale pre-seek
@@ -222,6 +231,11 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
 
         private void Loop() {
             while (!_stop) {
+                // Paused: hold without releasing, dropping, or counting
+                // underflows. Queued frames stay put; resume continues against
+                // the master clock (which is also frozen while paused).
+                if (_paused) { Thread.Sleep(5); continue; }
+
                 Frame? due = null;
                 // Diagnostic snapshot for the once-per-second log line.
                 bool sSlaved = false; long sMaster = 0, sAnchor = 0, sOffset = 0, sElapsed = 0;

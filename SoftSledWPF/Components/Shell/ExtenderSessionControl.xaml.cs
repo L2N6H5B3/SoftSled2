@@ -1146,25 +1146,31 @@ namespace SoftSledWPF.Components.Shell {
                                  ? System.IO.Path.Combine(dumpsRoot, "fastpath") : null;
             string audioDir    = cfg.EnableAudioDump       && dumpsRoot != null
                                  ? System.IO.Path.Combine(dumpsRoot, "audio")    : null;
-            // RDPGFX dump shares the SAME enable flag as fastpath — both
-            // are RDP-layer diagnostics for the PiP-positioning hunt and
-            // there's no use case for one without the other right now.
-            // The native rdpgfx_main.c dumper (in our patched
-            // freerdp-client3.dll) creates rdpgfx-raw.log inside this
-            // directory; it needs the dir to exist before the env var
-            // is read at session start. Ensure_directory below.
-            string rdpgfxDir   = cfg.EnableFastpathRawDump && dumpsRoot != null
-                                 ? System.IO.Path.Combine(dumpsRoot, "rdpgfx")   : null;
-            if (rdpgfxDir != null) {
-                try { System.IO.Directory.CreateDirectory(rdpgfxDir); } catch { }
+            // RTSP/RTP wire dump lives alongside the other dumps under the
+            // configured dumps root — NOT %TEMP%. RtspWireDumper writes
+            // softsled-rtsp-wire.log + softsled-rtp-wire.log into this dir.
+            // We pass the directory (like the other dumps) rather than a bare
+            // "1" flag so the dumper knows where to write; it still falls back
+            // to %TEMP% for a legacy shell-set "SOFTSLED_RTSP_WIRE_DUMP=1".
+            string rtspDir     = cfg.EnableRtspWireDump    && dumpsRoot != null
+                                 ? System.IO.Path.Combine(dumpsRoot, "rtsp")     : null;
+            if (rtspDir != null) {
+                try { System.IO.Directory.CreateDirectory(rtspDir); } catch { }
             }
 
             try { Environment.SetEnvironmentVariable("SOFTSLED_SPLASH_RAW_DUMP",   splashDir); }   catch { }
             try { Environment.SetEnvironmentVariable("SOFTSLED_FASTPATH_RAW_DUMP", fastpathDir); } catch { }
-            try { Environment.SetEnvironmentVariable("SOFTSLED_RDPGFX_RAW_DUMP",   rdpgfxDir); }   catch { }
+            // RDPGFX raw dump removed. Explicitly clear the env var so the
+            // native rdpgfx dumper in the patched freerdp-client3.dll never
+            // writes rdpgfx-raw.log — it only dumps when this var is set, so
+            // nulling it here keeps it off regardless of any stale value.
+            try { Environment.SetEnvironmentVariable("SOFTSLED_RDPGFX_RAW_DUMP",   null); }        catch { }
             try { Environment.SetEnvironmentVariable("SOFTSLED_AUDIO_DUMP",        audioDir); }    catch { }
+            // Prefer the configured dumps dir; fall back to "1" (→ %TEMP% in the
+            // dumper) only if the dumps root couldn't be resolved while enabled,
+            // so toggling it on never silently produces nothing.
             try { Environment.SetEnvironmentVariable("SOFTSLED_RTSP_WIRE_DUMP",
-                cfg.EnableRtspWireDump   ? "1" : null); } catch { }
+                rtspDir ?? (cfg.EnableRtspWireDump ? "1" : null)); } catch { }
             try { Environment.SetEnvironmentVariable("SOFTSLED_AUDIO_TRACE",
                 cfg.EnableAudioTrace     ? "1" : null); } catch { }
             try { Environment.SetEnvironmentVariable("SOFTSLED_AUDIO_VIA_NAUDIO",

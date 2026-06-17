@@ -11,12 +11,18 @@ namespace SoftSled.Components.Diagnostics {
     /// <summary>
     /// Phase-0 reverse-engineering aid for the WMC MS-WMSP RTSP exchange.
     /// Tees every byte read from / written to the RTSP TCP socket into a
-    /// timestamped log file at <c>%TEMP%\softsled-rtsp-wire.log</c>.
+    /// timestamped <c>softsled-rtsp-wire.log</c> (and RTP packets into
+    /// <c>softsled-rtp-wire.log</c>).
     ///
-    /// Toggle on with <c>SOFTSLED_RTSP_WIRE_DUMP=1</c>. When the env var is
-    /// unset (the default) <see cref="MaybeWrap(IRtspTransport, Logger)"/>
-    /// returns the original transport unchanged so the dumper has zero
-    /// runtime cost in normal operation.
+    /// Toggle on with <c>SOFTSLED_RTSP_WIRE_DUMP</c>. The session sets this to
+    /// the configured dumps directory (<c>&lt;DumpsDirectory&gt;\rtsp</c>) so
+    /// the dump lands alongside the other diagnostic dumps in the folder the
+    /// Debugging page points at. A bare <c>SOFTSLED_RTSP_WIRE_DUMP=1</c> (e.g.
+    /// set manually in a shell) still works and falls back to <c>%TEMP%</c>.
+    /// When the env var is unset (the default)
+    /// <see cref="MaybeWrap(IRtspTransport, Logger)"/> returns the original
+    /// transport unchanged so the dumper has zero runtime cost in normal
+    /// operation.
     ///
     /// Format: a small ASCII delimiter line precedes each chunk:
     /// <code>
@@ -37,6 +43,35 @@ namespace SoftSled.Components.Diagnostics {
 
         public static bool IsEnabled =>
             !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(EnvVar));
+
+        /// <summary>
+        /// Directory the dump files are written to. The session sets
+        /// <c>SOFTSLED_RTSP_WIRE_DUMP</c> to the configured dumps dir
+        /// (<c>&lt;DumpsDirectory&gt;\rtsp</c>); a bare <c>"1"</c>/<c>"true"</c>/
+        /// <c>"yes"</c> (shell-set) falls back to <c>%TEMP%</c>. Returns null
+        /// when the dumper is disabled.
+        /// </summary>
+        private static string ResolveDumpDir() {
+            string v = Environment.GetEnvironmentVariable(EnvVar);
+            if (string.IsNullOrEmpty(v)) return null;
+            if (v == "1"
+                || v.Equals("true", StringComparison.OrdinalIgnoreCase)
+                || v.Equals("yes",  StringComparison.OrdinalIgnoreCase)) {
+                return Path.GetTempPath();
+            }
+            return v;
+        }
+
+        /// <summary>Full path for a dump file under the resolved dump dir,
+        /// creating the directory if needed. Falls back to <c>%TEMP%</c> if the
+        /// directory can't be resolved or created.</summary>
+        private static string DumpFilePath(string fileName) {
+            string dir = ResolveDumpDir();
+            if (string.IsNullOrEmpty(dir)) dir = Path.GetTempPath();
+            try { Directory.CreateDirectory(dir); }
+            catch { dir = Path.GetTempPath(); }
+            return Path.Combine(dir, fileName);
+        }
 
         // --- UDP RTP tap ----------------------------------------------------
         // Phase-0c investigation: with com.microsoft.wm.rtp.asf advertised in
@@ -78,7 +113,7 @@ namespace SoftSled.Components.Diagnostics {
         private static void EnsureRtpLog(Logger log) {
             lock (_rtpLogGate) {
                 if (_rtpLog != null) return;
-                string path = Path.Combine(Path.GetTempPath(), "softsled-rtp-wire.log");
+                string path = DumpFilePath("softsled-rtp-wire.log");
                 try {
                     _rtpLog = new StreamWriter(
                         new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read),
@@ -175,7 +210,7 @@ namespace SoftSled.Components.Diagnostics {
         public static IRtspTransport MaybeWrap(IRtspTransport inner, Logger log) {
             if (!IsEnabled) return inner;
 
-            string path = Path.Combine(Path.GetTempPath(), "softsled-rtsp-wire.log");
+            string path = DumpFilePath("softsled-rtsp-wire.log");
             try {
                 // Truncate on each new session so the dump corresponds to the
                 // most recent reproduction. Keeping a rolling history isn't

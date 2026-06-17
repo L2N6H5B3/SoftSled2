@@ -40,6 +40,12 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         private Thread _worker;
         private bool _disposed;
 
+        // Pause gate. Set = running; reset = paused. The worker blocks on this
+        // before decoding each packet so a Pause() holds decoding (retaining
+        // the input queue + the pacer's already-decoded frames) without a
+        // teardown. Starts running; Dispose sets it so a paused worker exits.
+        private readonly ManualResetEventSlim _runGate = new ManualResetEventSlim(true);
+
         private byte[] _bgra;
         private int _width, _height, _stride;
 
@@ -111,11 +117,24 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
 
         public void Complete() { try { _queue.CompleteAdding(); } catch { } }
 
+        /// <summary>Hold decoding (worker blocks before decoding the next
+        /// packet). Input queue + already-decoded frames are retained; no CPU
+        /// spent while paused. Idempotent.</summary>
+        public void Pause() { if (!_disposed) _runGate.Reset(); }
+
+        /// <summary>Resume decoding after <see cref="Pause"/>. Idempotent.</summary>
+        public void Resume() { if (!_disposed) _runGate.Set(); }
+
         private void WorkerLoop() {
             AVPacket* pkt = ffmpeg.av_packet_alloc();
             AVFrame* frame = ffmpeg.av_frame_alloc();
             try {
                 foreach (var qp in _queue.GetConsumingEnumerable()) {
+                    // Block while paused — the dequeued packet is held in `qp`
+                    // (not lost) and decoded once resumed. RTSP is also paused,
+                    // so the queue simply holds in the meantime.
+                    _runGate.Wait();
+                    if (_disposed) break;
                     SendPacket(pkt, qp);
                     DrainFrames(frame);
                 }
@@ -208,8 +227,12 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         public void Dispose() {
             if (_disposed) return;
             _disposed = true;
+            // Release the pause gate FIRST so a paused worker can exit (else Join
+            // would block for the full timeout).
+            try { _runGate.Set(); } catch { }
             try { _queue.CompleteAdding(); } catch { }
             try { _worker?.Join(2000); } catch { }
+            try { _runGate.Dispose(); } catch { }
             try { _queue.Dispose(); } catch { }
             if (_sws != null) { ffmpeg.sws_freeContext(_sws); _sws = null; }
             if (_ctx != null) { AVCodecContext* t = _ctx; ffmpeg.avcodec_free_context(&t); _ctx = null; }

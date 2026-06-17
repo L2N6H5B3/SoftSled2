@@ -116,6 +116,8 @@ namespace SoftSledWPF.Components.Shell {
                 ChkAutoStart.IsChecked         = _config.AutoStartWmcOnOpen;
                 ChkFullScreen.IsChecked        = _config.RunFullScreen;
                 ChkCloseOnWmcClose.IsChecked   = _config.CloseOnWmcClose;
+                ChkKeepScreenAwake.IsChecked   = _config.KeepScreenAwake;
+                ChkLockAspect.IsChecked        = _config.LockWindowAspectRatio;
                 ChkRemoteRendering.IsChecked   = _config.EnableRemoteRendering;
                 Chk2DAnimations.IsChecked      = _config.Enable2DAnimations;
                 ChkIntenseAnimations.IsChecked = _config.EnableIntenseAnimations;
@@ -250,6 +252,8 @@ namespace SoftSledWPF.Components.Shell {
             _config.AutoStartWmcOnOpen      = ChkAutoStart.IsChecked == true;
             _config.RunFullScreen           = ChkFullScreen.IsChecked == true;
             _config.CloseOnWmcClose         = ChkCloseOnWmcClose.IsChecked == true;
+            _config.KeepScreenAwake         = ChkKeepScreenAwake.IsChecked == true;
+            _config.LockWindowAspectRatio   = ChkLockAspect.IsChecked == true;
             _config.EnableRemoteRendering   = ChkRemoteRendering.IsChecked == true;
             _config.Enable2DAnimations      = Chk2DAnimations.IsChecked == true;
             _config.EnableIntenseAnimations = ChkIntenseAnimations.IsChecked == true;
@@ -283,6 +287,15 @@ namespace SoftSledWPF.Components.Shell {
             ConfigChanged?.Invoke(this, EventArgs.Empty);
             if (prevFullScreen != _config.RunFullScreen) {
                 RunFullScreenChanged?.Invoke(this, _config.RunFullScreen);
+            }
+
+            // Apply the keep-awake toggle live so it takes effect without a
+            // restart. We're on the UI thread here, which is the long-lived
+            // thread DisplayKeepAwake's request must be scoped to.
+            if (_config.KeepScreenAwake) {
+                SoftSled.Components.Utility.DisplayKeepAwake.Acquire();
+            } else {
+                SoftSled.Components.Utility.DisplayKeepAwake.Release();
             }
 
             // Remote rendering takes ownership of the animation pipeline

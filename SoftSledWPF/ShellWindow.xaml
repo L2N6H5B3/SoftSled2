@@ -28,7 +28,7 @@
         </ResourceDictionary>
     </Window.Resources>
 
-    <Grid>
+    <Grid x:Name="RootLayout">
         <!-- Static WMC background. Image is a build-time Resource so this
              works regardless of working directory. The opacity overlay
              dims the background slightly under page content to keep text

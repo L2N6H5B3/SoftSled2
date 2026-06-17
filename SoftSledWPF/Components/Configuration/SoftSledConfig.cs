@@ -38,6 +38,25 @@ namespace SoftSled.Components.Configuration {
         public bool RunFullScreen = true;
         public bool AutoStartWmcOnOpen = false;
 
+        // Constrain interactive window resizing to the aspect ratio of the
+        // selected session resolution (SessionWidth : SessionHeight). The
+        // shell content and the live RDP framebuffer are stretched Uniform,
+        // so a window whose client area doesn't match that ratio shows black
+        // bars on the top/bottom or sides. Locking the window's resize to the
+        // ratio keeps the client area matched and removes the bars. Only
+        // affects windowed mode — full-screen fills the monitor and isn't
+        // resizable. Default ON.
+        public bool LockWindowAspectRatio = true;
+
+        // Keep the display (and system) awake while SoftSled is running, so
+        // the Windows screen-saver / display-off / sleep idle timers don't
+        // blank the screen during long playback or while idling on a menu
+        // with no input. Implemented via SetThreadExecutionState
+        // (DisplayKeepAwake). Applied at app launch and toggled live from
+        // the General settings page. Default ON — that's the behaviour a
+        // 10-foot media-center client wants.
+        public bool KeepScreenAwake = true;
+
         // When true, shutting down the WMC session (host-initiated
         // disconnect or session-failed) closes the SoftSled application
         // instead of returning to the landing page. ESC always returns

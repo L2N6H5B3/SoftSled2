@@ -56,6 +56,13 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private Thread _worker;
         private bool _disposed;
 
+        // Pause gate. Set = running; reset = paused. The worker blocks on this
+        // before consuming each packet, so a Pause() holds decoding (and keeps
+        // the input queue + already-decoded buffers intact) without tearing the
+        // decoder down. Starts set (running). Dispose sets it so a paused worker
+        // can unblock and exit cleanly.
+        private readonly ManualResetEventSlim _runGate = new ManualResetEventSlim(true);
+
         // Output-format readiness. The first decoded frame tells us
         // the decoder's native sample_rate / channels; we configure
         // swr from that. Subscribers register via OnFormatReady to
@@ -231,11 +238,23 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             try { _queue.CompleteAdding(); } catch { }
         }
 
+        /// <summary>Hold decoding (worker blocks before consuming the next
+        /// packet). The input queue and already-decoded output are retained;
+        /// no CPU is spent while paused. Idempotent.</summary>
+        public void Pause() { if (!_disposed) _runGate.Reset(); }
+
+        /// <summary>Resume decoding after <see cref="Pause"/>. Idempotent.</summary>
+        public void Resume() { if (!_disposed) _runGate.Set(); }
+
         public void Dispose() {
             if (_disposed) return;
             _disposed = true;
+            // Release the pause gate FIRST so a paused worker unblocks and can
+            // observe CompleteAdding / _disposed and exit (else Join deadlocks).
+            try { _runGate.Set(); } catch { }
             try { _queue.CompleteAdding(); } catch { }
             try { _worker?.Join(2000); } catch { }
+            try { _runGate.Dispose(); } catch { }
             try { _queue.Dispose(); } catch { }
             if (_swr != null) {
                 SwrContext* tmp = _swr;
@@ -263,6 +282,12 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             }
             try {
                 foreach (var qp in _queue.GetConsumingEnumerable()) {
+                    // Block here while paused — the packet just dequeued is held
+                    // in `qp` (not lost) and processed once resumed. During a
+                    // pause RTSP is also stopped, so no further packets arrive
+                    // and the queue simply holds.
+                    _runGate.Wait();
+                    if (_disposed) break;
                     SendPacket(pkt, qp);
                     DrainFrames(frame, qp.PtsMs);
                     MaybeEmitStats();
