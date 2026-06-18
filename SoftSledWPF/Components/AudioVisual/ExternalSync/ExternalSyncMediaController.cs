@@ -451,6 +451,19 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             long aRaw = Interlocked.Read(ref _firstAudioMauRtpRaw);
             long vRaw = Interlocked.Read(ref _firstVideoMauRtpRaw);
             if (aRaw < 0 || vRaw < 0) return;
+            if (_keepOffsetThisSync) {
+                // Trick-play (FF/RW) return: reuse the offset established at the
+                // initial play — it's constant for the video, and the post-scale
+                // RTP-Info is unreliable, so we must NOT recompute it here.
+                _keepOffsetThisSync = false;
+                long keep = Interlocked.Read(ref _baseOffsetMs);
+                long trimK = Interlocked.Read(ref _liveTrimMs);
+                _pacer?.SetSyncOffsetMs(keep + trimK);
+                _syncFinalized = true;
+                _log?.LogInfo($"[ext-sync] offset KEPT across trick-play = {keep}ms + trim {trimK}ms " +
+                              $"→ {keep + trimK}ms (NOT recomputed — post-scale RTP-Info unreliable)");
+                return;
+            }
             // WMPNss doesn't send RTCP Sender Reports, so the cross-stream
             // offset comes from the PLAY response's RTP-Info (each stream's
             // play-point RTP timestamp) — epoch-free and available immediately.
@@ -491,6 +504,13 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         // Initialised from config's AudioSyncOffsetMs in the ctor.
         private long _baseOffsetMs;
         private long _liveTrimMs;
+
+        // Set by the trick-play (FF/RW → 1×) re-anchor: tells UpdateSyncOffset to
+        // KEEP the established cross-stream offset rather than recompute it. The
+        // offset is constant for a video (Xbox capture), and the RTP-Info the
+        // server returns right after server-side scale is unreliable for audio —
+        // recomputing from it produced 0ms vs the true value and raced the video.
+        private bool _keepOffsetThisSync;
 
         /// <summary>Current user A/V trim in ms (positive = video earlier /
         /// less lag). Persist this back to config so it survives the session.</summary>
@@ -699,6 +719,39 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             _log?.LogInfo($"[ext-sync] {reason} — re-baselining A/V sync");
         }
 
+        /// <summary>
+        /// Re-anchor the timeline after a trick-play (FF/RW) return to 1×.
+        /// Deliberately SEPARATE from <see cref="ReBaselineSync"/> (used by
+        /// seek/resume) so the two can evolve independently — in particular the
+        /// pending pause/resume rework must not disturb trick-play, and vice
+        /// versa.
+        ///
+        /// <para>Like a seek it re-anchors the pacer and re-arms the anchor gate
+        /// to discard the trick-play frame backlog until the new (1×) RTP-Info
+        /// arrives. UNLIKE a seek it does NOT recompute the cross-stream offset:
+        /// that's constant for a video (Xbox capture), and the RTP-Info WMPNss
+        /// returns straight after server-side scale is unreliable for audio
+        /// (observed: recompute → 0ms vs the true −1891ms, which raced the
+        /// video). <see cref="_keepOffsetThisSync"/> makes UpdateSyncOffset reuse
+        /// the established offset instead. The pacer already holds that offset,
+        /// so there is no window where it is wrong.</para>
+        /// </summary>
+        private void ReanchorAfterTrickPlay() {
+            _keepOffsetThisSync = true;
+            _syncFinalized = false;   // let the re-captured first MAU run UpdateSyncOffset (which keeps the offset)
+            Interlocked.Exchange(ref _firstAudioMauRtpRaw, -1L);
+            Interlocked.Exchange(ref _firstVideoMauRtpRaw, -1L);
+            Interlocked.Exchange(ref _firstAudioMauWirePtsMs, -1L);
+            Interlocked.Exchange(ref _firstVideoMauWirePtsMs, -1L);
+            Interlocked.Exchange(ref _anchorMinRtpInfoGen, (_rtsp?.RtpInfoGeneration ?? 0) + 1);
+            _seekGateTick = Environment.TickCount;
+            try { _rtsp?.ResetCorrespondenceEstimator(); } catch { }
+            _pacer?.Reanchor();
+            ResetMasterSmoothing();
+            _log?.LogInfo($"[ext-sync] trick-play exit → 1× — re-anchored, KEEPING offset " +
+                          $"{Interlocked.Read(ref _baseOffsetMs)}ms (per-video constant; not recomputed)");
+        }
+
         public Task SetRateAsync(double rate) {
             // NO-OP when the rate isn't actually changing. WMC's AVCTRL handler
             // calls SetRateAsync on EVERY Start for rate-forwarding — including
@@ -721,10 +774,12 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP SetRate({rate}) failed: {ex.Message}"); }
             // Reaching here with normal=true means we were in trick play (prev
             // rate ≠ 1×) and are returning to 1× — that lands at a NEW position
-            // with NEW RTP-Info, so re-baseline the offset (not just Reanchor) or
-            // A/V stay out of sync after FF/RW. Entering trick play (rate≠1) needs
-            // no re-baseline — the pacer is free-run and ignores the offset.
-            if (normal) ReBaselineSync("trick-play exit → 1×");
+            // with NEW RTP-Info, so re-anchor the timeline. Use the dedicated
+            // trick-play path (NOT ReBaselineSync): it re-anchors but KEEPS the
+            // video's constant offset, because recomputing it from the unreliable
+            // post-scale RTP-Info raced the video. Entering trick play (rate≠1)
+            // needs nothing — the pacer is free-run and ignores the offset.
+            if (normal) ReanchorAfterTrickPlay();
             return Task.CompletedTask;
         }
 
@@ -806,11 +861,20 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             _decoder = null;
             try { _renderer?.Dispose(); } catch { }
             _renderer = null;
+            // Reset the smoothed master clock. It's monotonic (never decreases)
+            // WITHIN a video, but the new media's renderer restarts its byte
+            // position at 0 — without this reset, _smoothMasterMs stays pinned at
+            // the PREVIOUS video's end (e.g. 21371ms), so every frame of the next
+            // video is instantly "due" and the pacer races it forward instead of
+            // matching audio. (Manifested as 2nd/3rd plays speeding up; a restart
+            // "fixed" it only because that cleared the stale value.)
+            ResetMasterSmoothing();
 
             // Reset sync anchors / per-media clocks so the new stream's first
             // MAUs re-anchor and the offset is recomputed from scratch.
             _isOpen = false;
             _syncFinalized = false;
+            _keepOffsetThisSync = false;   // new video computes its own offset fresh
             _audioClockHz = 90000;
             _videoClockHz = 90000;
             Interlocked.Exchange(ref _firstAudioMauRtpRaw, -1L);
