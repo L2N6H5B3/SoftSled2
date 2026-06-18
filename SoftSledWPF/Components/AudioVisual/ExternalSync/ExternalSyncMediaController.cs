@@ -486,6 +486,20 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private long _baseOffsetMs;
         private long _liveTrimMs;
 
+        // Correspondence drift clamp. The estimator extrapolates a least-squares
+        // RTP-vs-NTP fit to "now", so tiny slope error × an ever-growing elapsed
+        // time makes its offset estimate creep linearly over a long session
+        // (observed: -199ms → +7869ms over ~6 min). Chasing that creep slews the
+        // pacer, which makes video "catch up" and DRAINS the jitter buffer below
+        // its target — the server's BFR loop then hunts (>100%/<100% delivery)
+        // and the picture judders. So we trust only the FIRST convergence (near
+        // session start, minimal extrapolation) and clamp every later update to
+        // within ±MaxCorrDriftMs of it. Re-anchored on seek / re-baseline / new
+        // media (where the estimator is reset and a fresh first value is valid).
+        private bool _corrAnchored;
+        private long _corrAnchorMs;
+        private const long MaxCorrDriftMs = 500;
+
         /// <summary>Current user A/V trim in ms (positive = video earlier /
         /// less lag). Persist this back to config so it survives the session.</summary>
         public int CurrentAudioSyncTrimMs => (int)Interlocked.Read(ref _liveTrimMs);
@@ -496,13 +510,33 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// eases into correct sync — automatically, per file, no user trim needed.
         /// The trim remains a fixed residual (pipeline latency) on top.</summary>
         private void OnCorrespondenceOffset(long corrOffsetMs) {
-            Interlocked.Exchange(ref _baseOffsetMs, corrOffsetMs);
+            // Trust the first convergence; clamp later ones to ±MaxCorrDriftMs of
+            // it so the estimator's long-session extrapolation creep can't keep
+            // slewing the pacer (which drains the jitter buffer → judder).
+            long applied = corrOffsetMs;
+            if (!_corrAnchored) {
+                _corrAnchored = true;
+                _corrAnchorMs = corrOffsetMs;
+            } else {
+                long lo = _corrAnchorMs - MaxCorrDriftMs;
+                long hi = _corrAnchorMs + MaxCorrDriftMs;
+                if (applied < lo) applied = lo;
+                else if (applied > hi) applied = hi;
+            }
+
+            Interlocked.Exchange(ref _baseOffsetMs, applied);
             long trim = Interlocked.Read(ref _liveTrimMs);
-            long offset = corrOffsetMs + trim;
+            long offset = applied + trim;
             _pacer?.SlewSyncOffsetMs(offset);
             _syncFinalized = true;
-            _log?.LogInfo($"[ext-sync] auto-offset (Correspondence) = {corrOffsetMs}ms + trim {trim}ms " +
-                          $"→ slewing pacer to {offset}ms (was RTP-Info-based)");
+            if (applied != corrOffsetMs) {
+                _log?.LogInfo($"[ext-sync] auto-offset (Correspondence) = {corrOffsetMs}ms CLAMPED to {applied}ms " +
+                              $"(anchor {_corrAnchorMs}ms ±{MaxCorrDriftMs}ms — not chasing drift) + trim {trim}ms " +
+                              $"→ slewing pacer to {offset}ms");
+            } else {
+                _log?.LogInfo($"[ext-sync] auto-offset (Correspondence) = {corrOffsetMs}ms + trim {trim}ms " +
+                              $"→ slewing pacer to {offset}ms (was RTP-Info-based)");
+            }
         }
 
         /// <summary>Adjust the A/V sync trim live and re-apply it to the pacer
@@ -701,6 +735,9 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             Interlocked.Exchange(ref _anchorMinRtpInfoGen, (_rtsp?.RtpInfoGeneration ?? 0) + 1);
             _seekGateTick = Environment.TickCount;
             try { _rtsp?.ResetCorrespondenceEstimator(); } catch { }
+            // The estimator restarts here, so the next convergence is a fresh,
+            // trustworthy "first" — re-anchor the drift clamp to it.
+            _corrAnchored = false;
             _pacer?.Reanchor();
             ResetMasterSmoothing();
             _log?.LogInfo($"[ext-sync] {reason} — re-baselining A/V sync");
@@ -837,6 +874,8 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             Interlocked.Exchange(ref _playBaseNptMs, 0L);
             Interlocked.Exchange(ref _masterAtBaseMs, 0L);
             Interlocked.Exchange(ref _pausePositionMs, 0L);
+            // New media → fresh estimator → fresh first-convergence anchor.
+            _corrAnchored = false;
             // New media gets a fresh RTSPClient (RtpInfoGeneration restarts at 0),
             // so clear the seek anchor-gate or it would block the new media.
             Interlocked.Exchange(ref _anchorMinRtpInfoGen, 0L);
