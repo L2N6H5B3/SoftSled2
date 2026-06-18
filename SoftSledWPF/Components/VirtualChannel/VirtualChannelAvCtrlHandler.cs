@@ -400,19 +400,28 @@ namespace SoftSled.Components.VirtualChannel {
                         // Reset playback position tracking on CloseMedia.
                         _playbackStartPositionMs = 0;
 
-                        // Detach the live RTSP session from the controller
-                        // BEFORE stopping it, so any final RTSP exceptions
-                        // raised by Stop() don't propagate as
-                        // RTSP_DISCONNECT (we're closing on purpose).
-                        try { _mediaController?.AttachRtspClient(null); } catch (Exception ex) {
-                            m_logger?.LogError($"AVCTRL: AttachRtspClient(close) threw: {ex.Message}");
+                        // Cease playback IMMEDIATELY — stop the audio device
+                        // (discarding its buffered PCM) and freeze the video
+                        // pacer NOW, before the pipeline teardown's Dispose
+                        // Joins, so there's no audible/visible tail after WMC
+                        // closes the media.
+                        try { _mediaController?.HaltPlaybackNow(); } catch (Exception ex) {
+                            m_logger?.LogError($"AVCTRL: HaltPlaybackNow(close) threw: {ex.Message}");
                         }
 
-                        // Signal the host to close FFME BEFORE we tear down
-                        // RTSPClient — RTSPClient.Stop() disposes the producer
-                        // which races with FFME's demux thread's Read.
+                        // Blank the on-screen video to black right away (pacer is
+                        // already frozen above, so no late frame can un-blank it).
                         try { VideoPipelineClosed?.Invoke(); } catch (Exception ex) {
                             m_logger?.LogError($"AVCTRL: VideoPipelineClosed handler threw: {ex.Message}");
+                        }
+
+                        // Detach the live RTSP session from the controller
+                        // BEFORE stopping it, so any final RTSP exceptions
+                        // raised by Stop() don't propagate as RTSP_DISCONNECT
+                        // (we're closing on purpose). This also tears down the
+                        // decode pipeline.
+                        try { _mediaController?.AttachRtspClient(null); } catch (Exception ex) {
+                            m_logger?.LogError($"AVCTRL: AttachRtspClient(close) threw: {ex.Message}");
                         }
 
                         // Stop RTSP Client
@@ -621,23 +630,28 @@ namespace SoftSled.Components.VirtualChannel {
                         // Reset playback position tracking on Stop.
                         _playbackStartPositionMs = 0;
 
-                        // Detach the live RTSP session from the controller BEFORE stopping it — same reason as CloseMedia.
-                        try { 
-                            _mediaController?.AttachRtspClient(null); 
+                        // Cease playback IMMEDIATELY (stop audio device + freeze
+                        // video pacer) before the teardown — same as CloseMedia.
+                        // Supersedes the old PauseAsync-on-Stop (which, after the
+                        // detach below, couldn't reach the server anyway).
+                        try {
+                            _mediaController?.HaltPlaybackNow();
                         } catch (Exception ex) {
-                            m_logger?.LogError($"AVCTRL: MediaController.AttachRtspClient(stop) threw: {ex.Message}");
+                            m_logger?.LogError($"AVCTRL: HaltPlaybackNow(stop) threw: {ex.Message}");
                         }
 
-                        try { 
-                            _ = _mediaController?.PauseAsync(); 
-                        } catch (Exception ex) {
-                            m_logger?.LogError($"AVCTRL: MediaController.PauseAsync on Stop failed: {ex.Message}");
-                        }
-
-                        try { 
-                            VideoPipelineClosed?.Invoke(); 
+                        // Blank the on-screen video to black right away.
+                        try {
+                            VideoPipelineClosed?.Invoke();
                         } catch (Exception ex) {
                             m_logger?.LogError($"AVCTRL: VideoPipelineClosed handler threw: {ex.Message}");
+                        }
+
+                        // Detach the live RTSP session from the controller BEFORE stopping it — same reason as CloseMedia.
+                        try {
+                            _mediaController?.AttachRtspClient(null);
+                        } catch (Exception ex) {
+                            m_logger?.LogError($"AVCTRL: MediaController.AttachRtspClient(stop) threw: {ex.Message}");
                         }
 
                         // Stop the RTSP Client

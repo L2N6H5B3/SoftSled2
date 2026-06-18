@@ -146,6 +146,21 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             catch { /* device may already be stopped */ }
         }
 
+        /// <summary>
+        /// Discard any buffered-but-unplayed PCM. Used on resume-from-pause:
+        /// the server re-streams FROM the pause point, so the audio we'd
+        /// buffered ahead must be dropped or it would replay (an audible
+        /// repeat). The cumulative byte counters are deliberately left alone so
+        /// <see cref="GetMediaTimeMs"/> stays monotonic — it simply stalls
+        /// (capped at <c>_bytesWritten</c>) until fresh PCM arrives.
+        /// </summary>
+        public void ClearBuffer() {
+            if (_disposed) return;
+            lock (_gate) {
+                try { _provider.ClearBuffer(); } catch { }
+            }
+        }
+
         public PlaybackState PlaybackState => _disposed ? PlaybackState.Stopped : _device.PlaybackState;
 
         // ----- Sample input -----

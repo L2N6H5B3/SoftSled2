@@ -62,6 +62,13 @@ namespace SoftSled.Components.AudioVisual {
         /// <see cref="PlayAsync"/>.</summary>
         Task PauseAsync();
 
+        /// <summary>Stop all audio/video output immediately — halt and flush
+        /// the audio device and freeze video presentation NOW, without waiting
+        /// for the decode-pipeline teardown. Called by AvCtrlHandler on
+        /// CloseMedia / Stop so playback ceases the instant WMC asks, with no
+        /// audible or visible tail. Safe to call from any thread / repeatedly.</summary>
+        void HaltPlaybackNow();
+
         /// <summary>Fires when the player transitions from "buffering" to
         /// "ready to present". WMC expects this as <c>BUFFERING_STOP</c>
         /// (DMCT MediaEvent code 1) — signals the UI to dismiss its

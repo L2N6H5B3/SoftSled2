@@ -41,6 +41,25 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private bool _paused;   // true between PauseAsync and the next PlayAsync (server RTSP-paused)
         private volatile bool _disposed;
 
+        // Absolute media-position tracking, so a resume can ask the server to
+        // PLAY from the exact pause point. The master clock (NAudioMasterRenderer
+        // byte position) is 0-relative to renderer start; the absolute media npt
+        // is _playBaseNptMs + (master - _masterAtBaseMs). _playBaseNptMs is the
+        // npt of the last position-PLAY (set in SeekAsync / the resume path).
+        // _pausePositionMs latches the absolute position at PauseAsync so the
+        // following resume can Range-PLAY there.
+        //
+        // Why this is needed: WMPNss does NOT resume from the pause point on a
+        // bare no-Range PLAY — it leaps ~30s forward (confirmed on the wire:
+        // both streams' RTP-Info rtptime jumped +31546ms after a PAUSE/PLAY).
+        // The byte-based master clock can't track that wire jump, so the video
+        // pacer schedules the post-resume frames seconds into the future and
+        // freezes/skips. Resuming with an explicit Range pins the server to the
+        // pause point and avoids the discontinuity entirely.
+        private long _playBaseNptMs;
+        private long _masterAtBaseMs;
+        private long _pausePositionMs;
+
         // Smoothed master clock. The raw audio-position clock (min bytes
         // played/written) JUMPS when delivery is bursty (live TV swings ~57-164%
         // of real-time), and the slaved video pacer whipsaws to track it →
@@ -528,6 +547,16 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
 
         public TimeSpan? Duration => null;
 
+        /// <summary>Absolute media position (ms) = the npt of the last
+        /// position-PLAY plus how far the master clock has advanced since.
+        /// Used to Range-PLAY from the pause point on resume.</summary>
+        private long AbsolutePositionMs() {
+            long master = (long)(_renderer?.GetMediaTimeMs() ?? 0);
+            long delta = master - Interlocked.Read(ref _masterAtBaseMs);
+            if (delta < 0) delta = 0;
+            return Interlocked.Read(ref _playBaseNptMs) + delta;
+        }
+
         public bool IsOpen => _isOpen && _renderer != null;
 
         public Task WaitUntilOpenAsync(int timeoutMs) {
@@ -540,35 +569,48 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
 
         public Task PlayAsync() {
             _playRequested = true;
+            bool resuming = _paused;
 
-            // Resume the LOCAL pipeline FIRST so playback continues INSTANTLY
-            // from the retained buffers (no waiting on the server). Order:
-            // unfreeze video decode + pacer, then the audio decoder, then start
-            // the audio device — which un-freezes the master clock so the pacer
-            // releases video again. The RTSP PLAY below only refills the buffers
-            // in the background.
+            // Un-pause the LOCAL pipeline so the decoders + pacer are live to
+            // process the (re-streamed) content. For a resume we re-baseline and
+            // Range-PLAY below, so this isn't "play the old buffer" — it just
+            // brings the gated workers back up.
             lock (_videoGate) {
                 _videoDecoder?.Resume();
                 _pacer?.SetPaused(false);
             }
             _decoder?.Resume();
-            _renderer?.Play();   // video resumes automatically as the clock advances
 
-            // Resume the RTSP SERVER if we paused it. PauseAsync sends an RTSP
-            // PAUSE (stopping RTP); without a matching PLAY here the server stays
-            // stopped and playback freezes once the buffered audio drains (the
-            // renderer-only resume can't conjure new data). Gated on _paused so
-            // this does NOT fire a redundant PLAY on the open/normal Starts
-            // (WMC calls PlayAsync on every Start) — that would re-introduce the
-            // double-PLAY. RTSPClient.Pause() armed _resumeNextPlay so this PLAY
-            // bypasses wire-idempotency. -1 startMs = resume from the pause point
-            // (no Range) — same timeline, so NO re-baseline needed.
-            if (_paused) {
+            if (resuming) {
                 _paused = false;
-                ResetMasterSmoothing();   // re-sync the smoothed clock after the pause gap
-                try { _rtsp?.Play(-1L, _lastRequestedRate); }
-                catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP resume PLAY failed: {ex.Message}"); }
-                _log?.LogInfo("[ext-sync] resume from pause — local pipeline resumed, RTSP PLAY (background refill)");
+                long resumeMs = Interlocked.Read(ref _pausePositionMs);
+
+                // Clear the stale audio buffer: the server re-streams FROM the
+                // pause point, so the buffered-ahead audio would otherwise
+                // replay (an audible repeat). The byte clock continues
+                // monotonically from here.
+                _renderer?.ClearBuffer();
+                _renderer?.Play();
+
+                // Re-baseline the A/V sync (drops the stale video queue, re-arms
+                // the anchor gate, recomputes the offset from the fresh
+                // RTP-Info). Required because the Range-PLAY restarts the wire
+                // timestamps.
+                ReBaselineSync($"resume from pause @ {resumeMs}ms");
+
+                // The pause point becomes the new position base.
+                Interlocked.Exchange(ref _playBaseNptMs, resumeMs);
+                Interlocked.Exchange(ref _masterAtBaseMs, (long)(_renderer?.GetMediaTimeMs() ?? 0));
+
+                // Range-PLAY at the pause point. WMPNss resumes there instead of
+                // leaping ~30s ahead (which a bare no-Range PLAY does), so video
+                // no longer freezes/skips. RTSPClient.Pause() armed
+                // _resumeNextPlay, so this PLAY bypasses wire-idempotency.
+                try { _rtsp?.Play(resumeMs, _lastRequestedRate); }
+                catch (Exception ex) { _log?.LogError($"[ext-sync] resume Range PLAY failed: {ex.Message}"); }
+                _log?.LogInfo($"[ext-sync] resume from pause — Range PLAY @ {resumeMs}ms (re-baselined)");
+            } else {
+                _renderer?.Play();   // normal Start (open / heartbeat): ensure the device runs
             }
             return Task.CompletedTask;
         }
@@ -576,6 +618,11 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         public Task PauseAsync() {
             _playRequested = false;
             _paused = true;
+
+            // Latch where we are NOW (before pausing the device freezes the
+            // clock) so the matching resume can Range-PLAY from this exact npt.
+            Interlocked.Exchange(ref _pausePositionMs, AbsolutePositionMs());
+            _log?.LogInfo($"[ext-sync] pause position latched @ {Interlocked.Read(ref _pausePositionMs)}ms");
 
             // Freeze the LOCAL pipeline FIRST, retaining every buffer so the
             // resume is instant. Pausing the audio device stalls the master
@@ -601,6 +648,11 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         }
 
         public Task SeekAsync(TimeSpan position) {
+            // Establish the absolute-position base at the seek target so
+            // AbsolutePositionMs() (and hence a later resume's Range) tracks
+            // from here. Captured before the master clock advances past it.
+            Interlocked.Exchange(ref _playBaseNptMs, (long)position.TotalMilliseconds);
+            Interlocked.Exchange(ref _masterAtBaseMs, (long)(_renderer?.GetMediaTimeMs() ?? 0));
             try {
                 // Seeking a PLAYING WMPNss stream: a bare PLAY-with-Range on the
                 // live session makes the server ACK (200 OK + new RTP-Info) but
@@ -721,12 +773,34 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         //  Teardown
         // ============================================================
 
+        /// <summary>
+        /// Stop all audio/video output RIGHT NOW. Used on CloseMedia/Stop so
+        /// playback ceases the instant WMC asks, rather than continuing through
+        /// the decode-pipeline teardown below (whose Dispose Joins, and the
+        /// audio device's buffered PCM, would otherwise keep sound playing for a
+        /// noticeable tail). <see cref="NAudioMasterRenderer.Stop"/> halts the
+        /// WaveOut device and discards its queued buffers immediately;
+        /// ClearBuffer drops the provider's backlog; freezing the pacer stops
+        /// any further video frame from being presented. The on-screen surface
+        /// is blanked separately by the session (VideoPipelineClosed). Safe to
+        /// call repeatedly / from any thread.
+        /// </summary>
+        public void HaltPlaybackNow() {
+            try { _renderer?.Stop(); } catch { }
+            try { _renderer?.ClearBuffer(); } catch { }
+            lock (_videoGate) { try { _pacer?.SetPaused(true); } catch { } }
+        }
+
         /// <summary>Tear down the per-media decode pipeline (video decoder +
         /// pacer, audio decoder + renderer) and reset the sync-anchor state so
         /// the next media starts clean and rebuilds decoders for ITS codec.
         /// Preserves session-scoped state: the presenter (session-owned) and
         /// the user's live A/V trim (<see cref="_liveTrimMs"/>). Idempotent.</summary>
         private void ResetPipelineForNewMedia() {
+            // Silence the device + freeze video BEFORE the dispose Joins below,
+            // so a media switch (or any teardown) doesn't leak the old media's
+            // buffered audio while we wait on the decode threads to exit.
+            HaltPlaybackNow();
             lock (_videoGate) {
                 try { _videoDecoder?.Complete(); } catch { }
                 try { _videoDecoder?.Dispose(); } catch { }
@@ -757,6 +831,12 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             Interlocked.Exchange(ref _firstAudioMauWirePtsMs, -1L);
             Interlocked.Exchange(ref _firstVideoMauWirePtsMs, -1L);
             Interlocked.Exchange(ref _baseOffsetMs, 0L);
+            // Reset absolute-position tracking so the new media's first seek
+            // re-establishes the base (a stale base would Range-PLAY a resume
+            // to the previous media's position).
+            Interlocked.Exchange(ref _playBaseNptMs, 0L);
+            Interlocked.Exchange(ref _masterAtBaseMs, 0L);
+            Interlocked.Exchange(ref _pausePositionMs, 0L);
             // New media gets a fresh RTSPClient (RtpInfoGeneration restarts at 0),
             // so clear the seek anchor-gate or it would block the new media.
             Interlocked.Exchange(ref _anchorMinRtpInfoGen, 0L);
