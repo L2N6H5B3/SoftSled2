@@ -8,7 +8,10 @@
     <OutputType>WinExe</OutputType>
     <RootNamespace>SoftSled.HostSetup</RootNamespace>
     <AssemblyName>SoftSledHostSetup</AssemblyName>
-    <TargetFrameworkVersion>v4.6.1</TargetFrameworkVersion>
+    <!-- Target 4.0: WMC hosts (Win7) commonly have only .NET 4.0, and
+         X509Store isn't IDisposable until 4.6 — targeting 4.0 makes the
+         compiler reject any post-4.0 API so this can't regress. -->
+    <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <Deterministic>true</Deterministic>

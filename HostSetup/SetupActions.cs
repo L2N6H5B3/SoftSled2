@@ -124,27 +124,49 @@ namespace SoftSled.HostSetup {
 
         public static bool ImportCaCertificate(Action<string> log) {
             log("• Importing the SoftSled CA certificate (Local Machine → Trusted Root)");
+
+            X509Certificate2 cert;
             try {
-                var cert = LoadEmbeddedCaCert();
+                cert = LoadEmbeddedCaCert();
                 log("    Certificate: " + cert.Subject);
                 log("    Thumbprint:  " + cert.Thumbprint);
-
-                using (var store = new X509Store(StoreName.Root, StoreLocation.LocalMachine)) {
-                    store.Open(OpenFlags.ReadWrite);
-                    var match = store.Certificates.Find(
-                        X509FindType.FindByThumbprint, cert.Thumbprint, false);
-                    if (match.Count > 0) {
-                        log("    Already present in Trusted Root — nothing to do. [OK]");
-                    } else {
-                        store.Add(cert);
-                        log("    Imported into Local Machine Trusted Root. [OK]");
-                    }
-                    store.Close();
-                }
-                return true;
             } catch (Exception ex) {
-                log("    ERROR: " + ex.Message);
+                log("    ERROR loading the embedded certificate: "
+                    + ex.GetType().Name + ": " + ex.Message);
                 return false;
+            }
+
+            // Add (idempotent). Report the exception TYPE on failure so we can
+            // tell EntryPointNotFound / access-denied / etc. apart.
+            try {
+                bool already = WithStore(OpenFlags.ReadWrite, store => {
+                    bool present = Contains(store, cert.Thumbprint);
+                    if (!present) store.Add(cert);
+                    return present;
+                });
+                if (already) {
+                    log("    Already present in Trusted Root — nothing to do. [OK]");
+                    return true;
+                }
+            } catch (Exception ex) {
+                log("    ERROR adding to the store: " + ex.GetType().Name + ": " + ex.Message);
+                return false;
+            }
+
+            // Verify by re-reading, so we report what actually persisted rather
+            // than trusting that the add call returned cleanly.
+            try {
+                bool present = WithStore(OpenFlags.ReadOnly, store => Contains(store, cert.Thumbprint));
+                if (present) {
+                    log("    Imported into Local Machine Trusted Root. [OK]");
+                    return true;
+                }
+                log("    ERROR: the certificate did not persist in the store after add.");
+                return false;
+            } catch (Exception ex) {
+                log("    WARNING: added without error, but could not verify the store: "
+                    + ex.GetType().Name + ": " + ex.Message);
+                return true;
             }
         }
 
@@ -166,14 +188,7 @@ namespace SoftSled.HostSetup {
         public static bool IsCaCertInstalled() {
             try {
                 var cert = LoadEmbeddedCaCert();
-                using (var store = new X509Store(StoreName.Root, StoreLocation.LocalMachine)) {
-                    store.Open(OpenFlags.ReadOnly);
-                    bool found = store.Certificates
-                                      .Find(X509FindType.FindByThumbprint, cert.Thumbprint, false)
-                                      .Count > 0;
-                    store.Close();
-                    return found;
-                }
+                return WithStore(OpenFlags.ReadOnly, store => Contains(store, cert.Thumbprint));
             } catch {
                 return false;
             }
@@ -232,8 +247,7 @@ namespace SoftSled.HostSetup {
             log("• Removing the SoftSled CA certificate from Trusted Root");
             try {
                 var cert = LoadEmbeddedCaCert();
-                using (var store = new X509Store(StoreName.Root, StoreLocation.LocalMachine)) {
-                    store.Open(OpenFlags.ReadWrite);
+                WithStore(OpenFlags.ReadWrite, store => {
                     var match = store.Certificates.Find(
                         X509FindType.FindByThumbprint, cert.Thumbprint, false);
                     if (match.Count == 0) {
@@ -242,16 +256,41 @@ namespace SoftSled.HostSetup {
                         store.RemoveRange(match);
                         log("    Removed from Local Machine Trusted Root. [OK]");
                     }
-                    store.Close();
-                }
+                });
                 return true;
             } catch (Exception ex) {
-                log("    ERROR: " + ex.Message);
+                log("    ERROR: " + ex.GetType().Name + ": " + ex.Message);
                 return false;
             }
         }
 
         // ---- Helpers --------------------------------------------------
+
+        // X509Store only implements IDisposable from .NET 4.6 onwards. WMC
+        // hosts commonly run .NET 4.0 (Win7), where a `using`/Dispose() on the
+        // store throws EntryPointNotFoundException on scope exit — which is
+        // exactly what masked an otherwise-successful cert import. So we open
+        // the store, run the body, and Close() explicitly (Close has existed
+        // since .NET 2.0); we never call Dispose().
+        private static T WithStore<T>(OpenFlags flags, Func<X509Store, T> body) {
+            var store = new X509Store(StoreName.Root, StoreLocation.LocalMachine);
+            store.Open(flags);
+            try {
+                return body(store);
+            } finally {
+                try { store.Close(); } catch { /* best-effort commit/close */ }
+            }
+        }
+
+        private static void WithStore(OpenFlags flags, Action<X509Store> body) {
+            WithStore<bool>(flags, s => { body(s); return false; });
+        }
+
+        private static bool Contains(X509Store store, string thumbprint) {
+            return store.Certificates
+                        .Find(X509FindType.FindByThumbprint, thumbprint, false)
+                        .Count > 0;
+        }
 
         private static X509Certificate2 LoadEmbeddedCaCert() {
             return new X509Certificate2(GetResourceBytes(CaCertResource));  // DER .cer

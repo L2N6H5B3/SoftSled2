@@ -17,22 +17,35 @@ namespace SoftSled.HostSetup {
     /// <para>On the wire this is a single byte — the <c>disp8</c> of
     /// <c>lea ecx,[rax+7]</c> (<c>8D 48 07</c>), which sits immediately
     /// before <c>mov rdx,rdi; mov ebx,800B0109h</c>
-    /// (<c>CERT_E_UNTRUSTEDROOT</c>). We find it by a 16-byte signature that
-    /// is unique in the file rather than an absolute offset, then flip
-    /// <c>07 → 01</c>. The patch is therefore applied to the host's OWN
-    /// binary in place: no Microsoft binary is redistributed, and a host
-    /// whose build differs is detected and refused rather than silently
-    /// overwritten with the wrong file.</para>
+    /// (<c>CERT_E_UNTRUSTEDROOT</c>). We find it by a signature that is unique
+    /// in the file rather than an absolute offset, then flip <c>07 → 01</c>.
+    /// The patch is therefore applied to the host's OWN binary in place: no
+    /// Microsoft binary is redistributed, and a host whose build differs is
+    /// detected and refused rather than silently overwritten with the wrong
+    /// file.</para>
+    ///
+    /// <para><b>Cross-version (verified 2026-06-20).</b> The signature anchors
+    /// on the bytes AFTER the target — <c>48 8B D7 BB 09 01 0B 80</c>
+    /// (<c>mov rdx,rdi; mov ebx,800B0109h</c>) — preceded by the
+    /// <c>lea ecx,[rax+disp8]</c> opcode (<c>8D 48</c>). Only the surrounding
+    /// stack/frame addressing differs between builds, not this validation-setup
+    /// core, so the one signature matches uniquely across every Media Center
+    /// build checked: Win7 RTM/SP1 x64 (all editions; target @0x21D15) and
+    /// Win8.1 Pro w/ Media Center x64 (target @0x1EC17). Win8.1's site is
+    /// inferred from the identical instruction pattern (no diff-verified
+    /// patched reference for it yet), so Win8.1 pairing is worth a live test.</para>
     /// </summary>
     internal static class Mcx2ProvPatcher {
 
-        // 12 bytes immediately BEFORE the target byte, and 3 bytes AFTER.
-        // The prefix + (target) + suffix anchor occurs exactly once in the
-        // Windows 7 RTM x64 Mcx2Prov.exe (verified by full-file scan).
+        // Anchor: lea ecx,[rax+disp8]  (8D 48 <target>) immediately followed by
+        //   mov rdx,rdi ; mov ebx,800B0109h  (CERT_E_UNTRUSTEDROOT).
+        // The 8-byte suffix carries that distinctive error constant, so the
+        // whole pattern occurs exactly once per binary (verified across Win7
+        // RTM/SP1 and Win8.1). Prefix is just the lea opcode+modrm.
         private static readonly byte[] Prefix =
-            { 0x4C, 0x8D, 0x44, 0x24, 0x20, 0x48, 0x89, 0x44, 0x24, 0x30, 0x8D, 0x48 };
+            { 0x8D, 0x48 };
         private static readonly byte[] Suffix =
-            { 0x48, 0x8B, 0xD7 };
+            { 0x48, 0x8B, 0xD7, 0xBB, 0x09, 0x01, 0x0B, 0x80 };
 
         private const byte OriginalByte = 0x07; // lea ecx,[rax+7]  — CRL check enforced
         private const byte PatchedByte  = 0x01; // lea ecx,[rax+1]  — CRL check skipped
