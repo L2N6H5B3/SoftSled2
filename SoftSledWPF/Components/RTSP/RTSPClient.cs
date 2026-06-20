@@ -817,16 +817,16 @@ namespace SoftSled.Components.RTSP {
                         System.Globalization.CultureInfo.InvariantCulture) + "-");
             }
 
-            // Scale: / Speed: — only when rate ≠ 1.0. Captured McxDMS
-            // responses always show Scale and Speed echoed when requested.
-            // Some servers prefer Scale, some Speed; sending both is the
-            // recommended belt-and-braces approach (RFC 7826 §18.46/§18.50).
-            if (System.Math.Abs(rate - 1.0) > 0.0001) {
-                string rateStr = rate.ToString("0.###",
-                    System.Globalization.CultureInfo.InvariantCulture);
-                play_message.AddHeader("Scale: " + rateStr);
-                play_message.AddHeader("Speed: " + rateStr);
-            }
+            // Scale: ALWAYS sent — including at 1.0 ("Scale: 1.000"). The
+            // reference Xbox 360 extender puts Scale on EVERY PLAY (initial,
+            // resume, rate change); omitting it on a no-Range resume is what made
+            // WMPNss leap ~30s ahead instead of resuming at the pause point. The
+            // Xbox request carries Scale only (no Speed — the server echoes Speed
+            // in its response regardless), formatted with 3 decimals, e.g.
+            // "Scale: 1.000" / "Scale: 3.000" / "Scale: 100.000".
+            string rateStr = rate.ToString("0.000",
+                System.Globalization.CultureInfo.InvariantCulture);
+            play_message.AddHeader("Scale: " + rateStr);
 
             // First-sample-after-seek arm: clear the per-stream "first
             // PTS captured" flags so the UNRECOVERABLE_SKEW first-sample
