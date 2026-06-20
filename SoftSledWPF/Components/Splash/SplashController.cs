@@ -2870,6 +2870,7 @@ namespace SoftSled.Components.Splash {
                             kfs[idx].EaseP1 = w;
                             kfs[idx].EaseP2 = h;
                         }
+                        _dumper?.OnEvent($"  Animation[{anim.Kind}]_{(msgid == 1 ? "SetEaseOut" : "SetEaseIn")} anim=0x{anim.Handle:X8} kf[{idx}] flWeight={w:0.0000} flHandle={h:0.0000}");
                     }
                     break;
                 case 3:  // SetBezier: idxKeyframe + flHandle1 + flHandle2
@@ -2883,6 +2884,7 @@ namespace SoftSled.Components.Splash {
                             kfs[idx].EaseP1 = h1;
                             kfs[idx].EaseP2 = h2;
                         }
+                        _dumper?.OnEvent($"  Animation[{anim.Kind}]_SetBezier anim=0x{anim.Handle:X8} kf[{idx}] flHandle1={h1:0.0000} flHandle2={h2:0.0000}");
                     }
                     break;
                 case 4:  // SetCosine  (idx)
@@ -2894,6 +2896,7 @@ namespace SoftSled.Components.Splash {
                             kfs[idx].Easing = msgid == 4 ? Objects.AnimationEasing.Cosine
                                             :              Objects.AnimationEasing.Sine;
                         }
+                        _dumper?.OnEvent($"  Animation[{anim.Kind}]_{(msgid == 4 ? "SetCosine" : "SetSine")} anim=0x{anim.Handle:X8} kf[{idx}]");
                     }
                     break;
                 case 6:  // SetSCurve       (idx + flWeight)
@@ -2909,6 +2912,7 @@ namespace SoftSled.Components.Splash {
                                             :              Objects.AnimationEasing.Exponential;
                             kfs[idx].EaseP1 = w; // weight (curve steepness)
                         }
+                        _dumper?.OnEvent($"  Animation[{anim.Kind}]_{(msgid == 6 ? "SetSCurve" : msgid == 7 ? "SetLogarithmic" : "SetExponential")} anim=0x{anim.Handle:X8} kf[{idx}] flWeight={w:0.0000}");
                     }
                     break;
                 // ---- Value setters ---------------------------------------
@@ -3087,6 +3091,7 @@ namespace SoftSled.Components.Splash {
                             kfs[idx].EaseP1 = 0;
                             kfs[idx].EaseP2 = 0;
                         }
+                        _dumper?.OnEvent($"  Animation[{anim.Kind}]_SetLinear anim=0x{anim.Handle:X8} kf[{idx}]");
                     }
                     break;
                 case 24: // Stop (cmd i32) — per spec §17.25, cmd OVERRIDES the
