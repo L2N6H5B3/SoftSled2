@@ -44,7 +44,7 @@ namespace SoftSledWPF.Components.Shell {
             }
 
             try {
-                _logger.LogInfo($"[PairingPage] Creating ExtenderDevice - Logger Null: '{_logger == null}'");
+                _logger.LogInfo($"[PairingPage] Creating ExtenderDevice'");
                 _device = new ExtenderDevice(_logger);
                 _logger.LogInfo("[PairingPage] Starting ExtenderDevice");
                 _device.Start();
