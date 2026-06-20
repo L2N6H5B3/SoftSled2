@@ -43,10 +43,11 @@ namespace SoftSled.HostSetup {
             var intro = new Label {
                 Text =
                     "This tool prepares this PC (the Windows Media Center host) so SoftSled can pair " +
-                    "with it. It replaces  %WINDIR%\\ehome\\Mcx2Prov.exe  with a patched version " +
-                    "(backing up the original) and imports the SoftSled CA certificate into the Local " +
-                    "Machine Trusted Root store. Uninstall reverses both. Run this on the Media Center " +
-                    "PC, not the device running SoftSled.",
+                    "with it. It patches  %WINDIR%\\ehome\\Mcx2Prov.exe  in place (one byte, backing up " +
+                    "the original first) to skip the CRL check that SoftSled's certificates would fail, " +
+                    "and imports the SoftSled CA certificate into the Local Machine Trusted Root store. " +
+                    "Uninstall reverses both. Run this on the Media Center PC, not the device running " +
+                    "SoftSled.",
                 AutoSize = false,
                 Location = new Point(20, 54),
                 Size = new Size(620, 92),
@@ -152,7 +153,7 @@ namespace SoftSled.HostSetup {
 
         private void InstallButton_Click(object sender, EventArgs e) {
             RunAsync("Installing SoftSled host setup...",
-                     SetupActions.ReplaceMcx2Prov,
+                     SetupActions.PatchMcx2Prov,
                      SetupActions.ImportCaCertificate);
         }
 

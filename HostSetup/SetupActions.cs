@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -11,17 +10,18 @@ namespace SoftSled.HostSetup {
     /// <summary>
     /// The two host-side actions that let SoftSled pair with a Windows Media
     /// Center PC:
-    ///   1. Replace %WINDIR%\ehome\Mcx2Prov.exe with the patched build.
+    ///   1. Patch %WINDIR%\ehome\Mcx2Prov.exe in place (one byte) to skip the
+    ///      CRL check that SoftSled's CRL-less certs would otherwise fail.
     ///   2. Import the SoftSled CA certificate into the Local Machine
     ///      "Trusted Root Certification Authorities" store.
     /// Both require administrator rights (the app manifest forces elevation).
-    /// The patched exe and the CA cert are embedded in this assembly, so the
-    /// tool is a single self-contained file to copy onto the host PC.
+    /// Only the CA cert is embedded; Mcx2Prov.exe is patched in place on the
+    /// host (see <see cref="Mcx2ProvPatcher"/>), so no Microsoft binary is
+    /// redistributed and the host's own build is preserved.
     /// </summary>
     internal static class SetupActions {
 
-        private const string PatchedExeResource = "Mcx2Prov_patched.exe";
-        private const string CaCertResource     = "softsled_ca.cer";
+        private const string CaCertResource = "softsled_ca.cer";
 
         // ---- Admin check ----------------------------------------------
 
@@ -34,16 +34,16 @@ namespace SoftSled.HostSetup {
             }
         }
 
-        // ---- Action 1: replace Mcx2Prov.exe ---------------------------
+        // ---- Action 1: patch Mcx2Prov.exe in place --------------------
 
         /// <summary>The on-disk path of the host's Mcx2Prov.exe.</summary>
         public static string Mcx2ProvPath =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
                          "ehome", "Mcx2Prov.exe");
 
-        public static bool ReplaceMcx2Prov(Action<string> log) {
+        public static bool PatchMcx2Prov(Action<string> log) {
             string target = Mcx2ProvPath;
-            log("• Replacing Mcx2Prov.exe");
+            log("• Patching Mcx2Prov.exe (skip the CRL check for SoftSled certs)");
             log("    Target: " + target);
 
             string ehome = Path.GetDirectoryName(target);
@@ -52,40 +52,61 @@ namespace SoftSled.HostSetup {
                 log("    Windows Media Center does not appear to be installed on this PC.");
                 return false;
             }
-
-            string patched;
-            try {
-                patched = ExtractResourceToTemp(PatchedExeResource);
-            } catch (Exception ex) {
-                log("    ERROR: could not extract the patched Mcx2Prov.exe: " + ex.Message);
+            if (!File.Exists(target)) {
+                log("    ERROR: " + target + " was not found.");
                 return false;
             }
 
+            byte[] bytes;
             try {
-                if (File.Exists(target)) {
-                    // The original is owned by TrustedInstaller with a DACL that
-                    // blocks writes even for administrators, so take ownership
-                    // and grant the Administrators group full control first.
-                    log("    Taking ownership of the existing file...");
-                    RunProcess("takeown.exe", "/f \"" + target + "\"", log);
-                    log("    Granting Administrators full control...");
-                    RunProcess("icacls.exe", "\"" + target + "\" /grant *S-1-5-32-544:F", log);
+                bytes = File.ReadAllBytes(target);
+            } catch (Exception ex) {
+                log("    ERROR: could not read the file: " + ex.Message);
+                return false;
+            }
 
-                    // Keep one pristine backup of the original (never overwrite
-                    // a backup, so re-running the tool can't lose the original).
-                    string backup = target + ".softsled-backup";
-                    if (!File.Exists(backup)) {
-                        File.Copy(target, backup);
-                        log("    Backed up the original to " + Path.GetFileName(backup));
-                    } else {
-                        log("    Existing backup found — leaving it intact.");
-                    }
+            // Locate / classify the patch site before touching anything.
+            switch (Mcx2ProvPatcher.Inspect(bytes)) {
+                case Mcx2ProvPatcher.PatchState.Patched:
+                    log("    Already patched — nothing to do. [OK]");
+                    return true;
+                case Mcx2ProvPatcher.PatchState.NotFound:
+                    log("    ERROR: the CRL-check patch site was not found in this binary.");
+                    log("    This build of Mcx2Prov.exe isn't recognised (expected Windows 7 x64).");
+                    log("    No changes were made.");
+                    return false;
+                case Mcx2ProvPatcher.PatchState.Ambiguous:
+                    log("    ERROR: the patch signature matched more than once — refusing to guess.");
+                    log("    No changes were made.");
+                    return false;
+                case Mcx2ProvPatcher.PatchState.Unexpected:
+                    log("    ERROR: the patch site was found but holds an unexpected value.");
+                    log("    No changes were made.");
+                    return false;
+            }
+
+            // PatchState.Original — safe to patch.
+            try {
+                // The original is owned by TrustedInstaller with a DACL that
+                // blocks writes even for administrators, so take ownership and
+                // grant the Administrators group full control first (done
+                // in-process — no takeown/icacls child processes).
+                log("    Taking ownership / granting Administrators full control...");
+                HostFileAccess.GrantAdminsFullControl(target);
+
+                // Keep one pristine backup of the original (never overwrite a
+                // backup, so re-running the tool can't lose the original).
+                string backup = target + ".softsled-backup";
+                if (!File.Exists(backup)) {
+                    File.Copy(target, backup);
+                    log("    Backed up the original to " + Path.GetFileName(backup));
                 } else {
-                    log("    No existing Mcx2Prov.exe — installing the patched copy fresh.");
+                    log("    Existing backup found — leaving it intact.");
                 }
 
-                File.Copy(patched, target, true);
-                log("    Mcx2Prov.exe replaced with the patched version. [OK]");
+                Mcx2ProvPatcher.Apply(bytes, patch: true);   // flips the single byte
+                File.WriteAllBytes(target, bytes);
+                log("    Patched the CRL check in place (1 byte changed). [OK]");
                 return true;
             } catch (UnauthorizedAccessException ex) {
                 log("    ERROR: access denied writing " + target + ".");
@@ -96,8 +117,6 @@ namespace SoftSled.HostSetup {
             } catch (Exception ex) {
                 log("    ERROR: " + ex.Message);
                 return false;
-            } finally {
-                try { File.Delete(patched); } catch { /* temp cleanup, best-effort */ }
             }
         }
 
@@ -131,18 +150,11 @@ namespace SoftSled.HostSetup {
 
         // ---- Detection ------------------------------------------------
 
-        /// <summary>True if the host's Mcx2Prov.exe is byte-identical to the
-        /// embedded patched build (i.e. our patch is currently installed).</summary>
+        /// <summary>True if the host's Mcx2Prov.exe has the CRL-check patch
+        /// applied (the single patch byte is in its patched state).</summary>
         public static bool IsMcx2ProvInstalled() {
-            try {
-                string target = Mcx2ProvPath;
-                if (!File.Exists(target)) return false;
-                byte[] current = File.ReadAllBytes(target);
-                byte[] patched = GetResourceBytes(PatchedExeResource);
-                return current.Length == patched.Length && current.SequenceEqual(patched);
-            } catch {
-                return false;
-            }
+            return Mcx2ProvPatcher.InspectFile(Mcx2ProvPath)
+                   == Mcx2ProvPatcher.PatchState.Patched;
         }
 
         /// <summary>True if a tool-made backup of the original Mcx2Prov.exe
@@ -175,23 +187,41 @@ namespace SoftSled.HostSetup {
             log("• Restoring the original Mcx2Prov.exe");
             log("    Target: " + target);
 
-            if (!File.Exists(backup)) {
-                log("    No backup found (" + Path.GetFileName(backup) + ").");
-                log("    The original was never backed up by this tool, so it can't be " +
-                    "restored automatically.");
+            if (!File.Exists(target)) {
+                log("    ERROR: " + target + " was not found.");
                 return false;
             }
 
             try {
-                if (File.Exists(target)) {
-                    log("    Taking ownership / granting Administrators full control...");
-                    RunProcess("takeown.exe", "/f \"" + target + "\"", log);
-                    RunProcess("icacls.exe", "\"" + target + "\" /grant *S-1-5-32-544:F", log);
+                log("    Taking ownership / granting Administrators full control...");
+                HostFileAccess.GrantAdminsFullControl(target);
+
+                // Prefer the pristine backup if we made one.
+                if (File.Exists(backup)) {
+                    File.Copy(backup, target, true);
+                    File.Delete(backup);
+                    log("    Restored from backup; backup removed. [OK]");
+                    return true;
                 }
-                File.Copy(backup, target, true);
-                File.Delete(backup);
-                log("    Original Mcx2Prov.exe restored; backup removed. [OK]");
-                return true;
+
+                // No backup — revert the single patch byte in place. Because
+                // the patch is one byte with a known before/after, this fully
+                // restores the original without needing the backup file.
+                byte[] bytes = File.ReadAllBytes(target);
+                switch (Mcx2ProvPatcher.Inspect(bytes)) {
+                    case Mcx2ProvPatcher.PatchState.Original:
+                        log("    No backup, but the file is already un-patched. [OK]");
+                        return true;
+                    case Mcx2ProvPatcher.PatchState.Patched:
+                        Mcx2ProvPatcher.Apply(bytes, patch: false);
+                        File.WriteAllBytes(target, bytes);
+                        log("    No backup found — reverted the patched byte in place. [OK]");
+                        return true;
+                    default:
+                        log("    No backup found and the patch site is not in a known state — " +
+                            "cannot revert automatically.");
+                        return false;
+                }
             } catch (Exception ex) {
                 log("    ERROR: " + ex.Message);
                 return false;
@@ -242,35 +272,6 @@ namespace SoftSled.HostSetup {
             if (name == null)
                 throw new FileNotFoundException("Embedded resource not found: " + suffix);
             return asm.GetManifestResourceStream(name);
-        }
-
-        private static string ExtractResourceToTemp(string suffix) {
-            string path = Path.Combine(Path.GetTempPath(), "SoftSledHostSetup_" + suffix);
-            using (var src = GetResourceStream(suffix))
-            using (var dst = File.Create(path)) {
-                src.CopyTo(dst);
-            }
-            return path;
-        }
-
-        private static void RunProcess(string exe, string args, Action<string> log) {
-            var psi = new ProcessStartInfo(exe, args) {
-                UseShellExecute        = false,
-                CreateNoWindow         = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-            };
-            try {
-                using (var p = Process.Start(psi)) {
-                    string stdout = p.StandardOutput.ReadToEnd();
-                    string stderr = p.StandardError.ReadToEnd();
-                    p.WaitForExit();
-                    if (!string.IsNullOrWhiteSpace(stdout)) log("      " + stdout.Trim());
-                    if (!string.IsNullOrWhiteSpace(stderr)) log("      " + stderr.Trim());
-                }
-            } catch (Exception ex) {
-                log("      (" + exe + " failed: " + ex.Message + ")");
-            }
         }
     }
 }
