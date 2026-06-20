@@ -203,6 +203,38 @@ namespace SoftSledWPF.Components.Shell {
             return true;
         }
 
+        /// <summary>
+        /// Forward an MCE-remote RemoteCommand to WMC over RDP. Looks up the
+        /// scan codes WMC bound to this command in its RegisterRemoteCommandBindings
+        /// table (McxSess) and replays them as a key chord: press modifiers+key in
+        /// order, then release in reverse. The table's codes are PS/2 Set-1 with a
+        /// 0x100 = extended (E0) bit — exactly what <see cref="FreeRdpClient.SendKey"/>
+        /// wants. Returns false if not in a session or the command has no binding.
+        /// </summary>
+        public bool SendRemoteCommandToWmc(int cmdId) {
+            if (McxSessHandler == null ||
+                !McxSessHandler.TryGetRemoteCommandScanCodes(cmdId, out int[] codes)) {
+                m_logger?.LogDebug($"[mcx-remote] RemoteCmd[{cmdId}] — no WMC binding (table not received yet?)");
+                return false;
+            }
+            bool ok = SendScanCodeChordToWmc(codes);
+            if (ok) m_logger?.LogInfo($"[mcx-remote] RemoteCmd[{cmdId}] → forwarded {codes.Length} scancode(s) to WMC");
+            return ok;
+        }
+
+        /// <summary>Replay a PS/2 Set-1 scan-code chord over RDP: press
+        /// modifiers+key in order, release in reverse. The 0x100 bit on a code =
+        /// extended (E0). Used for both McxSess-bound commands and the few buttons
+        /// WMC doesn't bind (sent as built-in shortcuts, e.g. skip = Ctrl+F).</summary>
+        public bool SendScanCodeChordToWmc(int[] codes) {
+            if (!_sessionActive || freeRdpClient == null || codes == null || codes.Length == 0) return false;
+            for (int i = 0; i < codes.Length; i++)
+                freeRdpClient.SendKey((byte)(codes[i] & 0xFF), (codes[i] & 0x100) != 0, release: false);
+            for (int i = codes.Length - 1; i >= 0; i--)
+                freeRdpClient.SendKey((byte)(codes[i] & 0xFF), (codes[i] & 0x100) != 0, release: true);
+            return true;
+        }
+
         // ------- Mouse forwarding --------------------------------------
         // Wired on MouseInputLayer — a transparent Border that sits above
         // BOTH rdpDisplay and splashHost — so mouse events reach these

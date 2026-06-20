@@ -430,11 +430,22 @@ namespace SoftSledWPF {
         [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
         [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
 
+        // RC6 / Media Center remote (eHome IR receiver) Raw Input capture.
+        private SoftSled.Components.Input.McxRemoteInput _remote;
+
         private void InstallSizingHook() {
             try {
                 var hwnd = new WindowInteropHelper(this).Handle;
                 var src = HwndSource.FromHwnd(hwnd);
                 src?.AddHook(WndProcHook);
+
+                // Same HWND hook also carries WM_INPUT for the MCE remote. Set it
+                // up here, once the window handle exists.
+                _remote = new SoftSled.Components.Input.McxRemoteInput(_logger);
+                _remote.RemoteCommand = OnRemoteCommand;
+                _remote.RemoteKeyChord = OnRemoteKeyChord;
+                _remote.EnumerateDevices();   // log HID devices so we can ID the remote
+                _remote.Register(hwnd);       // start receiving WM_INPUT (INPUTSINK)
             } catch (Exception ex) {
                 System.Diagnostics.Debug.WriteLine("[shell] InstallSizingHook failed: " + ex.Message);
             }
@@ -445,6 +456,48 @@ namespace SoftSledWPF {
         /// ratio is the selected session resolution's width:height — the same
         /// shape the RDP framebuffer and the Uniform-stretched pages render at.
         /// </summary>
+        // WMC RemoteCommand id for the Green Start button. When idle we use it to
+        // launch into the session; in a session we send Win+Alt+Enter directly.
+        private const int RemoteCmdGreenStart = 23;
+
+        // Win+Alt+Enter for the Green button, sent directly over RDP. LWin MUST be
+        // EXTENDED (0x5B | 0x100) — RDP only recognises the Windows key with the
+        // E0 prefix, whereas the McxSess table binds it as a non-extended 0x5B
+        // (which WMC never sees as Win). LAlt=0x38, Enter=0x1C.
+        private static readonly int[] GreenStartChord = { 0x15B, 0x38, 0x1C };
+
+        /// <summary>Handle a mapped MCE-remote button. Runs on the UI thread (the
+        /// WM_INPUT hook fires there). In a live session, forward the command to
+        /// WMC over RDP. When idle, the Green Start button opens SoftSled into the
+        /// extender session (other buttons do nothing until a session is up).</summary>
+        private void OnRemoteCommand(int cmdId) {
+            // Green: send Win+Alt+Enter directly in a session; open SoftSled when idle.
+            if (cmdId == RemoteCmdGreenStart) {
+                if (CurrentPage is ExtenderSessionControl gsession) {
+                    gsession.SendScanCodeChordToWmc(GreenStartChord);
+                } else {
+                    _logger?.LogInfo("[mcx-remote] Green button while idle → starting extender session");
+                    try {
+                        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+                        Activate();
+                    } catch { }
+                    StartExtenderSession();
+                }
+                return;
+            }
+            if (CurrentPage is ExtenderSessionControl session) {
+                session.SendRemoteCommandToWmc(cmdId);
+            }
+        }
+
+        /// <summary>Off-table remote buttons (e.g. Skip/Replay) → forward the
+        /// built-in WMC shortcut chord directly. Session-only.</summary>
+        private void OnRemoteKeyChord(int[] codes) {
+            if (CurrentPage is ExtenderSessionControl session) {
+                session.SendScanCodeChordToWmc(codes);
+            }
+        }
+
         private void RefreshAspectLockFromConfig(SoftSledConfig cfg) {
             _aspectLockEnabled = cfg.LockWindowAspectRatio;
             if (cfg.SessionWidth > 0 && cfg.SessionHeight > 0) {
@@ -460,6 +513,13 @@ namespace SoftSledWPF {
         /// conversion is needed. Returns TRUE and marks handled when we adjust.
         /// </summary>
         private IntPtr WndProcHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled) {
+            // MCE remote Raw Input. Leave handled=false so WPF still passes
+            // WM_INPUT to DefWindowProc for its required cleanup.
+            if (msg == SoftSled.Components.Input.McxRemoteInput.WM_INPUT) {
+                _remote?.TryHandleWmInput(msg, lParam);
+                return IntPtr.Zero;
+            }
+
             if (msg != WM_SIZING) return IntPtr.Zero;
             if (!_aspectLockEnabled || _isFullScreen || _lockedAspectRatio <= 0) return IntPtr.Zero;
 

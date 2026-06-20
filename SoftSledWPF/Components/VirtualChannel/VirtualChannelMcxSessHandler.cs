@@ -13,6 +13,20 @@ namespace SoftSled.Components.VirtualChannel {
 
         private int DSMNServiceHandle;
 
+        // RemoteCommand id → PS/2 Set-1 scan codes (with 0x100 = extended/E0),
+        // captured from the RegisterRemoteCommandBindings table WMC sends at
+        // session start. These are the exact codes to forward over the RDP
+        // keyboard channel when the user presses the matching remote button.
+        // Populated regardless of logging so remote forwarding works either way.
+        private readonly System.Collections.Generic.Dictionary<int, int[]> _remoteCmdScanCodes
+            = new System.Collections.Generic.Dictionary<int, int[]>();
+
+        /// <summary>Look up the scan codes WMC bound to a RemoteCommand id (from
+        /// the RegisterRemoteCommandBindings table). False if not received yet or
+        /// the command has no binding.</summary>
+        public bool TryGetRemoteCommandScanCodes(int cmdId, out int[] scanCodes)
+            => _remoteCmdScanCodes.TryGetValue(cmdId, out scanCodes) && scanCodes != null && scanCodes.Length > 0;
+
         public VirtualChannelMcxSessHandler(Logger m_logger) {
             this.m_logger = m_logger;
         }
@@ -363,12 +377,17 @@ namespace SoftSled.Components.VirtualChannel {
                                     if (arity == 0) {
                                         keystroke = "(no binding)";
                                     } else {
+                                        var codes = new int[arity];
                                         for (int k = 0; k < arity; k++) {
                                             int sc = DataUtilities.Get4ByteInt(
                                                 incomingBuff, scanTableStart + ((scanIdx + k) * 4));
+                                            codes[k] = sc;
                                             if (k > 0) keystroke += "+";
                                             keystroke += DecodeScanCode(sc);
                                         }
+                                        // Store for remote-control forwarding (see
+                                        // TryGetRemoteCommandScanCodes).
+                                        _remoteCmdScanCodes[cmdId] = codes;
                                     }
                                     m_logger?.LogDebug($"MCXSESS: RemoteCmd[{cmdId,3}] → {keystroke}");
                                     scanIdx += arity;
