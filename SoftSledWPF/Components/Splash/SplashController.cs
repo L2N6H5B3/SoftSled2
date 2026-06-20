@@ -3606,31 +3606,45 @@ namespace SoftSled.Components.Splash {
             if (t <= 0) return 0;
             if (t >= 1) return 1;
             // For SCurve / Logarithmic / Exponential the wire carries an
-            // `flWeight` per spec §17.7/§17.8/§17.10. Spec wording is
-            // "weight of the interpolation as compared to a linear
-            // interpolation" — we interpret weight=0 as pure linear and
-            // weight=1 as pure curve, mixing in between. Weights outside
-            // [0,1] are clamped so they don't fly past the keyframe target.
-            float w = p1 <= 0 ? 1f : (p1 > 1 ? 1f : p1);
+            // `flWeight` per spec §17.7/§17.8/§17.10: "weight of the
+            // interpolation as compared to a linear interpolation."
+            //
+            // CAPTURE FINDING (2026-06-20): WMC does NOT send weight in
+            // [0,1]. Real values are 1.0 (dominant), 0.5, 2.0, 3.0, 4.0 —
+            // i.e. flWeight is a curve *steepness*, with 1.0 the nominal
+            // curve and larger values steeper. The previous code clamped
+            // anything >1 to 1.0 and treated weight as a linear blend
+            // factor (t + (curve-t)*w), so every weight-2/3/4 animation
+            // (≈126 in a typical session, almost all Logarithmic) rendered
+            // UNDER-curved — a Logarithmic settle that ended too abruptly.
+            //
+            // Fix: Exponential / Logarithmic now take flWeight as the true
+            // rate of a single monotone family that maps [0,1]→[0,1]:
+            //   Exp(t;w) = (e^{w t} − 1) / (e^w − 1)
+            //   Log(t;w) = ln(1 + (e^w − 1)·t) / w     (inverse of Exp)
+            // At w=1 these are IDENTICALLY the old curves (so the dominant
+            // weight-1 case is unchanged — zero regression), w→0 degrades
+            // to linear, and w=2/3/4 properly steepen without ever leaving
+            // [0,1] or losing monotonicity.
+            //
+            // SCurve keeps the old linear-blend (clamped) form — its
+            // weights are almost all 1.0 (a handful of 2.0), so the blend
+            // is fine and we avoid disturbing the common weight-1 shape.
+            float wBlend = p1 <= 0 ? 1f : (p1 > 1 ? 1f : p1);
             switch (ease) {
                 case Objects.AnimationEasing.Linear:       return t;
                 case Objects.AnimationEasing.Cosine:       return (float)((1.0 - Math.Cos(t * Math.PI)) * 0.5);
                 case Objects.AnimationEasing.Sine:         return (float)Math.Sin(t * Math.PI * 0.5);
                 case Objects.AnimationEasing.SCurve: {
                     float curve = t * t * (3f - 2f * t);
-                    return t + (curve - t) * w;
+                    return t + (curve - t) * wBlend;
                 }
                 // Single-piece power curve. p1=flWeight (steepness),
                 // p2=flHandle (additional shaping; spec says it's the
-                // exp↔linear transition point, but empirically WMC ships
-                // EaseOut with both params=0 on 100% of instances, so the
-                // safest interpretation is "p2 adds to the exponent" —
-                // keeps the curve monotone for any wire-observed value.
-                // Default (w=0,h=0) gives exponent=2 → smooth quadratic
-                // ease, matching the legacy implementation. A piecewise
-                // spec-accurate curve was tried and degenerated to "pegs
-                // at 1.0 from t=0.5" with default params, which broke
-                // every EaseOut animation in the system.
+                // exp↔linear transition point). NOTE: WMC never sends
+                // EaseOut and only ~40 EaseIn/session (flHandle 0.4–0.8);
+                // the piecewise spec form remains a follow-up. Default
+                // (w=0,h=0) gives exponent=2 → smooth quadratic ease.
                 case Objects.AnimationEasing.EaseIn:
                     return (float)Math.Pow(t,
                         1.0 + (p1 > 0 ? p1 : 1.0) + (p2 > 0 ? p2 : 0.0));
@@ -3638,12 +3652,16 @@ namespace SoftSled.Components.Splash {
                     return 1f - (float)Math.Pow(1f - t,
                         1.0 + (p1 > 0 ? p1 : 1.0) + (p2 > 0 ? p2 : 0.0));
                 case Objects.AnimationEasing.Logarithmic: {
-                    float curve = (float)Math.Log(1 + t * (Math.E - 1));
-                    return t + (curve - t) * w;
+                    // Concave (fast start → gentle settle). Rate = flWeight.
+                    if (p1 <= 0) return t;
+                    double w = p1;
+                    return (float)(Math.Log(1.0 + (Math.Exp(w) - 1.0) * t) / w);
                 }
                 case Objects.AnimationEasing.Exponential: {
-                    float curve = (float)((Math.Exp(t) - 1.0) / (Math.E - 1.0));
-                    return t + (curve - t) * w;
+                    // Convex (slow start → fast finish). Rate = flWeight.
+                    if (p1 <= 0) return t;
+                    double w = p1;
+                    return (float)((Math.Exp(w * t) - 1.0) / (Math.Exp(w) - 1.0));
                 }
                 case Objects.AnimationEasing.Bezier:
                     // 1D cubic Bezier with handles (p1, p2) interpreted as
