@@ -231,7 +231,7 @@ namespace SoftSled.Components.Extender {
             SupportedSignatureAlgorithms = "rSASSA-PSS-Default-Identifier";
             AttachCertificate = false;
 
-            //m_logger.LogInfo("RemotedExperienceService_AcquireNonce(" + HostId.ToString() + ")");
+            m_logger.LogInfo("[RXAD] RemotedExperienceService_AcquireNonce(" + HostId.ToString() + ")");
         }
 
         public void RemotedExperienceService_Advertise(uint Nonce, string HostId, string ApplicationId, string ApplicationVersion, string ApplicationData, string HostFriendlyName, string ExperienceFriendlyName, string ExperienceIconUri, string ExperienceEndpointUri, string ExperienceEndpointData, string SignatureAlgorithm, string Signature, string HostCertificate) {
@@ -243,7 +243,7 @@ namespace SoftSled.Components.Extender {
             _RES_SignatureAlgorithm = SignatureAlgorithm;
             _RES_Signature = Signature;
             _RES_HostCertificate = HostCertificate;
-            //m_logger.LogInfo("RemotedExperienceService_Advertise(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + HostFriendlyName.ToString() + ExperienceFriendlyName.ToString() + ExperienceIconUri.ToString() + ExperienceEndpointUri.ToString() + ExperienceEndpointData.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
+            m_logger.LogInfo("[RXAD] RemotedExperienceService_Advertise(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + HostFriendlyName.ToString() + ExperienceFriendlyName.ToString() + ExperienceIconUri.ToString() + ExperienceEndpointUri.ToString() + ExperienceEndpointData.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
 
             // parse endpoint data 
             Dictionary<String, String> endpointData = new Dictionary<string, string>();
@@ -261,16 +261,16 @@ namespace SoftSled.Components.Extender {
             try {
                 rdpPass = Encoding.ASCII.GetString(rsa.Decrypt(cryptedPass, true));
             } catch (Exception ex) {
-                m_logger.LogInfo("RSA decryption of encrypted password failed " + ex.Message);
-                m_logger.LogInfo("Extender Experience Pairing has failed!");
+                m_logger.LogInfo("[RXAD] RSA decryption of encrypted password failed " + ex.Message);
+                m_logger.LogInfo("[RXAD] Extender Experience Pairing has failed!");
             }
 
             string rdpHost = ExperienceEndpointUri.Substring(6, ExperienceEndpointUri.Length - 12);
             string rdpUser = endpointData["user"];
 
-            //m_logger.LogInfo("RDP host: " + rdpHost);
-            //m_logger.LogInfo("RDP clear text Password: " + rdpPass);
-            //m_logger.LogInfo("RDP user: " + rdpUser);
+            m_logger.LogInfo("[RXAD] RDP Host: " + rdpHost);
+            m_logger.LogInfo("[RXAD] RDP User: " + rdpUser);
+            //m_logger.LogInfo("[RXAD] RDP clear text Password: " + rdpPass);
 
             SoftSledConfig config = SoftSledConfigManager.ReadConfig();
             config.IsPaired = true;
@@ -280,11 +280,11 @@ namespace SoftSled.Components.Extender {
             config.RdpLoginPassword = rdpPass;
             SoftSledConfigManager.WriteConfig(config);
 
-            m_logger.LogInfo("Extender Experience data exchanged!");
+            m_logger.LogInfo("[RXAD] Extender Experience data exchanged!");
         }
 
         public void RemotedExperienceService_Inhibit(uint Nonce, string HostId, string ApplicationId, string ApplicationVersion, string ApplicationData, uint ReasonCode, string ReasonMessage, string SignatureAlgorithm, string Signature, string HostCertificate) {
-            m_logger.LogDebug("RemotedExperienceService_Inhibit(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + ReasonCode.ToString() + ReasonMessage.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
+            m_logger.LogDebug("[RXAD] RemotedExperienceService_Inhibit(" + Nonce.ToString() + HostId.ToString() + ApplicationId.ToString() + ApplicationVersion.ToString() + ApplicationData.ToString() + ReasonCode.ToString() + ReasonMessage.ToString() + SignatureAlgorithm.ToString() + Signature.ToString() + HostCertificate.ToString() + ")");
         }
 
         #endregion ############################################################
@@ -299,7 +299,7 @@ namespace SoftSled.Components.Extender {
             //   C. The <IterationsRequired> (N) MAY additionally be checked per vendor-defined rules.
             if (_TrustState != 1) {
                 /* TODO: send soap error message, invalid */
-                m_logger.LogInfo("Exchanging - TrustState Invalid");
+                m_logger.LogInfo("[MSTA] Exchanging - TrustState Invalid");
             }
 
             // 2. Save Parameters
@@ -330,8 +330,8 @@ namespace SoftSled.Components.Extender {
             DeviceConfirmAuthenticator = GenerateDeviceMsgAuthCode(_DeviceConfirmNonce, _Iterations, _OneTimePassword);
 
             //System.Threading.Thread.Sleep(5000);
-            //m_logger.LogInfo("TrustAgreementService_Exchange(HostID : \"" + HostID.ToString() + "\",HostCertificate : \"" + HostCertificate.ToString() + "\",IterationsRequired : " + IterationsRequired.ToString() + ",HostConfirmAuthenticator : \"" + HostConfirmAuthenticator.ToString() + "\")");
-            m_logger.LogInfo("Exchange Complete");
+            //m_logger.LogInfo("[MSTA] TrustAgreementService_Exchange(HostID : \"" + HostID.ToString() + "\",HostCertificate : \"" + HostCertificate.ToString() + "\",IterationsRequired : " + IterationsRequired.ToString() + ",HostConfirmAuthenticator : \"" + HostConfirmAuthenticator.ToString() + "\")");
+            m_logger.LogInfo("[MSTA] Exchange Complete");
         }
 
         public void TrustAgreementService_Commit(string HostID, byte Iteration, string HostValidateAuthenticator, out string DeviceValidateAuthenticator) {
@@ -342,15 +342,15 @@ namespace SoftSled.Components.Extender {
             //    B. The <HostID> MUST match the value of the _HostID obtained in the Exchange action.
             if (_TrustState != 2) {
                 /* TODO: send soap error message, invald */
-                m_logger.LogInfo("Committing - TrustState Invalid");
+                m_logger.LogInfo("[MSTA] Committing - TrustState Invalid");
             }
             if (HostID != _HostID) {
                 /* TODO: send soap error message, invald */
-                m_logger.LogInfo("Invalid HostID");
+                m_logger.LogInfo("[MSTA] Invalid HostID");
             }
             if (Iteration != _Iter) {
                 /* TODO: send soap error message, invalid */
-                m_logger.LogInfo("Invalid Iteration");
+                m_logger.LogInfo("[MSTA] Invalid Iteration");
             }
 
             // 2. Save the HostValidateAuthenticator for Validation step
@@ -368,8 +368,8 @@ namespace SoftSled.Components.Extender {
             DeviceValidateAuthenticator = GenerateDeviceMsgAuthCode(_DeviceValidateNonce, _Iter, GetOTPIter());
 
             //System.Threading.Thread.Sleep(5000);
-            //m_logger.LogInfo("TrustAgreementService_Commit(HostID : \"" + HostID.ToString() + "\",Iteration : \"" + Iteration.ToString() + "\",HostValidateAuthenticator : " + HostValidateAuthenticator.ToString() + ")");
-            m_logger.LogInfo("Commit Complete");
+            //m_logger.LogInfo("[MSTA] TrustAgreementService_Commit(HostID : \"" + HostID.ToString() + "\",Iteration : \"" + Iteration.ToString() + "\",HostValidateAuthenticator : " + HostValidateAuthenticator.ToString() + ")");
+            m_logger.LogInfo("[MSTA] Commit Complete");
         }
 
         public void TrustAgreementService_Validate(string HostID, byte Iteration, string HostValidateNonce, out string DeviceValidateNonce) {
@@ -380,15 +380,15 @@ namespace SoftSled.Components.Extender {
             //    D. The value of HMAC(_HostValidateNonceIter, UTF-8(Iter + OTPIter + _HostID + _HostCertificate) ) calculated as specified in section 3.1.1, MUST match the _HostValidateAuthenticatorIter obtained in the Commit action.
             if (_TrustState != 3) {
                 /* TODO: send soap error message, invald */
-                m_logger.LogInfo("Validating - TrustState Invalid");
+                m_logger.LogInfo("[MSTA] Validating - TrustState Invalid");
             }
             if (HostID != _HostID) {
                 /* TODO: send soap error message, invald */
-                m_logger.LogInfo("Validating - HostID Invalid");
+                m_logger.LogInfo("[MSTA] Validating - HostID Invalid");
             }
             if (Iteration != _Iter) {
                 /* TODO: send soap error message, invalid */
-                m_logger.LogInfo("Validating - Iteration Invalid");
+                m_logger.LogInfo("[MSTA] Validating - Iteration Invalid");
             }
 
             string generatedHostValidateAuthenticator = GenerateHostMsgAuthCode(Convert.FromBase64String(HostValidateNonce), _Iter, GetOTPIter());
@@ -402,7 +402,7 @@ namespace SoftSled.Components.Extender {
 
             // 3. Set TrustState from 3 (Validating) to 4 (Confirming), if this is the last iteration, or to 2 (Committing) if this is not the last iteration.
             if (_Iter == _Iterations) {
-                m_logger.LogInfo("Last Iteration");
+                m_logger.LogInfo("[MSTA] Last Iteration");
                 /* Last iteration */
                 _TrustState = 4;
             } else {
@@ -417,8 +417,8 @@ namespace SoftSled.Components.Extender {
             DeviceValidateNonce = Convert.ToBase64String(_DeviceValidateNonce);
 
             //System.Threading.Thread.Sleep(5000);
-            //m_logger.LogInfo("TrustAgreementService_Validate(HostID : \"" + HostID.ToString() + "\",Iteration : \"" + Iteration.ToString() + "\",HostValidateNonce : \"" + HostValidateNonce.ToString() + "\",\"DeviceValidateNonce : \"" + DeviceValidateNonce + "\")");
-            m_logger.LogInfo("Validate Complete");
+            //m_logger.LogInfo("[MSTA] TrustAgreementService_Validate(HostID : \"" + HostID.ToString() + "\",Iteration : \"" + Iteration.ToString() + "\",HostValidateNonce : \"" + HostValidateNonce.ToString() + "\",\"DeviceValidateNonce : \"" + DeviceValidateNonce + "\")");
+            m_logger.LogInfo("[MSTA] Validate Complete");
         }
 
         public void TrustAgreementService_Confirm(string HostID, byte IterationsRequired, string HostConfirmNonce, out string DeviceConfirmNonce) {
@@ -439,7 +439,7 @@ namespace SoftSled.Components.Extender {
             DeviceConfirmNonce = Convert.ToBase64String(_DeviceConfirmNonce);
 
             //m_logger.LogInfo("TrustAgreementService_Confirm(" + HostID.ToString() + IterationsRequired.ToString() + HostConfirmNonce.ToString() + ")");
-            m_logger.LogInfo("Extender successfully exchanged certificates!");
+            m_logger.LogInfo("[MSTA] Extender successfully exchanged certificates!");
         }
 
         private byte[] GenerateNonce() {
