@@ -64,7 +64,7 @@ namespace SoftSled.Components.Input {
                 { (REPORT_CONSUMER << 16) | 0x00EA, 22 }, // Volume -   → F9
                 { (REPORT_CONSUMER << 16) | 0x00E2, 26 }, // Mute       → F8
                 { (REPORT_CONSUMER << 16) | 0x0209, 15 }, // Info/More  → Ctrl+D
-                { (REPORT_CONSUMER << 16) | 0x0224, 43 }, // Back       → Esc
+                { (REPORT_CONSUMER << 16) | 0x0224, 45 }, // Back       → Backspace (code 45 - not labelled in MCXSESS commands list)
                 // MCE vendor page (report 0x03) — Green + menu/coloured buttons
                 // (ids confirmed from a labelled capture against the McxSess table).
                 { (REPORT_MCE      << 16) | 0x000D, 23 }, // Green Start → Win+Alt+Enter
