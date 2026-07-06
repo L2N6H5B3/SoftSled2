@@ -330,7 +330,7 @@
                               Click="OnConfigChanged"/>
                     <CheckBox x:Name="ChkLogAvPlayback"
                               Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Include A/V (FFME / sync) logs"
+                              Content="Include A/V (libav / sync) logs"
                               Click="OnConfigChanged"/>
 
                     <!-- File logging — survives a crash so release-build
