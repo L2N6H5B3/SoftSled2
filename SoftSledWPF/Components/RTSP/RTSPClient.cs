@@ -577,7 +577,7 @@ namespace SoftSled.Components.RTSP {
             hostname = uri.Host;
             port = uri.Port;
 
-            // We can ask the RTSP server for Video, Audio or both. If we don't want audio we don't need to SETUP the audio channal or receive it
+            // We can ask the RTSP server for Video, Audio or both.
             client_wants_video = false;
             client_wants_audio = false;
             if (media_request == MEDIA_REQUEST.VIDEO_ONLY || media_request == MEDIA_REQUEST.VIDEO_AND_AUDIO) client_wants_video = true;
@@ -1337,24 +1337,28 @@ namespace SoftSled.Components.RTSP {
             // value in outbound BFR packets ramps linearly 0 → TD over
             // BfrRampDurationMs wall-clock, then holds at TD.
             _bfrRampStopwatch.Restart();
-            RtcpDiagLog($"timer-start due=250ms period=1000ms " +
+            RtcpDiagLog($"timer-start due=100ms period=100ms (~10Hz Xbox-emulated) " +
                         $"audio_rtcp={_audioServerRtcpPort} video_rtcp={_videoServerRtcpPort} " +
                         $"audio_bfr={_audioBfrEnabled} video_bfr={_videoBfrEnabled} " +
                         $"audio_ssrc=0x{_audioServerDataSsrc:X8} video_ssrc=0x{_videoServerDataSsrc:X8} " +
                         $"host={hostname} " +
                         $"bfr_ramp={BfrRampDurationMs}ms→TD={BfrTdMs}ms");
-            // Cadence: every ~470 ms to match Xbox's observed BFR rate (~2 Hz).
-            // Sending too slowly may keep server in conservative-pacing mode;
-            // sending too fast risks RTCP-bandwidth violations (RFC 3550 §6.2)
-            // but at 100B/packet * 2 Hz * 2 streams = 400 B/s we're well below
-            // any sensible threshold.
+            // Cadence: every ~100 ms (~10 Hz) to EMULATE THE XBOX 360, whose
+            // captures show it sends BFR pairs ~10×/sec (≈103 ms). Our prior
+            // ~2 Hz gave the server only two buffer-fill samples/sec — too coarse
+            // for it to rate-adapt video tightly, so video settled ~90% and the
+            // jitter buffer slowly drained to starvation. A 10 Hz honest-W3 loop
+            // is the tight feedback the server pace-adapts against (matching the
+            // reference client). Bandwidth: ~100 B/packet × 10 Hz × 2 streams =
+            // ~2 KB/s — negligible vs the multi-Mbps media, well within RFC 3550
+            // §6.2 RTCP bandwidth.
             _rtcpTimer = new System.Threading.Timer(_ => {
                 try { SendRtcpReceiverReport(); } catch (Exception ex) {
                     Debug.WriteLine($"[rtcp] tick exception: {ex.Message}");
                     RtcpDiagLog($"tick-exception: {ex.Message}");
                 }
-            }, null, dueTime: 200, period: 470);
-            Debug.WriteLine("[rtcp] receiver-report timer started (~2 Hz)");
+            }, null, dueTime: 100, period: 100);
+            Debug.WriteLine("[rtcp] receiver-report timer started (~10 Hz, Xbox-emulated cadence)");
         }
 
         private void SendRtcpReceiverReport() {
