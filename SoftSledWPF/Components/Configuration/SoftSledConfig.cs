@@ -219,5 +219,27 @@ namespace SoftSled.Components.Configuration {
         // 0–4000 ms in the UI. Takes effect on the next playback.
         public int VideoJitterBufferMs = 250;
 
+        // User-customised remote-control button → command mappings, set from
+        // the Remote settings page's "learn" flow. Each entry pins a catalog
+        // command (by its stable Key, see RemoteCommandCatalog) to a specific
+        // HID usage. An EMPTY list means "use the built-in defaults" — that's
+        // the shipped mapping, and "Reset to defaults" simply clears this list.
+        // XmlSerializer handles a List&lt;T&gt; of a public class with public
+        // fields, so this round-trips in the config file automatically.
+        public List<RemoteButtonBinding> RemoteButtonBindings = new List<RemoteButtonBinding>();
+
+    }
+
+    /// <summary>
+    /// One learned remote-control mapping: pins a catalog command (identified
+    /// by its stable <see cref="CommandKey"/>) to a captured HID usage. Public
+    /// with a parameterless ctor + public fields so it serialises cleanly in
+    /// the XML config.
+    /// </summary>
+    public class RemoteButtonBinding {
+        /// <summary>Stable command id — matches a RemoteCommandCatalog def Key.</summary>
+        public string CommandKey;
+        /// <summary>Captured HID usage as (reportId &lt;&lt; 16) | usage. -1 = unbound.</summary>
+        public int UsageKey;
     }
 }

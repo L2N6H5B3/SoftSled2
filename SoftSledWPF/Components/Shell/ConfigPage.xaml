@@ -43,6 +43,7 @@
                     <ListBoxItem x:Name="ItemVideo"     Content="Video"/>
                     <ListBoxItem x:Name="ItemAudio"     Content="Audio"/>
                     <ListBoxItem x:Name="ItemUi"        Content="UI"/>
+                    <ListBoxItem x:Name="ItemRemote"    Content="Remote"/>
                     <ListBoxItem x:Name="ItemDebugging" Content="Debugging"/>
                     <ListBoxItem x:Name="ItemAbout"     Content="About"/>
                 </ListBox>
@@ -249,6 +250,45 @@
                               Content="Enable mouse input"
                               Click="OnConfigChanged"/>
                 </StackPanel>
+            </Grid>
+
+            <!-- ===== Remote sub-view ===================================== -->
+            <Grid x:Name="RemoteView"
+                  Margin="100,190,100,80"
+                  Visibility="Collapsed">
+                <Grid Width="1040" HorizontalAlignment="Left">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0"
+                               Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="10,0,0,12"
+                               TextWrapping="Wrap"
+                               Text="Choose a command and press Learn, then press the button on your remote you want to use for it. Navigation, OK and number buttons are handled directly and aren't listed here."/>
+
+                    <!-- Command rows are generated in code from the remote
+                         command catalogue and dropped into RemoteList. -->
+                    <ScrollViewer Grid.Row="1"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  PanningMode="VerticalOnly"
+                                  Focusable="False">
+                        <StackPanel x:Name="RemoteList" HorizontalAlignment="Stretch"/>
+                    </ScrollViewer>
+
+                    <Button Grid.Row="2"
+                            x:Name="BtnRemoteReset"
+                            Style="{StaticResource WmcButtonStyle}"
+                            Content="Reset all to defaults"
+                            HorizontalAlignment="Left"
+                            MinWidth="280"
+                            Margin="10,16,0,0"
+                            Click="BtnRemoteReset_Click"/>
+                </Grid>
             </Grid>
 
             <!-- ===== Debugging sub-view =================================== -->
@@ -494,6 +534,40 @@
                                     IsCancel="True"
                                     Click="ConfirmNo_Click"/>
                         </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- ===== Remote "learn" overlay ============================== -->
+            <Grid x:Name="RemoteLearnOverlay"
+                  Visibility="Collapsed"
+                  Background="#A0000000">
+                <Border HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Background="#E0202020"
+                        BorderBrush="{StaticResource WmcSelectionBorderBrush}"
+                        BorderThickness="2"
+                        CornerRadius="8"
+                        Padding="40,30"
+                        MinWidth="560">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource WmcSubtitleStyle}"
+                                   Foreground="White"
+                                   HorizontalAlignment="Center"
+                                   Text="Press a remote button"/>
+                        <TextBlock x:Name="RemoteLearnPrompt"
+                                   Style="{StaticResource WmcBodyStyle}"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   Margin="0,12,0,20"
+                                   TextWrapping="Wrap"
+                                   Text="Press the button you want to use…"/>
+                        <Button x:Name="RemoteLearnCancel"
+                                Style="{StaticResource WmcButtonStyle}"
+                                Content="Cancel"
+                                HorizontalAlignment="Center"
+                                IsCancel="True"
+                                Click="RemoteLearnCancel_Click"/>
                     </StackPanel>
                 </Border>
             </Grid>

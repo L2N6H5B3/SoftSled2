@@ -1,5 +1,6 @@
 using SoftSled.Components.Configuration;
 using SoftSled.Components.Diagnostics;
+using SoftSled.Components.Input;
 using SoftSledWPF.Components.Shell;
 using System;
 using System.Runtime.InteropServices;
@@ -188,6 +189,47 @@ namespace SoftSledWPF {
         // ---- Keyboard routing -----------------------------------------
 
         private void ShellWindow_PreviewKeyDown(object sender, KeyEventArgs e) {
+            // Remote "learn" capture wins over EVERYTHING (incl. F11/F12 and the
+            // ESC=leave-session gesture) so any key — ESC, F12, … — can be bound
+            // on the Remote settings page. Only active while a learn is pending.
+            if (_remote != null && _remote.IsLearning && !e.IsRepeat
+                && Keyboard.Modifiers == ModifierKeys.None) {
+                Key lk = e.Key == Key.System ? e.SystemKey : e.Key;
+                if (!IsModifierKey(lk) &&
+                    _remote.TryCompleteLearnWithKey(RemoteCommandCatalog.KeyboardUsageKey((int)lk))) {
+                    e.Handled = true;
+                    return;
+                }
+            }
+
+            // In a session, a keyboard key the user has mapped on the Remote page
+            // takes precedence over the built-in behaviour below — this is how ESC
+            // stops hard-quitting once rebound, and how a rebound Exit Session key
+            // (e.g. F12) leaves the session. Gated to no-modifier single keys (a
+            // remote button is always modifier-free), so Ctrl+combos and, when a
+            // key is left unmapped, F11/F12/ESC keep their defaults. In menus the
+            // mapping is NOT applied, so ESC still navigates back.
+            if (CurrentPage is ExtenderSessionControl && _remote != null
+                && !e.IsRepeat && Keyboard.Modifiers == ModifierKeys.None) {
+                Key mk = e.Key == Key.System ? e.SystemKey : e.Key;
+                if (!IsModifierKey(mk)) {
+                    int kb = RemoteCommandCatalog.KeyboardUsageKey((int)mk);
+                    if (_remote.TryGetLocalAction(kb, out RemoteLocalAction la)) {
+                        _logger?.LogInfo($"[remote-kbd] key {mk} (kb=0x{kb:X}) → local[{la}]");
+                        OnRemoteLocalAction(la); e.Handled = true; return;
+                    }
+                    if (_remote.TryGetChord(kb, out int[] kc)) {
+                        _logger?.LogInfo($"[remote-kbd] key {mk} (kb=0x{kb:X}) → chord");
+                        OnRemoteKeyChord(kc); e.Handled = true; return;
+                    }
+                    if (_remote.TryGetCommand(kb, out int kcmd)) {
+                        _logger?.LogInfo($"[remote-kbd] key {mk} (kb=0x{kb:X}) → RemoteCmd[{kcmd}]");
+                        OnRemoteCommand(kcmd); e.Handled = true; return;
+                    }
+                    _logger?.LogInfo($"[remote-kbd] key {mk} (kb=0x{kb:X}) → no mapping (default handling)");
+                }
+            }
+
             // F11 is a global toggle regardless of which page is active.
             if (e.Key == Key.F11) {
                 ToggleFullScreenTransient();
@@ -244,7 +286,11 @@ namespace SoftSledWPF {
                 }
 
                 if (e.Key == Key.Escape) {
-                    // Disconnect (cleanly) and let SessionEnded pop us back.
+                    // Fallback: ESC still leaves the session when it isn't bound
+                    // to anything on the Remote page (e.g. the user cleared the
+                    // Exit Session binding) — so you can never get stuck. The
+                    // mapped-key handling above runs first, so a rebound ESC or a
+                    // custom Exit Session key wins over this.
                     session.Stop();
                     // Fire SessionEnded synthetically — Stop() doesn't raise
                     // FreeRDP state changes during teardown.
@@ -362,6 +408,9 @@ namespace SoftSledWPF {
 
         private void Landing_SettingsRequested(object sender, EventArgs e) {
             var cfgPage = new ConfigPage();
+            // Give the Remote settings page access to the live remote so it can
+            // drive "learn" capture and reload the mappings after an edit.
+            cfgPage.AttachRemote(_remote);
             cfgPage.CloseRequested        += (s, _) => PopPage();
             cfgPage.ConfigChanged         += (s, _) => {
                 // Resolution and the aspect-lock toggle live here — re-read
@@ -444,6 +493,7 @@ namespace SoftSledWPF {
                 _remote = new SoftSled.Components.Input.McxRemoteInput(_logger);
                 _remote.RemoteCommand = OnRemoteCommand;
                 _remote.RemoteKeyChord = OnRemoteKeyChord;
+                _remote.RemoteLocal = OnRemoteLocalAction;
                 _remote.EnumerateDevices();   // log HID devices so we can ID the remote
                 _remote.Register(hwnd);       // start receiving WM_INPUT (INPUTSINK)
             } catch (Exception ex) {
@@ -495,6 +545,37 @@ namespace SoftSledWPF {
         private void OnRemoteKeyChord(int[] codes) {
             if (CurrentPage is ExtenderSessionControl session) {
                 session.SendScanCodeChordToWmc(codes);
+            }
+        }
+
+        /// <summary>A client-side (not-forwarded) remote action, e.g. the
+        /// rebindable Exit Session command that used to be hard-wired to ESC.</summary>
+        private void OnRemoteLocalAction(RemoteLocalAction action) {
+            switch (action) {
+                case RemoteLocalAction.ExitSession:
+                    // Mirror the old ESC-in-session behaviour: cleanly disconnect
+                    // and drop back to the landing page. No-op when not in a
+                    // session (nothing to leave).
+                    if (CurrentPage is ExtenderSessionControl session) {
+                        session.Stop();
+                        PopToLanding();
+                    }
+                    break;
+            }
+        }
+
+        /// <summary>True for keys that are only modifiers — never a learnable
+        /// button on their own, and never dispatched as a mapped command.</summary>
+        private static bool IsModifierKey(Key k) {
+            switch (k) {
+                case Key.LeftCtrl:  case Key.RightCtrl:
+                case Key.LeftShift: case Key.RightShift:
+                case Key.LeftAlt:   case Key.RightAlt:
+                case Key.LWin:      case Key.RWin:
+                case Key.System:    case Key.None:
+                    return true;
+                default:
+                    return false;
             }
         }
 

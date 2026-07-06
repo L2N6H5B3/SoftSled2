@@ -1,4 +1,5 @@
 using SoftSled.Components.Configuration;
+using SoftSled.Components.Input;
 using System;
 using System.Reflection;
 using System.Windows;
@@ -20,10 +21,26 @@ namespace SoftSledWPF.Components.Shell {
     public partial class ConfigPage : UserControl {
 
         /// <summary>Sub-view currently visible. Used by ESC handler.</summary>
-        private enum View { Root, General, Pairing, Video, Audio, Ui, Debugging, About }
+        private enum View { Root, General, Pairing, Video, Audio, Ui, Remote, Debugging, About }
         private View _currentView = View.Root;
         private SoftSledConfig _config;
         private bool _suppressWrite;
+
+        // Live remote (owned by ShellWindow) so the Remote page can drive
+        // "learn" capture + reload the active mappings after an edit. Null when
+        // the shell hasn't attached one (e.g. design time).
+        private McxRemoteInput _remote;
+        // The command whose button we're currently learning; null when idle.
+        private string _learningCommandKey;
+        // Auto-cancel a pending learn after a few seconds. Needed because while
+        // learning we capture EVERY key (so ESC/F12 are bindable), which means
+        // there's no keyboard way to back out — the timeout is the remote-only
+        // user's escape hatch.
+        private System.Windows.Threading.DispatcherTimer _learnTimeout;
+
+        /// <summary>Shell hands us the live remote so the Remote settings page
+        /// can capture button presses and refresh mappings.</summary>
+        public void AttachRemote(McxRemoteInput remote) => _remote = remote;
 
         /// <summary>Shell hooks this to know when to swap back to landing.</summary>
         public event EventHandler CloseRequested;
@@ -101,6 +118,12 @@ namespace SoftSledWPF.Components.Shell {
                 // Manually raise Click so OnConfigChanged runs and persists.
                 cb.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, cb));
                 e.Handled = true;
+            } else if (Keyboard.FocusedElement is Button btn && btn.IsEnabled) {
+                // The WMC remote's OK key arrives as Enter; WPF only auto-clicks
+                // the default button on Enter, so route it to whichever button
+                // has focus (Learn / Clear / Reset / etc.).
+                btn.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, btn));
+                e.Handled = true;
             }
         }
 
@@ -177,6 +200,7 @@ namespace SoftSledWPF.Components.Shell {
             VideoView.Visibility     = view == View.Video     ? Visibility.Visible : Visibility.Collapsed;
             AudioView.Visibility     = view == View.Audio     ? Visibility.Visible : Visibility.Collapsed;
             UiView.Visibility        = view == View.Ui        ? Visibility.Visible : Visibility.Collapsed;
+            RemoteView.Visibility    = view == View.Remote    ? Visibility.Visible : Visibility.Collapsed;
             DebuggingView.Visibility = view == View.Debugging ? Visibility.Visible : Visibility.Collapsed;
             AboutView.Visibility     = view == View.About     ? Visibility.Visible : Visibility.Collapsed;
 
@@ -203,6 +227,9 @@ namespace SoftSledWPF.Components.Shell {
                     break;
                 case View.Ui:
                     ChkUiSounds.Focus();
+                    break;
+                case View.Remote:
+                    BtnRemoteReset.Focus();
                     break;
                 case View.Debugging:
                     ChkLogger.Focus();
@@ -238,6 +265,7 @@ namespace SoftSledWPF.Components.Shell {
             else if (item == ItemVideo)      ShowView(View.Video);
             else if (item == ItemAudio)      ShowView(View.Audio);
             else if (item == ItemUi)         ShowView(View.Ui);
+            else if (item == ItemRemote)   { BuildRemoteRows(); ShowView(View.Remote); }
             else if (item == ItemDebugging)  ShowView(View.Debugging);
             else if (item == ItemAbout)      ShowView(View.About);
         }
@@ -613,6 +641,205 @@ namespace SoftSledWPF.Components.Shell {
             BtnResolution.Focus();
         }
 
+        // ---- Remote button mapping ------------------------------------
+
+        /// <summary>
+        /// (Re)build the per-command rows from the remote command catalogue.
+        /// Each row shows the command, the button currently bound to it, and
+        /// Learn / Clear actions. Called on entering the view and after any
+        /// change so the displayed bindings stay current.
+        /// </summary>
+        // Learn button per command key, so a rebuild can restore focus to the
+        // row the user just acted on instead of snapping back to the top.
+        private readonly System.Collections.Generic.Dictionary<string, Button> _learnButtonsByKey
+            = new System.Collections.Generic.Dictionary<string, Button>();
+
+        private void BuildRemoteRows(string focusCommandKey = null) {
+            if (_config == null) _config = SoftSledConfigManager.ReadConfig();
+            RemoteList.Children.Clear();
+            _learnButtonsByKey.Clear();
+
+            var bodyStyle   = (Style)TryFindResource("WmcBodyStyle");
+            var buttonStyle = (Style)TryFindResource("WmcButtonStyle");
+            var subtleBrush = TryFindResource("WmcSubtleTextBrush") as System.Windows.Media.Brush;
+
+            foreach (var def in RemoteCommandCatalog.Defs) {
+                int usage = RemoteCommandCatalog.GetEffectiveUsage(_config, def.Key);
+                bool isDefault = RemoteCommandCatalog.IsDefault(_config, def.Key);
+
+                var row = new Grid { Margin = new Thickness(10, 4, 0, 4) };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(240) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var name = new TextBlock {
+                    Style = bodyStyle,
+                    Text = def.Label,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                Grid.SetColumn(name, 0);
+                row.Children.Add(name);
+
+                var bound = new TextBlock {
+                    Style = bodyStyle,
+                    Foreground = subtleBrush,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Text = RemoteCommandCatalog.DescribeUsage(usage)
+                           + (usage < 0 ? "" : isDefault ? "   (default)" : "   (custom)"),
+                };
+                Grid.SetColumn(bound, 1);
+                row.Children.Add(bound);
+
+                var learn = new Button {
+                    Style = buttonStyle,
+                    Content = "Learn",
+                    Tag = def.Key,
+                    MinWidth = 120,
+                    Margin = new Thickness(8, 0, 0, 0),
+                };
+                learn.Click += OnRemoteLearnClick;
+                Grid.SetColumn(learn, 2);
+                row.Children.Add(learn);
+                _learnButtonsByKey[def.Key] = learn;
+
+                var clear = new Button {
+                    Style = buttonStyle,
+                    Content = "Clear",
+                    Tag = def.Key,
+                    MinWidth = 100,
+                    Margin = new Thickness(8, 0, 0, 0),
+                    // Nothing to clear when already unassigned.
+                    IsEnabled = usage >= 0,
+                };
+                clear.Click += OnRemoteClearClick;
+                Grid.SetColumn(clear, 3);
+                row.Children.Add(clear);
+
+                var reset = new Button {
+                    Style = buttonStyle,
+                    Content = "Default",
+                    Tag = def.Key,
+                    MinWidth = 110,
+                    Margin = new Thickness(8, 0, 0, 0),
+                    // Already at its shipped default — nothing to reset.
+                    IsEnabled = !isDefault,
+                };
+                reset.Click += OnRemoteDefaultClick;
+                Grid.SetColumn(reset, 4);
+                row.Children.Add(reset);
+
+                RemoteList.Children.Add(row);
+            }
+
+            // Keep focus on the row the user just acted on (rather than snapping
+            // back to the top of the list). Deferred so the freshly-added
+            // containers have completed layout before we focus / scroll.
+            if (focusCommandKey != null
+                && _learnButtonsByKey.TryGetValue(focusCommandKey, out Button focusBtn)) {
+                Dispatcher.BeginInvoke(new Action(() => {
+                    focusBtn.BringIntoView();
+                    focusBtn.Focus();
+                }), System.Windows.Threading.DispatcherPriority.Background);
+            }
+        }
+
+        private void OnRemoteLearnClick(object sender, RoutedEventArgs e) {
+            if (!(sender is Button b) || !(b.Tag is string key)) return;
+            var def = RemoteCommandCatalog.FindByKey(key);
+            if (def == null) return;
+
+            if (_remote == null) {
+                MessageBox.Show("The remote isn't available right now, so a button can't be captured.");
+                return;
+            }
+
+            _learningCommandKey = key;
+            RemoteLearnPrompt.Text =
+                $"Press the button (or key, e.g. Esc) you want to use for “{def.Label}”.\n" +
+                "Cancels automatically if nothing is pressed.";
+            RemoteLearnOverlay.Visibility = Visibility.Visible;
+            RemoteLearnCancel.Focus();
+
+            // Capture the next button press. The callback runs on the WndProc/UI
+            // thread, so it's safe to touch the UI directly.
+            _remote.BeginLearn(OnRemoteButtonLearned);
+
+            if (_learnTimeout == null) {
+                _learnTimeout = new System.Windows.Threading.DispatcherTimer {
+                    Interval = TimeSpan.FromSeconds(8),
+                };
+                _learnTimeout.Tick += (s, ev) => CancelLearn();
+            }
+            _learnTimeout.Stop();
+            _learnTimeout.Start();
+        }
+
+        private void OnRemoteButtonLearned(int usageKey) {
+            // Marshal to the UI thread just in case a future caller changes the
+            // dispatch thread; today it's already the UI thread.
+            if (!Dispatcher.CheckAccess()) {
+                Dispatcher.BeginInvoke(new Action(() => OnRemoteButtonLearned(usageKey)));
+                return;
+            }
+            _learnTimeout?.Stop();
+            string key = _learningCommandKey;
+            _learningCommandKey = null;
+            RemoteLearnOverlay.Visibility = Visibility.Collapsed;
+            if (key == null || _config == null) return;
+
+            RemoteCommandCatalog.SetBinding(_config, key, usageKey);
+            if (SaveRemoteConfig()) _remote?.ReloadBindings();
+            BuildRemoteRows(focusCommandKey: key);
+        }
+
+        private void OnRemoteClearClick(object sender, RoutedEventArgs e) {
+            if (!(sender is Button b) || !(b.Tag is string key) || _config == null) return;
+            RemoteCommandCatalog.ClearBinding(_config, key);
+            if (SaveRemoteConfig()) _remote?.ReloadBindings();
+            BuildRemoteRows(focusCommandKey: key);
+        }
+
+        private void OnRemoteDefaultClick(object sender, RoutedEventArgs e) {
+            if (!(sender is Button b) || !(b.Tag is string key) || _config == null) return;
+            RemoteCommandCatalog.ResetBinding(_config, key);
+            if (SaveRemoteConfig()) _remote?.ReloadBindings();
+            BuildRemoteRows(focusCommandKey: key);
+        }
+
+        private void BtnRemoteReset_Click(object sender, RoutedEventArgs e) {
+            if (_config == null) return;
+            RemoteCommandCatalog.ResetToDefaults(_config);
+            if (SaveRemoteConfig()) _remote?.ReloadBindings();
+            BuildRemoteRows();
+            BtnRemoteReset.Focus();
+        }
+
+        private void RemoteLearnCancel_Click(object sender, RoutedEventArgs e) => CancelLearn();
+
+        private void CancelLearn() {
+            _learnTimeout?.Stop();
+            _learningCommandKey = null;
+            _remote?.CancelLearn();
+            RemoteLearnOverlay.Visibility = Visibility.Collapsed;
+            BtnRemoteReset.Focus();
+        }
+
+        /// <summary>Persist config after a remote-mapping edit. Returns false
+        /// (and shows a message) if the write failed.</summary>
+        private bool SaveRemoteConfig() {
+            try {
+                SoftSledConfigManager.WriteConfig(_config);
+                ConfigChanged?.Invoke(this, EventArgs.Empty);
+                return true;
+            } catch (Exception ex) {
+                MessageBox.Show("Failed to save remote mappings: " + ex.Message);
+                return false;
+            }
+        }
+
         // ---- Back navigation routed from the shell --------------------
 
         /// <summary>
@@ -630,6 +857,10 @@ namespace SoftSledWPF.Components.Shell {
             if (ConfirmOverlay.Visibility == Visibility.Visible) {
                 ConfirmOverlay.Visibility = Visibility.Collapsed;
                 UnpairButton.Focus();
+                return true;
+            }
+            if (RemoteLearnOverlay.Visibility == Visibility.Visible) {
+                CancelLearn();
                 return true;
             }
             if (_currentView != View.Root) {

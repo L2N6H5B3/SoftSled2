@@ -43,61 +43,99 @@ namespace SoftSled.Components.Input {
         /// (forward to WMC over RDP in a session; Green-start when idle).</summary>
         public Action<int> RemoteCommand;
 
-        // (reportId &lt;&lt; 16 | HID usage) → WMC RemoteCommand id. The ids match
-        // the McxSess RegisterRemoteCommandBindings table (confirmed from a live
-        // capture: e.g. id 23 = Green/Start = Win+Alt+Enter, 9 = Play = Ctrl+P).
-        // Arrows / OK / digits arrive as ordinary keyboard input and already
-        // forward, so they're intentionally not here. Unmapped buttons (the
-        // remaining MCE menu/coloured buttons) are logged so we can add them.
-        private static readonly System.Collections.Generic.Dictionary<int, int> UsageToCmd
-            = new System.Collections.Generic.Dictionary<int, int> {
-                { (REPORT_CONSUMER << 16) | 0x00B0,  9 }, // Play       → Ctrl+P
-                { (REPORT_CONSUMER << 16) | 0x00B1,  8 }, // Pause      → Ctrl+Shift+P
-                { (REPORT_CONSUMER << 16) | 0x00B7,  6 }, // Stop       → Ctrl+Shift+S
-                { (REPORT_CONSUMER << 16) | 0x00B3, 11 }, // Fast Fwd   → Ctrl+Shift+F
-                { (REPORT_CONSUMER << 16) | 0x00B4, 10 }, // Rewind     → Ctrl+Shift+B
-                { (REPORT_CONSUMER << 16) | 0x00B2,  7 }, // Record     → Ctrl+R
-                { (REPORT_CONSUMER << 16) | 0x008D, 28 }, // Guide      → Ctrl+G
-                { (REPORT_CONSUMER << 16) | 0x009C, 24 }, // Channel +  → PageUp
-                { (REPORT_CONSUMER << 16) | 0x009D, 25 }, // Channel -  → PageDown
-                { (REPORT_CONSUMER << 16) | 0x00E9, 21 }, // Volume +   → F10
-                { (REPORT_CONSUMER << 16) | 0x00EA, 22 }, // Volume -   → F9
-                { (REPORT_CONSUMER << 16) | 0x00E2, 26 }, // Mute       → F8
-                { (REPORT_CONSUMER << 16) | 0x0209, 15 }, // Info/More  → Ctrl+D
-                { (REPORT_CONSUMER << 16) | 0x0224, 45 }, // Back       → Backspace (code 45 - not labelled in MCXSESS commands list)
-                // MCE vendor page (report 0x03) — Green + menu/coloured buttons
-                // (ids confirmed from a labelled capture against the McxSess table).
-                { (REPORT_MCE      << 16) | 0x000D, 23 }, // Green Start → Win+Alt+Enter
-                { (REPORT_MCE      << 16) | 0x0048, 27 }, // Recorded TV → Ctrl+O
-                { (REPORT_MCE      << 16) | 0x0025, 29 }, // Live TV     → Ctrl+T
-                { (REPORT_MCE      << 16) | 0x0024, 30 }, // DVD Menu    → Ctrl+Shift+M
-                { (REPORT_MCE      << 16) | 0x0027, 48 }, // Zoom        → Ctrl+Shift+Z
-                { (REPORT_MCE      << 16) | 0x0050, 46 }, // Radio       → Ctrl+A
-                { (REPORT_MCE      << 16) | 0x0047,  3 }, // Music       → Ctrl+M
-                { (REPORT_MCE      << 16) | 0x0049,  4 }, // Pictures    → Ctrl+I
-                { (REPORT_MCE      << 16) | 0x004A,  5 }, // Videos      → Ctrl+E
-                { (REPORT_MCE      << 16) | 0x005A, 54 }, // Teletext    → Ctrl+Alt+T
-                { (REPORT_MCE      << 16) | 0x005B, 55 }, // Red         → Ctrl+Alt+R
-                { (REPORT_MCE      << 16) | 0x005C, 56 }, // Green       → Ctrl+Alt+G
-                { (REPORT_MCE      << 16) | 0x005D, 57 }, // Yellow      → Ctrl+Alt+Y
-                { (REPORT_MCE      << 16) | 0x005E, 58 }, // Blue        → Ctrl+Alt+B
-            };
-
         /// <summary>Invoked (UI thread) with PS/2 Set-1 scan codes for buttons WMC
         /// does NOT bind in its table — forwarded directly as the built-in WMC
-        /// shortcut.</summary>
+        /// shortcut (e.g. Skip Forward/Back → Ctrl+F / Ctrl+B).</summary>
         public Action<int[]> RemoteKeyChord;
 
-        // Skip Fwd / Back have no RegisterRemoteCommandBindings entry, but WMC
-        // honours the built-in shortcuts Ctrl+F (skip 29s) / Ctrl+B (replay 7s).
-        // Set-1 scancodes: LCtrl=0x1D, F=0x21, B=0x30.
-        private static readonly System.Collections.Generic.Dictionary<int, int[]> UsageToChord
-            = new System.Collections.Generic.Dictionary<int, int[]> {
-                { (REPORT_CONSUMER << 16) | 0x00B5, new[] { 0x1D, 0x21 } }, // Skip Fwd  → Ctrl+F
-                { (REPORT_CONSUMER << 16) | 0x00B6, new[] { 0x1D, 0x30 } }, // Skip Back → Ctrl+B
-            };
+        /// <summary>Invoked (UI thread) for a client-side action (e.g. leave the
+        /// session) rather than something forwarded to WMC.</summary>
+        public Action<RemoteLocalAction> RemoteLocal;
 
-        public McxRemoteInput(Logger log) { _log = log; }
+        // Active dispatch maps, built from RemoteCommandCatalog (the shipped
+        // defaults) overlaid with the user's learned overrides in config.
+        // Rebuilt by ReloadBindings() at construction and whenever the Remote
+        // settings page changes a mapping. usage key = (reportId<<16)|usage
+        // (REPORT_KEYBOARD is used for plain keyboard keys such as ESC).
+        private System.Collections.Generic.Dictionary<int, int>   _usageToCmd
+            = new System.Collections.Generic.Dictionary<int, int>();
+        private System.Collections.Generic.Dictionary<int, int[]> _usageToChord
+            = new System.Collections.Generic.Dictionary<int, int[]>();
+        private System.Collections.Generic.Dictionary<int, RemoteLocalAction> _usageToLocal
+            = new System.Collections.Generic.Dictionary<int, RemoteLocalAction>();
+
+        /// <summary>Look up the WMC command id bound to a usage (HID or keyboard).</summary>
+        public bool TryGetCommand(int usageKey, out int cmdId) => _usageToCmd.TryGetValue(usageKey, out cmdId);
+        /// <summary>Look up the direct scan-code chord bound to a usage.</summary>
+        public bool TryGetChord(int usageKey, out int[] chord) => _usageToChord.TryGetValue(usageKey, out chord);
+        /// <summary>Look up the client-side local action bound to a usage.</summary>
+        public bool TryGetLocalAction(int usageKey, out RemoteLocalAction action) => _usageToLocal.TryGetValue(usageKey, out action);
+
+        // "Learn" mode: while active, the very next button press is captured and
+        // reported to _onLearned (instead of being dispatched as a command), so
+        // the settings page can bind that physical button to a chosen command.
+        private bool _learning;
+        private Action<int> _onLearned;
+
+        /// <summary>True while waiting to capture a button for the Remote page.</summary>
+        public bool IsLearning => _learning;
+
+        public McxRemoteInput(Logger log) {
+            _log = log;
+            ReloadBindings();
+        }
+
+        /// <summary>Rebuild the active button→command maps from the catalogue +
+        /// the user's saved overrides. Call after the Remote settings page edits
+        /// a binding, and at construction.</summary>
+        public void ReloadBindings() {
+            try {
+                var cfg = Configuration.SoftSledConfigManager.ReadConfig();
+                RemoteCommandCatalog.BuildRuntimeMaps(cfg, out _usageToCmd, out _usageToChord, out _usageToLocal);
+                _log?.LogInfo($"[mcx-remote] bindings loaded: {_usageToCmd.Count} command(s) + " +
+                              $"{_usageToChord.Count} direct chord(s) + {_usageToLocal.Count} local action(s)");
+            } catch (Exception ex) {
+                _log?.LogError("[mcx-remote] ReloadBindings threw: " + ex.Message);
+            }
+        }
+
+        /// <summary>Enter learn mode: the next button press is reported to
+        /// <paramref name="onLearned"/> (on the UI/WndProc thread) as a usage key
+        /// and is NOT dispatched. Replaces any pending learn.</summary>
+        public void BeginLearn(Action<int> onLearned) {
+            _onLearned = onLearned;
+            _learning = true;
+            _log?.LogInfo("[mcx-remote] learn mode: waiting for a button press");
+        }
+
+        /// <summary>Cancel a pending learn without capturing anything.</summary>
+        public void CancelLearn() {
+            if (!_learning) return;
+            _learning = false;
+            _onLearned = null;
+            _log?.LogInfo("[mcx-remote] learn mode: cancelled");
+        }
+
+        /// <summary>
+        /// Feed a keyboard-sourced button into a pending learn. Used by the shell
+        /// for keys (ESC, F12, …) that arrive on the WPF keyboard path rather than
+        /// as HID reports. Returns true if a learn was in progress and captured.
+        /// </summary>
+        public bool TryCompleteLearnWithKey(int usageKey) {
+            if (!_learning) return false;
+            CaptureLearn(usageKey);
+            return true;
+        }
+
+        /// <summary>Complete the pending learn with a captured usage key (one-shot).</summary>
+        private void CaptureLearn(int usageKey) {
+            _learning = false;
+            var cb = _onLearned;
+            _onLearned = null;
+            _log?.LogInfo($"[mcx-remote] learned usage key=0x{usageKey:X}");
+            try { cb?.Invoke(usageKey); }
+            catch (Exception ex) { _log?.LogError("[mcx-remote] learn callback threw: " + ex.Message); }
+        }
 
         // ---- P/Invoke ---------------------------------------------------
 
@@ -258,11 +296,23 @@ namespace SoftSled.Components.Input {
                     if (usage == 0) return true;   // release — nothing to do
 
                     int key = (reportId << 16) | usage;
-                    if (UsageToChord.TryGetValue(key, out int[] chord)) {
+
+                    // Learn mode: capture this button for the settings page and
+                    // do NOT dispatch it. One-shot — clears itself.
+                    if (_learning) {
+                        CaptureLearn(key);
+                        return true;
+                    }
+
+                    if (_usageToLocal.TryGetValue(key, out RemoteLocalAction local)) {
+                        _log?.LogInfo($"[mcx-remote] btn report=0x{reportId:X2} usage=0x{usage:X4} → local[{local}]");
+                        try { RemoteLocal?.Invoke(local); }
+                        catch (Exception ex) { _log?.LogError("[mcx-remote] RemoteLocal handler threw: " + ex.Message); }
+                    } else if (_usageToChord.TryGetValue(key, out int[] chord)) {
                         _log?.LogInfo($"[mcx-remote] btn report=0x{reportId:X2} usage=0x{usage:X4} → direct key chord");
                         try { RemoteKeyChord?.Invoke(chord); }
                         catch (Exception ex) { _log?.LogError("[mcx-remote] RemoteKeyChord handler threw: " + ex.Message); }
-                    } else if (UsageToCmd.TryGetValue(key, out int cmdId)) {
+                    } else if (_usageToCmd.TryGetValue(key, out int cmdId)) {
                         _log?.LogInfo($"[mcx-remote] btn report=0x{reportId:X2} usage=0x{usage:X4} → RemoteCmd[{cmdId}]");
                         try { RemoteCommand?.Invoke(cmdId); }
                         catch (Exception ex) { _log?.LogError("[mcx-remote] RemoteCommand handler threw: " + ex.Message); }
