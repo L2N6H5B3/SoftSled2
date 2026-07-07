@@ -137,7 +137,6 @@ namespace SoftSled.Components.Extender {
             Capabilities.Add(new DeviceCapability("TBP", "Is Toolbar persistent?", "UI", false));
             Capabilities.Add(new DeviceCapability("TVS", "Is a TV skin used?", "UI", config.UseTvSkin));
 
-
             #endregion ########################################################
 
             #region Video #####################################################
