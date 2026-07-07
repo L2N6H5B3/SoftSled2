@@ -230,7 +230,6 @@
     <Compile Include="Components\AudioVisual\FormatStructures\WAVEFORMATEX.cs" />
     <Compile Include="Components\AudioVisual\WindowsSystemAudio.cs" />
     <Compile Include="Components\AudioVisual\WmrptAudioDepacketizer.cs" />
-    <Compile Include="Components\AudioVisual\WmrptAudioDepacketizerAsync.cs" />
     <Compile Include="Components\AudioVisual\WmcFastpathAudioDumper.cs" />
     <Compile Include="Components\AudioVisual\WmcFastpathAudioPlayer.cs" />
     <Compile Include="Components\AudioVisual\WmcFastpathRawDumper.cs" />
@@ -240,7 +239,6 @@
     <Compile Include="Components\AudioVisual\SkewInfo.cs" />
     <Compile Include="Components\AudioVisual\SurfaceRouter.cs" />
     <Compile Include="Components\AudioVisual\WmrptVideoDepacketizer.cs" />
-    <Compile Include="Components\AudioVisual\WmrptVideoDepacketizerAsync.cs" />
     <Compile Include="Components\Communication\DSLRCommunication.cs" />
     <Compile Include="Components\Communication\FreeRdpClient.cs" />
     <Compile Include="Components\Communication\DataReceived.cs" />
