@@ -48,8 +48,15 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private readonly int _blockAlign;
         private readonly int _bitRate;
         private readonly byte[] _extradata;
+        // Deep input queue: with decode backpressure (see WorkerLoop) coded MAUs
+        // accumulate here while we decode at the device's real drain rate. WMPNss
+        // front-loads audio far ahead (CDB≈200s of coded audio) and IGNORES our
+        // BFR buffer report, so the reservoir must be able to hold that burst —
+        // otherwise drop-oldest would discard imminent audio (a glitch). 16384
+        // MP2 frames ≈ 390s; each entry is a small compressed MAU (~1KB), so the
+        // worst-case memory is a few MB. Flush() empties it on seek/trick-play.
         private readonly BlockingCollection<QueuedPacket> _queue
-            = new BlockingCollection<QueuedPacket>(boundedCapacity: 256);
+            = new BlockingCollection<QueuedPacket>(boundedCapacity: 16384);
 
         private AVCodecContext* _ctx;
         private SwrContext* _swr;
@@ -62,6 +69,21 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         // decoder down. Starts set (running). Dispose sets it so a paused worker
         // can unblock and exit cleanly.
         private readonly ManualResetEventSlim _runGate = new ManualResetEventSlim(true);
+
+        // Decode backpressure. Set by the controller to () => renderer.BufferedMs.
+        // The worker holds coded MAUs in the (deep) input queue instead of
+        // decoding them while the renderer already has >= PcmHighWaterMs of PCM
+        // buffered — so we consume at the device's drain rate, not the server's
+        // (over-)delivery rate. Without this, WMPNss's ~121% audio flood overran
+        // the 5s PCM buffer, dropping ~19% of frames and skewing audio ahead of
+        // video (the sync wobble ~25-30s in). Null → no backpressure (decode as
+        // fast as MAUs arrive, the pre-fix behaviour).
+        public Func<int> PcmBufferedMsProvider { get; set; }
+        private const int PcmHighWaterMs = 2000; // ~TD; Xbox holds its audio buffer near here
+
+        // Set by Flush() (any thread); honoured on the worker thread before the
+        // next decode (avcodec_flush_buffers is not thread-safe).
+        private int _flushRequested;
 
         // Output-format readiness. The first decoded frame tells us
         // the decoder's native sample_rate / channels; we configure
@@ -231,7 +253,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             _log?.LogInfo($"[libav-audio] stats: pktsIn={pktsIn} bytesIn={bytesIn} " +
                           $"framesOut={framesOut} pcmBytesOut={pcmBytesOut} " +
                           $"({pctOfRealTime:F1}% of {expectedBytesPerSec}B/s expected) " +
-                          $"window={elapsed}ms");
+                          $"queueDepth={_queue.Count} window={elapsed}ms");
         }
 
         public void Complete() {
@@ -245,6 +267,18 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
 
         /// <summary>Resume decoding after <see cref="Pause"/>. Idempotent.</summary>
         public void Resume() { if (!_disposed) _runGate.Set(); }
+
+        /// <summary>Discard all queued (undecoded) coded MAUs and reset the
+        /// codec's internal buffers. Called on seek / trick-play so the deep
+        /// input-queue reservoir doesn't replay stale pre-seek audio at the new
+        /// position. Safe from any thread: the queue drain is lock-free; the
+        /// codec flush is deferred to the worker thread via <c>_flushRequested</c>
+        /// (avcodec_flush_buffers is not thread-safe).</summary>
+        public void Flush() {
+            if (_disposed) return;
+            while (_queue.TryTake(out _)) { }
+            Interlocked.Exchange(ref _flushRequested, 1);
+        }
 
         public void Dispose() {
             if (_disposed) return;
@@ -288,6 +322,28 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                     // and the queue simply holds.
                     _runGate.Wait();
                     if (_disposed) break;
+
+                    // Backpressure: don't decode ahead of real time. While the
+                    // renderer already holds >= PcmHighWaterMs of PCM, wait — the
+                    // server's front-load stays in the (deep) coded queue rather
+                    // than overflowing the PCM buffer. The held `qp` decodes as
+                    // soon as the device drains below the mark.
+                    var probe = PcmBufferedMsProvider;
+                    if (probe != null) {
+                        while (!_disposed && probe() >= PcmHighWaterMs) {
+                            _runGate.Wait();               // honour pause during the wait
+                            if (_disposed) break;
+                            Thread.Sleep(8);
+                        }
+                        if (_disposed) break;
+                    }
+
+                    // Seek/trick-play flushed us: reset codec state (worker-thread
+                    // only — avcodec_flush_buffers is not thread-safe).
+                    if (Interlocked.Exchange(ref _flushRequested, 0) == 1) {
+                        ffmpeg.avcodec_flush_buffers(_ctx);
+                    }
+
                     SendPacket(pkt, qp);
                     DrainFrames(frame, qp.PtsMs);
                     MaybeEmitStats();

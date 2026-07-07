@@ -71,9 +71,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         // First audio + video MAU wire PTS (ms). Their difference is the wire
         // A/V offset the pacer needs. Each is converted from the stream's RTP
         // timestamp using that stream's RTP clock (90 kHz for wm-MPA/MPV,
-        // 1 kHz for x-wmf-pf) — getting the clock wrong scales the offset and
-        // mis-aligns video (the x-wmf-pf 1 kHz case was lagging because both
-        // were divided by 90 as if 90 kHz).
+        // 1 kHz for x-wmf-pf)
         private long _firstAudioMauWirePtsMs = -1;
         private long _firstVideoMauWirePtsMs = -1;
         private int _audioClockHz = 90000;
@@ -135,15 +133,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 _rtsp.EndOfStream       -= OnRtspEndOfStream;
                 try { _rtsp.SetExternalAudioConsumer(null, null); } catch { }
                 try { _rtsp.SetExternalVideoConsumer(null, null); } catch { }
-                // The controller is session-scoped and outlives individual
-                // media (WMC reuses it across OpenMedia/CloseMedia, creating a
-                // fresh RTSPClient each time). Tear the decode pipeline down on
-                // every detach so the NEXT media rebuilds decoders for its own
-                // codec. Without this, switching e.g. H.264/PCM → MPEG-2/MP2
-                // left the old H.264 + PCM decoders in place (the codec-commit
-                // handlers bail when a decoder already exists) → the H.264
-                // decoder chokes on MPEG-2 ("Invalid data") = no video, and the
-                // PCM decoder renders MP2 bytes as raw samples = static.
+                // Tear the decode pipeline down on every detach so the NEXT media rebuilds decoders for its own codec.
                 ResetPipelineForNewMedia();
             }
             _rtsp = client;
@@ -252,6 +242,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 }
                 _decoder.OnFormatReady += OnDecoderFormatReady;
                 _decoder.OnPcm         += OnDecodedPcm;
+                // Backpressure: decode at the device's drain rate, not WMPNss's
+                // ~121% audio flood. Reads the field at call time, so it safely
+                // returns 0 (no backpressure) until the renderer is constructed.
+                _decoder.PcmBufferedMsProvider = () => _renderer?.BufferedMs ?? 0;
                 _decoder.Start();
                 _log?.LogInfo($"[ext-sync] audio decoder started: codec={codecId} ({fmt})" +
                               (isPcm ? $" PCM hints: rate={hintRate}Hz ch={hintChannels}" : ""));
@@ -446,6 +440,16 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                               $"→ {keep + trimK}ms (NOT recomputed — post-scale RTP-Info unreliable)");
                 return;
             }
+            // NOTE (2026-07-06): a codec-split "MPEG-2 = direct first-MAU diff"
+            // path was tried (32nd fix) on the premise that MPEG-2 audio/video
+            // share one RTP epoch. Disproven by log softsled-20260706-202311: the
+            // first MAUs were 2920ms apart (A0=589,V0=3509) but the play points
+            // only ~249ms apart (aInfo=48938,vInfo=26517) — the 2920ms is almost
+            // all ASYMMETRIC LEAD-IN PADDING (WMC skips a variable number of
+            // lead-in MAUs), NOT content skew. So the raw first-MAU diff is
+            // corrupted; the RTP-Info play-point method (below) correctly gave
+            // -282ms. RTP-Info is the right method for BOTH codecs — reverted.
+
             // WMPNss doesn't send RTCP Sender Reports, so the cross-stream
             // offset comes from the PLAY response's RTP-Info (each stream's
             // play-point RTP timestamp) — epoch-free and available immediately.
@@ -660,6 +664,11 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // The estimator still runs for diagnostics; reset it so its logged
             // fit restarts cleanly at the new position (we don't act on it).
             try { _rtsp?.ResetCorrespondenceEstimator(); } catch { }
+            // Drop stale pre-seek audio: the deep coded reservoir (input queue)
+            // plus the renderer's PCM backlog would otherwise play the OLD
+            // position's audio at the NEW one. Flush both so audio restarts clean.
+            try { _decoder?.Flush(); } catch { }
+            try { _renderer?.ClearBuffer(); } catch { }
             _pacer?.Reanchor();
             ResetMasterSmoothing();
             _log?.LogInfo($"[ext-sync] {reason} — re-baselining A/V sync");
@@ -692,6 +701,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             Interlocked.Exchange(ref _anchorMinRtpInfoGen, (_rtsp?.RtpInfoGeneration ?? 0) + 1);
             _seekGateTick = Environment.TickCount;
             try { _rtsp?.ResetCorrespondenceEstimator(); } catch { }
+            // Drop the trick-play audio backlog (deep coded queue + PCM buffer)
+            // so 1× resumes from the new position without replaying stale audio.
+            try { _decoder?.Flush(); } catch { }
+            try { _renderer?.ClearBuffer(); } catch { }
             _pacer?.Reanchor();
             ResetMasterSmoothing();
             _log?.LogInfo($"[ext-sync] trick-play exit → 1× — re-anchored, KEEPING offset " +

@@ -288,6 +288,15 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                         bool slaved = _masterClockMs != null;
                         if (_pts0 == long.MinValue) {
                             _pts0 = _queue.Peek().PtsMs;
+                            // DIAGNOSTIC: the frame the pacer ACTUALLY anchors to.
+                            // Compare against the controller's offset video
+                            // reference (_firstVideoMauWirePtsMs, logged as
+                            // "videoPts=" in [ext-sync] A/V offset): if pts0 !=
+                            // videoPts, the offset used the wrong video origin
+                            // (first-ARRIVED MAU vs first-DECODED frame) — the
+                            // variable-lead-in-drop skew.
+                            _log?.LogInfo($"[pacer] anchored pts0={_pts0}ms " +
+                                          $"(slaved={slaved}, masterNow={(slaved ? _masterClockMs() : 0)}ms)");
                             if (slaved) {
                                 // The FIRST anchor of the session ties video to
                                 // audio's ORIGIN (master clock = 0 = first audio

@@ -40,6 +40,19 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         private Thread _worker;
         private bool _disposed;
 
+        // yadif deinterlace filter graph (buffer → yadif → buffersink). Built
+        // lazily on the first frame, ONLY for MPEG-2 (WMC broadcast recordings
+        // are 576i and comb heavily on motion). H.264 is left untouched
+        // (progressive). If avfilter/yadif can't init, _deintDisabled falls back
+        // to raw passthrough — deinterlace is best-effort, never fatal.
+        private AVFilterGraph* _graph;
+        private AVFilterContext* _srcCtx;
+        private AVFilterContext* _sinkCtx;
+        private AVFrame* _filtFrame;
+        private bool _deintActive;
+        private bool _deintDisabled;
+        private int _deintW, _deintH, _deintFmt;
+
         // Pause gate. Set = running; reset = paused. The worker blocks on this
         // before decoding each packet so a Pause() holds decoding (retaining
         // the input queue + the pacer's already-decoded frames) without a
@@ -51,6 +64,15 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
 
         private long _framesDecoded;
         public long FramesDecoded => Interlocked.Read(ref _framesDecoded);
+
+        // Periodic arrival/decode-rate diagnostic (mirrors [libav-audio] stats).
+        // Reveals whether the video is UNDER-DELIVERED (arrival < source fps) —
+        // the cause of the slow jitter-buffer drain → starvation → audio-leads.
+        private long _statPktsIn;
+        private readonly System.Diagnostics.Stopwatch _statClock = System.Diagnostics.Stopwatch.StartNew();
+        private long _lastStatMs;
+        private long _lastStatPkts;
+        private long _lastStatFrames;
         public int Width => _width;
         public int Height => _height;
 
@@ -110,6 +132,7 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
 
         public void SubmitPacket(byte[] data, uint rtpTs) {
             if (_disposed || data == null || data.Length == 0) return;
+            Interlocked.Increment(ref _statPktsIn);
             if (!_queue.TryAdd(new QueuedPacket { Data = data, RtpTs = rtpTs })) {
                 if (_queue.TryTake(out _)) _queue.TryAdd(new QueuedPacket { Data = data, RtpTs = rtpTs });
             }
@@ -137,6 +160,7 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                     if (_disposed) break;
                     SendPacket(pkt, qp);
                     DrainFrames(frame);
+                    MaybeLogStats();
                 }
                 ffmpeg.avcodec_send_packet(_ctx, null);
                 DrainFrames(frame);
@@ -146,6 +170,26 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                 AVPacket* p = pkt; ffmpeg.av_packet_free(&p);
                 AVFrame* f = frame; ffmpeg.av_frame_free(&f);
             }
+        }
+
+        // Log arrival (MAUs submitted) + decode rate once per ~1s window. If
+        // arrival fps sits below the source fps (25 for PAL) while decode keeps
+        // up, the server is under-delivering video → the pacer's jitter buffer
+        // drains → eventual starvation (video freezes, audio leads).
+        private void MaybeLogStats() {
+            if (_log == null) return;
+            long now = _statClock.ElapsedMilliseconds;
+            long win = now - _lastStatMs;
+            if (win < 1000) return;
+            long pkts = Interlocked.Read(ref _statPktsIn);
+            long frames = Interlocked.Read(ref _framesDecoded);
+            long dPkts = pkts - _lastStatPkts;
+            long dFrames = frames - _lastStatFrames;
+            _lastStatMs = now; _lastStatPkts = pkts; _lastStatFrames = frames;
+            double arrFps = dPkts * 1000.0 / win;
+            double decFps = dFrames * 1000.0 / win;
+            _log.LogInfo($"[libav-vpush] stats: pktsIn={dPkts} framesOut={dFrames} window={win}ms " +
+                         $"→ arrival={arrFps:F1}fps decode={decFps:F1}fps ({arrFps / 25.0 * 100:F0}% of 25fps)");
         }
 
         private void SendPacket(AVPacket* pkt, QueuedPacket qp) {
@@ -173,35 +217,116 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                     return;
                 }
 
-                EnsureSws(frame);
-                if (_sws == null) { ffmpeg.av_frame_unref(frame); continue; }
-
-                // Presentation timestamp: prefer the reorder-correct
-                // best_effort_timestamp (carries the rtpTs we set on the
-                // packet), fall back to pts, then to a synthetic counter.
-                long ts = frame->best_effort_timestamp;
-                if (ts == ffmpeg.AV_NOPTS_VALUE) ts = frame->pts;
-                long ptsMs;
-                if (ts == ffmpeg.AV_NOPTS_VALUE) {
-                    ptsMs = _frameCounter * 1000 / 25; // assume 25fps if no PTS
+                if (TryDeinterlace(frame)) {
+                    // Push into the yadif graph; it may emit 0..N frames (buffers
+                    // ~1 frame of context, so it's steady-state 1:1 at mode=0).
+                    int aret = ffmpeg.av_buffersrc_add_frame(_srcCtx, frame);
+                    if (aret < 0) {
+                        _log?.LogDebug($"[libav-vpush] buffersrc_add ret={AvStrError(aret)}");
+                    } else {
+                        while (ffmpeg.av_buffersink_get_frame(_sinkCtx, _filtFrame) >= 0) {
+                            EmitFrame(_filtFrame);
+                            ffmpeg.av_frame_unref(_filtFrame);
+                        }
+                    }
+                    ffmpeg.av_frame_unref(frame);
                 } else {
-                    ptsMs = ts * 1000 / _clockHz;
+                    EmitFrame(frame);
+                    ffmpeg.av_frame_unref(frame);
                 }
-                _frameCounter++;
-
-                fixed (byte* dst = _bgra) {
-                    var dstData = new byte_ptrArray8();
-                    dstData[0] = dst;
-                    var dstLines = new int_array8();
-                    dstLines[0] = _stride;
-                    ffmpeg.sws_scale(_sws, frame->data, frame->linesize, 0,
-                                     frame->height, dstData, dstLines);
-                    Interlocked.Increment(ref _framesDecoded);
-                    try { OnFrame?.Invoke((IntPtr)dst, _stride, _width, _height, ptsMs); }
-                    catch (Exception ex) { _log?.LogError($"[libav-vpush] OnFrame threw: {ex.Message}"); }
-                }
-                ffmpeg.av_frame_unref(frame);
             }
+        }
+
+        /// <summary>Colour-convert one (already-deinterlaced, if applicable)
+        /// frame to BGRA and raise OnFrame with its presentation time.</summary>
+        private void EmitFrame(AVFrame* frame) {
+            EnsureSws(frame);
+            if (_sws == null) return;
+
+            // Presentation timestamp: prefer the reorder-correct
+            // best_effort_timestamp (carries the rtpTs we set on the
+            // packet), fall back to pts, then to a synthetic counter.
+            long ts = frame->best_effort_timestamp;
+            if (ts == ffmpeg.AV_NOPTS_VALUE) ts = frame->pts;
+            long ptsMs;
+            if (ts == ffmpeg.AV_NOPTS_VALUE) {
+                ptsMs = _frameCounter * 1000 / 25; // assume 25fps if no PTS
+            } else {
+                ptsMs = ts * 1000 / _clockHz;
+            }
+            _frameCounter++;
+
+            fixed (byte* dst = _bgra) {
+                var dstData = new byte_ptrArray8();
+                dstData[0] = dst;
+                var dstLines = new int_array8();
+                dstLines[0] = _stride;
+                ffmpeg.sws_scale(_sws, frame->data, frame->linesize, 0,
+                                 frame->height, dstData, dstLines);
+                Interlocked.Increment(ref _framesDecoded);
+                try { OnFrame?.Invoke((IntPtr)dst, _stride, _width, _height, ptsMs); }
+                catch (Exception ex) { _log?.LogError($"[libav-vpush] OnFrame threw: {ex.Message}"); }
+            }
+        }
+
+        // ---- yadif deinterlace (MPEG-2 only) ----------------------------
+
+        /// <summary>True if the yadif graph is built and matches the frame's
+        /// geometry (builds/rebuilds lazily). MPEG-2 only; false → raw path.</summary>
+        private bool TryDeinterlace(AVFrame* frame) {
+            if (_deintDisabled) return false;
+            if (_codecId != AVCodecID.AV_CODEC_ID_MPEG2VIDEO) return false;
+            if (_deintActive && frame->width == _deintW && frame->height == _deintH
+                && (int)frame->format == _deintFmt) return true;
+            TeardownDeinterlace();
+            if (!BuildDeinterlace(frame)) { _deintDisabled = true; return false; }
+            _deintActive = true;
+            return true;
+        }
+
+        private bool BuildDeinterlace(AVFrame* frame) {
+            try {
+                _graph = ffmpeg.avfilter_graph_alloc();
+                if (_graph == null) { _log?.LogError("[libav-vpush] avfilter_graph_alloc failed"); return false; }
+
+                var srcDef  = ffmpeg.avfilter_get_by_name("buffer");
+                var sinkDef = ffmpeg.avfilter_get_by_name("buffersink");
+                var yadifDef = ffmpeg.avfilter_get_by_name("yadif");
+                if (srcDef == null || sinkDef == null || yadifDef == null) {
+                    _log?.LogError("[libav-vpush] deinterlace: buffer/buffersink/yadif filter not found (avfilter unavailable?)");
+                    return false;
+                }
+
+                string pixName = ffmpeg.av_get_pix_fmt_name((AVPixelFormat)frame->format) ?? "yuv420p";
+                int sarN = frame->sample_aspect_ratio.num > 0 ? frame->sample_aspect_ratio.num : 1;
+                int sarD = frame->sample_aspect_ratio.den > 0 ? frame->sample_aspect_ratio.den : 1;
+                string args = $"video_size={frame->width}x{frame->height}:pix_fmt={pixName}:" +
+                              $"time_base=1/{_clockHz}:pixel_aspect={sarN}/{sarD}";
+
+                AVFilterContext* src = null, sink = null, yadif = null;
+                if (ffmpeg.avfilter_graph_create_filter(&src, srcDef, "in", args, null, _graph) < 0) return false;
+                if (ffmpeg.avfilter_graph_create_filter(&sink, sinkDef, "out", null, null, _graph) < 0) return false;
+                // mode=0 (send_frame): ONE output per input — keeps the 25 fps the
+                // pacer expects (mode=1 would double to 50 fps and break pacing).
+                if (ffmpeg.avfilter_graph_create_filter(&yadif, yadifDef, "yadif", "mode=0", null, _graph) < 0) return false;
+                if (ffmpeg.avfilter_link(src, 0, yadif, 0) < 0) return false;
+                if (ffmpeg.avfilter_link(yadif, 0, sink, 0) < 0) return false;
+                if (ffmpeg.avfilter_graph_config(_graph, null) < 0) return false;
+
+                _srcCtx = src; _sinkCtx = sink;
+                if (_filtFrame == null) _filtFrame = ffmpeg.av_frame_alloc();
+                _deintW = frame->width; _deintH = frame->height; _deintFmt = (int)frame->format;
+                _log?.LogInfo($"[libav-vpush] yadif deinterlace active ({frame->width}x{frame->height} {pixName})");
+                return true;
+            } catch (Exception ex) {
+                _log?.LogError($"[libav-vpush] deinterlace setup threw: {ex.Message}");
+                return false;
+            }
+        }
+
+        private void TeardownDeinterlace() {
+            if (_graph != null) { var g = _graph; ffmpeg.avfilter_graph_free(&g); _graph = null; }
+            _srcCtx = null; _sinkCtx = null; _deintActive = false;
         }
 
         private void EnsureSws(AVFrame* frame) {
@@ -235,6 +360,8 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             try { _runGate.Dispose(); } catch { }
             try { _queue.Dispose(); } catch { }
             if (_sws != null) { ffmpeg.sws_freeContext(_sws); _sws = null; }
+            TeardownDeinterlace();
+            if (_filtFrame != null) { AVFrame* ff = _filtFrame; ffmpeg.av_frame_free(&ff); _filtFrame = null; }
             if (_ctx != null) { AVCodecContext* t = _ctx; ffmpeg.avcodec_free_context(&t); _ctx = null; }
             _log?.LogInfo("[libav-vpush] disposed");
         }
