@@ -24,28 +24,52 @@ namespace SoftSled.HostSetup {
     /// detected and refused rather than silently overwritten with the wrong
     /// file.</para>
     ///
-    /// <para><b>Cross-version (verified 2026-06-20).</b> The signature anchors
-    /// on the bytes AFTER the target — <c>48 8B D7 BB 09 01 0B 80</c>
-    /// (<c>mov rdx,rdi; mov ebx,800B0109h</c>) — preceded by the
-    /// <c>lea ecx,[rax+disp8]</c> opcode (<c>8D 48</c>). Only the surrounding
-    /// stack/frame addressing differs between builds, not this validation-setup
-    /// core, so the one signature matches uniquely across every Media Center
-    /// build checked: Win7 RTM/SP1 x64 (all editions; target @0x21D15) and
-    /// Win8.1 Pro w/ Media Center x64 (target @0x1EC17). Win8.1's site is
-    /// inferred from the identical instruction pattern (no diff-verified
-    /// patched reference for it yet), so Win8.1 pairing is worth a live test.</para>
+    /// <para><b>Cross-version (verified 2026-06-20 / x86 added 2026-07-07).</b>
+    /// The patch byte is always the strictness argument (<c>07 → 01</c>), but
+    /// the compiler emits it differently per architecture, so two signatures
+    /// are tried and exactly one must match uniquely:</para>
+    ///
+    /// <list type="bullet">
+    /// <item><b>x64</b> — the arg is <c>lea ecx,[rax+7]</c> BEFORE the error
+    /// constant: <c>8D 48 &lt;07&gt; | 48 8B D7 BB 09 01 0B 80</c>
+    /// (<c>… ; mov rdx,rdi; mov ebx,800B0109h</c>). Matches uniquely across
+    /// Win7 RTM/SP1 x64 (all editions; target @0x21D15) and Win8.1 Pro w/ Media
+    /// Center x64 (target @0x1EC17; site inferred from the identical pattern —
+    /// no diff-verified patched reference yet, so worth a live test).</item>
+    /// <item><b>x86</b> — the arg is a <c>push 7</c> (<c>6A 07</c>) AFTER the
+    /// error constant: <c>C7 45 fc 09 01 0B 80 6A &lt;07&gt;</c>
+    /// (<c>mov [ebp-4],800B0109h; push 7</c>). The 5-byte anchor
+    /// <c>09 01 0B 80 6A</c> is unique per file (the other 800B0109h occurrence
+    /// is followed by <c>39</c>, not <c>6A</c>). Verified byte-identical on
+    /// Win7 SP1 x86 6.1.7601.17514 (target @0x1DFD2) and x86 Embedded
+    /// 6.1.7601.17631 (target @0x1DDD2).</item>
+    /// </list>
+    ///
+    /// <para>Only the surrounding stack/frame addressing differs between builds,
+    /// not this validation-setup core.</para>
     /// </summary>
     internal static class Mcx2ProvPatcher {
 
-        // Anchor: lea ecx,[rax+disp8]  (8D 48 <target>) immediately followed by
-        //   mov rdx,rdi ; mov ebx,800B0109h  (CERT_E_UNTRUSTEDROOT).
-        // The 8-byte suffix carries that distinctive error constant, so the
-        // whole pattern occurs exactly once per binary (verified across Win7
-        // RTM/SP1 and Win8.1). Prefix is just the lea opcode+modrm.
-        private static readonly byte[] Prefix =
-            { 0x8D, 0x48 };
-        private static readonly byte[] Suffix =
-            { 0x48, 0x8B, 0xD7, 0xBB, 0x09, 0x01, 0x0B, 0x80 };
+        /// <summary>A prefix/suffix pair bracketing the single patch byte.</summary>
+        private sealed class Signature {
+            public readonly byte[] Prefix;
+            public readonly byte[] Suffix;
+            public Signature(byte[] prefix, byte[] suffix) { Prefix = prefix; Suffix = suffix; }
+        }
+
+        // Each entry brackets the one target byte; whichever build this binary
+        // is, exactly one entry matches (uniquely) across the whole file.
+        private static readonly Signature[] Signatures = {
+            // x64: lea ecx,[rax+<07>] ; mov rdx,rdi ; mov ebx,800B0109h.
+            new Signature(
+                prefix: new byte[] { 0x8D, 0x48 },
+                suffix: new byte[] { 0x48, 0x8B, 0xD7, 0xBB, 0x09, 0x01, 0x0B, 0x80 }),
+            // x86: mov [ebp-4],800B0109h ; push <07>. Target is the byte right
+            // after the push opcode (6A), so the suffix is empty.
+            new Signature(
+                prefix: new byte[] { 0x09, 0x01, 0x0B, 0x80, 0x6A },
+                suffix: new byte[0]),
+        };
 
         private const byte OriginalByte = 0x07; // lea ecx,[rax+7]  — CRL check enforced
         private const byte PatchedByte  = 0x01; // lea ecx,[rax+1]  — CRL check skipped
@@ -62,13 +86,15 @@ namespace SoftSled.HostSetup {
         private static int Locate(byte[] bytes, out bool ambiguous) {
             ambiguous = false;
             int found = -1;
-            int limit = bytes.Length - (Prefix.Length + 1 + Suffix.Length);
-            for (int i = 0; i <= limit; i++) {
-                if (!Match(bytes, i, Prefix)) continue;
-                int target = i + Prefix.Length;
-                if (!Match(bytes, target + 1, Suffix)) continue;
-                if (found != -1) { ambiguous = true; return -1; }
-                found = target;
+            foreach (Signature sig in Signatures) {
+                int limit = bytes.Length - (sig.Prefix.Length + 1 + sig.Suffix.Length);
+                for (int i = 0; i <= limit; i++) {
+                    if (!Match(bytes, i, sig.Prefix)) continue;
+                    int target = i + sig.Prefix.Length;
+                    if (!Match(bytes, target + 1, sig.Suffix)) continue;
+                    if (found != -1) { ambiguous = true; return -1; }
+                    found = target;
+                }
             }
             return found;
         }
