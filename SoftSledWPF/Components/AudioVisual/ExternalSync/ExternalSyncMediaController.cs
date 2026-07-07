@@ -384,6 +384,12 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 UpdateSyncOffset();
 
                 var d = new LibAvVideoPushDecoder(id, clockHz, _log);
+                // Backpressure: decode at the pacer's (audio-slaved) drain rate,
+                // not H.264's bursty ~100fps delivery. Reads the field at call
+                // time, so it safely returns 0 (no backpressure) until the pacer
+                // exists. Without this the burst overflows the pacer's frame
+                // buffer → dropped future frames → video freezes.
+                d.PacerBufferedMsProvider = () => _pacer?.BufferedMs ?? 0;
                 d.OnFrame += (ptr, stride, w, h, ptsMs) => {
                     // Capture the VIDEO sync origin from the first DECODED frame,
                     // NOT the first ARRIVED MAU (that was done in OnVideoMau). The

@@ -31,9 +31,24 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         private readonly AVCodecID _codecId;
         private readonly int _clockHz;
         private readonly Logger _log;
+        // Deep input queue: with decode backpressure (see WorkerLoop) coded MAUs
+        // accumulate here while we decode at the pacer's drain rate. H.264 arrives
+        // in large bursts (100+ fps vs the 25 fps the pacer releases); decoding
+        // the whole burst into BGRA overflows the pacer's frame buffer, which then
+        // drops FUTURE frames → a content gap → the video freezes. Holding the
+        // compressed MAUs here instead (each a small H.264 AU) lets the pacer
+        // buffer stay bounded. Flush() empties it on seek/trick-play.
         private readonly BlockingCollection<QueuedPacket> _queue
-            = new BlockingCollection<QueuedPacket>(boundedCapacity: 64);
+            = new BlockingCollection<QueuedPacket>(boundedCapacity: 2048);
         private long _frameCounter; // fallback PTS source when the wire carries none
+
+        // Decode backpressure. Set by the controller to () => pacer.BufferedMs.
+        // The worker holds coded MAUs in the (deep) input queue while the pacer
+        // already has >= PacerHighWaterMs of decoded video buffered — so we decode
+        // at the pacer's (audio-slaved) drain rate, not the server's bursty
+        // delivery rate. Null → no backpressure (decode as fast as MAUs arrive).
+        public Func<int> PacerBufferedMsProvider { get; set; }
+        private const int PacerHighWaterMs = 3000; // between the ~|offset| hold and the pacer's drop-cap
 
         private AVCodecContext* _ctx;
         private SwsContext* _sws;
@@ -173,6 +188,23 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                     // so the queue simply holds in the meantime.
                     _runGate.Wait();
                     if (_disposed) break;
+
+                    // Backpressure: don't decode ahead of the pacer's drain rate.
+                    // While the pacer already holds >= PacerHighWaterMs of decoded
+                    // video, wait — the server's burst stays in the (deep) coded
+                    // queue rather than overflowing the pacer's BGRA buffer (which
+                    // would drop future frames → a gap → freeze). The held `qp`
+                    // decodes as soon as the pacer drains below the mark.
+                    var probe = PacerBufferedMsProvider;
+                    if (probe != null) {
+                        while (!_disposed && probe() >= PacerHighWaterMs) {
+                            _runGate.Wait();               // honour pause during the wait
+                            if (_disposed) break;
+                            Thread.Sleep(8);
+                        }
+                        if (_disposed) break;
+                    }
+
                     // Seek/trick-play flushed us: drop decoder state so we don't
                     // emit stale pre-seek frames (worker-thread only —
                     // avcodec_flush_buffers is not thread-safe).
@@ -210,7 +242,8 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             double arrFps = dPkts * 1000.0 / win;
             double decFps = dFrames * 1000.0 / win;
             _log.LogInfo($"[libav-vpush] stats: pktsIn={dPkts} framesOut={dFrames} window={win}ms " +
-                         $"→ arrival={arrFps:F1}fps decode={decFps:F1}fps ({arrFps / 25.0 * 100:F0}% of 25fps)");
+                         $"→ arrival={arrFps:F1}fps decode={decFps:F1}fps ({arrFps / 25.0 * 100:F0}% of 25fps) " +
+                         $"queueDepth={_queue.Count}");
         }
 
         private void SendPacket(AVPacket* pkt, QueuedPacket qp) {
