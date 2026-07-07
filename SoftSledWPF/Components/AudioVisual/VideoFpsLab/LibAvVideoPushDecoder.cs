@@ -42,13 +42,15 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             = new BlockingCollection<QueuedPacket>(boundedCapacity: 2048);
         private long _frameCounter; // fallback PTS source when the wire carries none
 
-        // Decode backpressure. Set by the controller to () => pacer.BufferedMs.
-        // The worker holds coded MAUs in the (deep) input queue while the pacer
-        // already has >= PacerHighWaterMs of decoded video buffered — so we decode
-        // at the pacer's (audio-slaved) drain rate, not the server's bursty
-        // delivery rate. Null → no backpressure (decode as fast as MAUs arrive).
-        public Func<int> PacerBufferedMsProvider { get; set; }
-        private const int PacerHighWaterMs = 3000; // between the ~|offset| hold and the pacer's drop-cap
+        // Decode backpressure. Returns true while the pacer already holds enough
+        // decoded video (>= its BackpressureTargetMs, which tracks the pacer's
+        // offset-dependent drop cap). The worker then holds coded MAUs in the
+        // (deep) input queue instead of decoding — so we decode at the pacer's
+        // (audio-slaved) drain rate, not the server's bursty delivery. Using the
+        // pacer's dynamic target (not a fixed ms) is essential: a fixed high-water
+        // above maxBuffer never engages for small offsets, so the burst overflows
+        // and video freezes. Null → no backpressure.
+        public Func<bool> ShouldBackpressure { get; set; }
 
         private AVCodecContext* _ctx;
         private SwsContext* _sws;
@@ -195,9 +197,9 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                     // queue rather than overflowing the pacer's BGRA buffer (which
                     // would drop future frames → a gap → freeze). The held `qp`
                     // decodes as soon as the pacer drains below the mark.
-                    var probe = PacerBufferedMsProvider;
+                    var probe = ShouldBackpressure;
                     if (probe != null) {
-                        while (!_disposed && probe() >= PacerHighWaterMs) {
+                        while (!_disposed && probe()) {
                             _runGate.Wait();               // honour pause during the wait
                             if (_disposed) break;
                             Thread.Sleep(8);

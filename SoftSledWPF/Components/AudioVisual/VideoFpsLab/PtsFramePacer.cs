@@ -165,6 +165,18 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             }
         }
 
+        /// <summary>Target decode depth for the video decoder's backpressure: fill
+        /// the decoded-frame buffer to here but no further, so it stays BELOW the
+        /// drop-NEW cap (<see cref="_maxBufferMs"/>). A FIXED threshold breaks for
+        /// small offsets — maxBuffer=250+2000+|offset|, so e.g. offset 379 →
+        /// maxBuffer 2629; a 3000ms fixed high-water never engages, the bursty
+        /// decoder overflows the buffer, the overflow drops FUTURE frames, and
+        /// video freezes. Tracking maxBuffer−margin keeps backpressure effective
+        /// at every offset.</summary>
+        public int BackpressureTargetMs {
+            get { lock (_gate) { int t = _maxBufferMs - 500; return t < 1000 ? 1000 : t; } }
+        }
+
         public long Released   => Interlocked.Read(ref _released);
         public long Underflows => Interlocked.Read(ref _underflows);
         public long Dropped    => Interlocked.Read(ref _dropped);
