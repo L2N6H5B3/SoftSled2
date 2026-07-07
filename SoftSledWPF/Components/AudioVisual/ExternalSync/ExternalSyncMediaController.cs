@@ -384,7 +384,26 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 UpdateSyncOffset();
 
                 var d = new LibAvVideoPushDecoder(id, clockHz, _log);
-                d.OnFrame += (ptr, stride, w, h, ptsMs) => _pacer?.Submit(ptr, stride, w, h, ptsMs);
+                d.OnFrame += (ptr, stride, w, h, ptsMs) => {
+                    // Capture the VIDEO sync origin from the first DECODED frame,
+                    // NOT the first ARRIVED MAU (that was done in OnVideoMau). The
+                    // pacer anchors pts0 on the first decoded frame; post-seek the
+                    // first arrived MAU is usually a non-decodable P/B frame, so the
+                    // decoder skips ~1s to the next I-frame. Computing the offset
+                    // from the arrived MAU (an earlier, different origin than pts0)
+                    // made it erratic (-2465/-873/+4066) and raced the video.
+                    // Anchoring the offset to the SAME frame keeps them consistent.
+                    if (Interlocked.Read(ref _firstVideoMauRtpRaw) < 0 && AnchorGateOpen()) {
+                        if (Interlocked.CompareExchange(ref _firstVideoMauWirePtsMs, ptsMs, -1L) == -1L) {
+                            long rtp = ptsMs * _videoClockHz / 1000L;
+                            Interlocked.Exchange(ref _firstVideoMauRtpRaw, rtp);
+                            _log?.LogDebug($"[ext-sync-anchor] first DECODED video frame ptsMs={ptsMs} " +
+                                           $"(rtp≈{rtp}, clk={_videoClockHz})");
+                            if (!_syncFinalized) UpdateSyncOffset();
+                        }
+                    }
+                    _pacer?.Submit(ptr, stride, w, h, ptsMs);
+                };
                 try {
                     d.Start();
                     _videoDecoder = d;
@@ -400,16 +419,12 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
 
         private void OnVideoMau(byte[] data, uint rtpTs) {
             // Discard pre-seek in-flight MAUs until the post-seek RTP-Info lands.
+            // NOTE: the video sync origin (_firstVideoMauRtpRaw / WirePtsMs) is now
+            // captured in the decoder's OnFrame handler (first DECODED frame =
+            // the pacer's pts0 anchor), NOT here — the first ARRIVED MAU is often
+            // a non-decodable P/B frame that the decoder skips, so anchoring the
+            // offset here used a different origin than the pacer and skewed sync.
             if (Interlocked.Read(ref _firstVideoMauRtpRaw) < 0 && !AnchorGateOpen()) return;
-            long ptsMs = (long)rtpTs * 1000L / _videoClockHz;
-            if (Interlocked.CompareExchange(ref _firstVideoMauWirePtsMs, ptsMs, -1L) == -1L) {
-                Interlocked.Exchange(ref _firstVideoMauRtpRaw, rtpTs);
-                _log?.LogDebug($"[ext-sync-anchor] first video MAU rtpTs={rtpTs} ({ptsMs}ms, clk={_videoClockHz})");
-            }
-            // Retry the SR-based offset until both streams' Sender Reports have
-            // anchored (they arrive a little after the first MAUs). Cheap once
-            // finalised. Runs on the depacketizer thread.
-            if (!_syncFinalized) UpdateSyncOffset();
             _videoDecoder?.SubmitPacket(data, rtpTs);
         }
 
@@ -564,8 +579,16 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 _videoDecoder?.Resume();
                 _pacer?.SetPaused(false);
             }
-            _decoder?.Resume();
-            _renderer?.Play();
+            // The AVCTRL Start handler calls SetRateAsync THEN PlayAsync, so a FF/RW
+            // Start lands here right after SetRateAsync silenced audio for trick
+            // play — do NOT resume audio while in trick play (rate ≠ 1×), or it
+            // plays out the reservoir for several seconds. WMC stops sending audio
+            // during trick play; the return-to-1× Start (via SetRateAsync) resumes.
+            bool trickPlay = Math.Abs(_lastRequestedRate - 1.0) >= 0.0001;
+            if (!trickPlay) {
+                _decoder?.Resume();
+                _renderer?.Play();
+            }
 
             if (resuming) {
                 _paused = false;
@@ -654,6 +677,12 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// Correspondence estimator, and re-anchors the pacer. The user trim
         /// (_liveTrimMs) persists as the fixed residual.</summary>
         private void ReBaselineSync(string reason) {
+            // A seek RECOMPUTES the offset (unlike trick-play, which keeps it):
+            // each seek lands at a new point with new lead-in, so the offset
+            // genuinely differs. Correctness now relies on the video origin being
+            // captured from the first DECODED frame (see the decoder OnFrame
+            // handler) so it matches the pacer's pts0 anchor — the earlier erratic
+            // -2465/-873/+4066 values came from using the first ARRIVED MAU.
             _syncFinalized = false;
             Interlocked.Exchange(ref _firstAudioMauRtpRaw, -1L);
             Interlocked.Exchange(ref _firstVideoMauRtpRaw, -1L);
@@ -667,7 +696,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // Drop stale pre-seek audio: the deep coded reservoir (input queue)
             // plus the renderer's PCM backlog would otherwise play the OLD
             // position's audio at the NEW one. Flush both so audio restarts clean.
+            // Flush video too so no stale pre-seek frame reaches the pacer and
+            // becomes its pts0 anchor (which would skew the recomputed offset).
             try { _decoder?.Flush(); } catch { }
+            try { _videoDecoder?.Flush(); } catch { }
             try { _renderer?.ClearBuffer(); } catch { }
             _pacer?.Reanchor();
             ResetMasterSmoothing();
@@ -681,19 +713,19 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// pending pause/resume rework must not disturb trick-play, and vice
         /// versa.
         ///
-        /// <para>Like a seek it re-anchors the pacer and re-arms the anchor gate
-        /// to discard the trick-play frame backlog until the new (1×) RTP-Info
-        /// arrives. UNLIKE a seek it does NOT recompute the cross-stream offset:
-        /// that's constant for a video (Xbox capture), and the RTP-Info WMPNss
-        /// returns straight after server-side scale is unreliable for audio
-        /// (observed: recompute → 0ms vs the true −1891ms, which raced the
-        /// video). <see cref="_keepOffsetThisSync"/> makes UpdateSyncOffset reuse
-        /// the established offset instead. The pacer already holds that offset,
-        /// so there is no window where it is wrong.</para>
+        /// <para>Like a seek it re-anchors the pacer, re-arms the anchor gate to
+        /// discard the trick-play frame backlog until the new (1×) RTP-Info
+        /// arrives, and RECOMPUTES the cross-stream offset. Trick-play exit lands
+        /// at a new position whose A/V lead-in differs from the initial play, so
+        /// the offset is NOT constant (keeping the old value left audio ~3.4s out
+        /// of sync). Recompute is now reliable because the video origin comes from
+        /// the first DECODED frame (matching the pacer's pts0 anchor) — the old
+        /// "recompute → 0ms, raced the video" failure was that origin mismatch
+        /// (first ARRIVED MAU), since fixed. Kept SEPARATE from ReBaselineSync so
+        /// the two can still evolve independently.</para>
         /// </summary>
         private void ReanchorAfterTrickPlay() {
-            _keepOffsetThisSync = true;
-            _syncFinalized = false;   // let the re-captured first MAU run UpdateSyncOffset (which keeps the offset)
+            _syncFinalized = false;
             Interlocked.Exchange(ref _firstAudioMauRtpRaw, -1L);
             Interlocked.Exchange(ref _firstVideoMauRtpRaw, -1L);
             Interlocked.Exchange(ref _firstAudioMauWirePtsMs, -1L);
@@ -702,13 +734,14 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             _seekGateTick = Environment.TickCount;
             try { _rtsp?.ResetCorrespondenceEstimator(); } catch { }
             // Drop the trick-play audio backlog (deep coded queue + PCM buffer)
-            // so 1× resumes from the new position without replaying stale audio.
+            // and stale video frames so 1× resumes from the new position without
+            // replaying stale audio or anchoring the pacer on a stale frame.
             try { _decoder?.Flush(); } catch { }
+            try { _videoDecoder?.Flush(); } catch { }
             try { _renderer?.ClearBuffer(); } catch { }
             _pacer?.Reanchor();
             ResetMasterSmoothing();
-            _log?.LogInfo($"[ext-sync] trick-play exit → 1× — re-anchored, KEEPING offset " +
-                          $"{Interlocked.Read(ref _baseOffsetMs)}ms (per-video constant; not recomputed)");
+            _log?.LogInfo("[ext-sync] trick-play exit → 1× — re-anchored, recomputing offset");
         }
 
         public Task SetRateAsync(double rate) {
@@ -729,6 +762,16 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // stalls. Switch the pacer to free-run so the (fast-PTS) video keeps
             // updating; return to audio-slaved at 1x.
             _pacer?.SetFreeRun(!normal);
+            if (!normal) {
+                // Entering trick play: WMC stops sending audio, but our decode
+                // reservoir (the deep backpressure queue) still holds buffered
+                // audio that would keep playing through the FF/RW. Silence audio
+                // NOW — pause the device + hold the decoder. Returning to 1× below
+                // resumes them, and ReanchorAfterTrickPlay flushes the stale
+                // reservoir + clears the PCM buffer so audio restarts clean.
+                try { _renderer?.Pause(); } catch { }
+                try { _decoder?.Pause(); } catch { }
+            }
             try { _rtsp?.SetRate(rate); }
             catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP SetRate({rate}) failed: {ex.Message}"); }
             // Reaching here with normal=true means we were in trick play (prev
@@ -738,7 +781,14 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // video's constant offset, because recomputing it from the unreliable
             // post-scale RTP-Info raced the video. Entering trick play (rate≠1)
             // needs nothing — the pacer is free-run and ignores the offset.
-            if (normal) ReanchorAfterTrickPlay();
+            if (normal) {
+                // Returning to 1×: re-anchor (flushes the stale reservoir + clears
+                // the PCM buffer), then resume audio decode + playback so the new
+                // 1× audio streams in fresh.
+                ReanchorAfterTrickPlay();
+                try { _decoder?.Resume(); } catch { }
+                if (_playRequested) { try { _renderer?.Play(); } catch { } }
+            }
             return Task.CompletedTask;
         }
 

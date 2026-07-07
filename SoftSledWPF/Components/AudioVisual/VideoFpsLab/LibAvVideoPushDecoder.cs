@@ -65,6 +65,10 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         private long _framesDecoded;
         public long FramesDecoded => Interlocked.Read(ref _framesDecoded);
 
+        // Set by Flush() (any thread); honoured on the worker thread before the
+        // next decode. Seek/trick-play uses it to drop stale pre-seek frames.
+        private int _flushRequested;
+
         // Periodic arrival/decode-rate diagnostic (mirrors [libav-audio] stats).
         // Reveals whether the video is UNDER-DELIVERED (arrival < source fps) —
         // the cause of the slow jitter-buffer drain → starvation → audio-leads.
@@ -148,6 +152,17 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         /// <summary>Resume decoding after <see cref="Pause"/>. Idempotent.</summary>
         public void Resume() { if (!_disposed) _runGate.Set(); }
 
+        /// <summary>Discard queued (undecoded) packets and reset the codec's
+        /// internal state. Called on seek / trick-play so no stale pre-seek
+        /// frame reaches the pacer (which would corrupt the pts0 anchor). Safe
+        /// from any thread: the queue drain is lock-free; the codec flush is
+        /// deferred to the worker thread via <c>_flushRequested</c>.</summary>
+        public void Flush() {
+            if (_disposed) return;
+            while (_queue.TryTake(out _)) { }
+            Interlocked.Exchange(ref _flushRequested, 1);
+        }
+
         private void WorkerLoop() {
             AVPacket* pkt = ffmpeg.av_packet_alloc();
             AVFrame* frame = ffmpeg.av_frame_alloc();
@@ -158,6 +173,12 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                     // so the queue simply holds in the meantime.
                     _runGate.Wait();
                     if (_disposed) break;
+                    // Seek/trick-play flushed us: drop decoder state so we don't
+                    // emit stale pre-seek frames (worker-thread only —
+                    // avcodec_flush_buffers is not thread-safe).
+                    if (Interlocked.Exchange(ref _flushRequested, 0) == 1) {
+                        ffmpeg.avcodec_flush_buffers(_ctx);
+                    }
                     SendPacket(pkt, qp);
                     DrainFrames(frame);
                     MaybeLogStats();
