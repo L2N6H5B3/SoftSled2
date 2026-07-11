@@ -48,6 +48,16 @@ namespace SoftSled.Components.Configuration {
         // resizable. Default ON.
         public bool LockWindowAspectRatio = true;
 
+        // DEBUG / experimental A/V-sync mode. The cross-stream RTP epoch (the
+        // fixed offset between the audio and video RTP clocks) is constant for a
+        // recording's session — the clocks free-run from session start and seeks
+        // don't reset them. When ON, the controller measures that epoch ONCE at
+        // the initial play (reliable RTP-Info) and reuses it to compute the offset
+        // after each seek — offset = epoch − (videoOrigin − audioOrigin) — instead
+        // of re-deriving it from the seek's own RTP-Info, which WMPNss sometimes
+        // reports inconsistently. Default OFF (opt-in for A/B testing).
+        public bool EpochInvariantSync = false;
+
         // Keep the display (and system) awake while SoftSled is running, so
         // the Windows screen-saver / display-off / sleep idle timers don't
         // blank the screen during long playback or while idling on a menu

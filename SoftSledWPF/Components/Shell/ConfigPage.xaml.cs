@@ -141,6 +141,7 @@ namespace SoftSledWPF.Components.Shell {
                 ChkCloseOnWmcClose.IsChecked   = _config.CloseOnWmcClose;
                 ChkKeepScreenAwake.IsChecked   = _config.KeepScreenAwake;
                 ChkLockAspect.IsChecked        = _config.LockWindowAspectRatio;
+                ChkEpochSync.IsChecked         = _config.EpochInvariantSync;
                 ChkRemoteRendering.IsChecked   = _config.EnableRemoteRendering;
                 Chk2DAnimations.IsChecked      = _config.Enable2DAnimations;
                 ChkIntenseAnimations.IsChecked = _config.EnableIntenseAnimations;
@@ -282,6 +283,7 @@ namespace SoftSledWPF.Components.Shell {
             _config.CloseOnWmcClose         = ChkCloseOnWmcClose.IsChecked == true;
             _config.KeepScreenAwake         = ChkKeepScreenAwake.IsChecked == true;
             _config.LockWindowAspectRatio   = ChkLockAspect.IsChecked == true;
+            _config.EpochInvariantSync      = ChkEpochSync.IsChecked == true;
             _config.EnableRemoteRendering   = ChkRemoteRendering.IsChecked == true;
             _config.Enable2DAnimations      = Chk2DAnimations.IsChecked == true;
             _config.EnableIntenseAnimations = ChkIntenseAnimations.IsChecked == true;

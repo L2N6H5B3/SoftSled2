@@ -83,13 +83,12 @@
                               Click="OnConfigChanged"/>
                     <CheckBox x:Name="ChkKeepScreenAwake"
                               Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Keep the screen awake while running"
+                              Content="Keep screen awake while running"
                               Click="OnConfigChanged"/>
                     <TextBlock Style="{StaticResource WmcBodyStyle}"
                                Foreground="{StaticResource WmcSubtleTextBrush}"
                                Margin="10,4,0,0"
-                               TextWrapping="Wrap"
-                               Text="Prevents the Windows screen-saver and display/sleep timers from blanking the screen during playback or while idling on a menu."/>
+                               TextWrapping="Wrap"/>
                     
                 </StackPanel>
             </Grid>
@@ -332,6 +331,17 @@
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Include A/V (libav / sync) logs"
                               Click="OnConfigChanged"/>
+
+                    <CheckBox x:Name="ChkEpochSync"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Epoch-invariant A/V sync (experimental)"
+                              Margin="0,16,0,0"
+                              Click="OnConfigChanged"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="10,4,0,8"
+                               TextWrapping="Wrap"
+                               Text="After seeking, reuse the audio/video clock offset measured at the start of playback rather than re-deriving it from each seek. May improve lip-sync after seeking on some recordings. Takes effect on the next session."/>
 
                     <!-- File logging — survives a crash so release-build
                          hangs on remote machines can still be diagnosed. -->
