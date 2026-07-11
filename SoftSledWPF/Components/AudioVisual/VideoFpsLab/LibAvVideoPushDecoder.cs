@@ -82,6 +82,14 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         private long _framesDecoded;
         public long FramesDecoded => Interlocked.Read(ref _framesDecoded);
 
+        /// <summary>Approx ms of UNDECODED video held in the input queue (coded
+        /// MAUs waiting behind decode backpressure). The video BFR adds this to
+        /// the pacer's decoded-frame span so the server sees our TRUE total video
+        /// buffering — otherwise the backpressure backlog is invisible, the server
+        /// thinks we're empty and floods a burst, the backlog balloons, then it
+        /// over-corrects and stalls (delivery oscillates → freeze + desync).</summary>
+        public int InputQueuedMs => _queue.Count * 40;  // ~25 fps content
+
         // Set by Flush() (any thread); honoured on the worker thread before the
         // next decode. Seek/trick-play uses it to drop stale pre-seek frames.
         private int _flushRequested;

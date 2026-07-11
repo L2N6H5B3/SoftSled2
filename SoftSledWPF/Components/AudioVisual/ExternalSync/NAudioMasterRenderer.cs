@@ -55,6 +55,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private long _basePtsMs;
         private bool _baseSet;
         private long _bytesWritten;
+        private long _segmentStartMasterMs = -1; // see ClearBuffer / SegmentStartMasterMs
         private bool _disposed;
 
         // Diagnostics — how many under/overrun events have we seen
@@ -158,8 +159,30 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             if (_disposed) return;
             lock (_gate) {
                 try { _provider.ClearBuffer(); } catch { }
+                // Record the master-clock value at which the audio written AFTER
+                // this clear begins playing. The clock is min(bytesPlayed,
+                // bytesWritten)/rate. The buffered-but-now-cleared audio between
+                // bytesPlayed and bytesWritten is DROPPED (not played) — the new
+                // segment's first sample plays right after the current PLAYHEAD,
+                // so the segment-start ≈ the current clock (bytesPlayed-based),
+                // NOT bytesWritten/rate (which counts the cleared audio and would
+                // anchor the video too LATE → audio ahead — observed). The pacer
+                // uses this as the re-anchor masterAtAnchor so video pairs with
+                // the audio's TRUE restart point instead of the (later)
+                // video-frame-arrival time (which baked video decode latency in
+                // as an audio-ahead lag).
+                long abps = _format.AverageBytesPerSecond;
+                long played = 0; try { played = _device.GetPosition(); } catch { }
+                if (played < 0) played = 0;
+                long realBytes = Math.Min(played, Interlocked.Read(ref _bytesWritten));
+                Interlocked.Exchange(ref _segmentStartMasterMs, abps > 0 ? realBytes * 1000L / abps : -1L);
             }
         }
+
+        /// <summary>Master-clock ms at which the segment written after the most
+        /// recent <see cref="ClearBuffer"/> starts playing (see there). -1 until
+        /// the first ClearBuffer.</summary>
+        public long SegmentStartMasterMs => Interlocked.Read(ref _segmentStartMasterMs);
 
         public PlaybackState PlaybackState => _disposed ? PlaybackState.Stopped : _device.PlaybackState;
 

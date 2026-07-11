@@ -74,8 +74,18 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         private volatile bool _freeRun;
         private long _masterAtAnchor;   // master-clock value when _pts0 was captured
         private bool _anchored;         // false until the first anchor; gates initial-vs-seek anchor
+        // Master value to use as masterAtAnchor for the NEXT re-anchor (the audio
+        // segment's true start, from NAudioMasterRenderer.SegmentStartMasterMs).
+        // long.MinValue = unset → fall back to the current master. Consumed once.
+        private long _reanchorMasterOverride = long.MinValue;
 
         public void SetMasterClock(Func<long> masterClockMs) { _masterClockMs = masterClockMs; }
+
+        /// <summary>Set the masterAtAnchor to use on the NEXT re-anchor (see
+        /// <see cref="_reanchorMasterOverride"/>). Call right before Reanchor().</summary>
+        public void SetReanchorMasterOverride(long masterMs) {
+            System.Threading.Interlocked.Exchange(ref _reanchorMasterOverride, masterMs);
+        }
 
         /// <summary>Set the A/V sync offset INSTANTLY (startup / seek). Also
         /// clears any in-flight slew so the value sticks.</summary>
@@ -307,8 +317,7 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                             // videoPts, the offset used the wrong video origin
                             // (first-ARRIVED MAU vs first-DECODED frame) — the
                             // variable-lead-in-drop skew.
-                            _log?.LogInfo($"[pacer] anchored pts0={_pts0}ms " +
-                                          $"(slaved={slaved}, masterNow={(slaved ? _masterClockMs() : 0)}ms)");
+                            long mnAnchor = slaved ? _masterClockMs() : 0;
                             if (slaved) {
                                 // The FIRST anchor of the session ties video to
                                 // audio's ORIGIN (master clock = 0 = first audio
@@ -319,11 +328,27 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                                 // CURRENT value here would bake that startup gap
                                 // in as a permanent video lag. Anchoring to 0
                                 // lets a late video decoder catch up instead.
-                                // Only a post-seek re-anchor uses the current
-                                // audio position (the seek point).
-                                _masterAtAnchor = _anchored ? _masterClockMs() : 0;
+                                //
+                                // A post-seek/FF/pause RE-ANCHOR instead uses the
+                                // master value at which the newly-buffered audio
+                                // segment STARTS playing (SetReanchorMasterOverride,
+                                // from the renderer). Using the current master (=
+                                // the video-frame-arrival time, which trails the
+                                // audio restart by the video decode latency) baked
+                                // that latency in as a permanent audio-ahead lag.
+                                // Sanity-clamp the override to ±8s of the current
+                                // master, else fall back to current.
+                                if (!_anchored) {
+                                    _masterAtAnchor = 0;
+                                } else {
+                                    long ov = Interlocked.Exchange(ref _reanchorMasterOverride, long.MinValue);
+                                    _masterAtAnchor = (ov != long.MinValue && Math.Abs(mnAnchor - ov) <= 8000)
+                                                      ? ov : mnAnchor;
+                                }
                                 _anchored = true;
                             }
+                            _log?.LogInfo($"[pacer] anchored pts0={_pts0}ms " +
+                                          $"(slaved={slaved}, masterNow={mnAnchor}ms, anchor={_masterAtAnchor}ms)");
                         }
 
                         long elapsed;

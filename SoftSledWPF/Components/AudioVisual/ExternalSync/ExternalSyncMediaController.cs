@@ -114,6 +114,14 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                           $"videoJitterBuffer={_videoJitterBufferMs}ms)");
         }
 
+        // DEBUG: epoch-invariant sync mode (see SoftSledConfig.EpochInvariantSync).
+        // Settable from the session on construction. When on, a seek's offset is
+        // computed from the once-measured session RTP epoch + the fresh first-frame
+        // origins, instead of the seek's own (sometimes inconsistent) RTP-Info.
+        public bool EpochInvariantSync { get; set; }
+        private long _sessionEpochMs;    // measured once per media at the initial play
+        private bool _sessionEpochSet;   // reset per media in ResetPipelineForNewMedia
+
         /// <summary>Bind the session-owned GPU presenter. Must be called before
         /// video starts (the session does this right after construction).</summary>
         public void AttachVideoPresenter(D3DImagePresenter presenter) {
@@ -376,8 +384,15 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 // — without this, video delivery settles ~3% under real-time and
                 // the buffer slowly starves mid-playback (mirrors the audio fix).
                 try {
-                    var p = _pacer;
-                    _rtsp?.SetVideoBufferOccupancyProvider(() => p?.BufferedMs ?? 0);
+                    // Report TOTAL video buffering = pacer's decoded-frame span +
+                    // the decoder's undecoded backlog (held by backpressure). If we
+                    // reported only the pacer span, the backlog would be invisible
+                    // to WMPNss → it floods a post-seek burst, the backlog balloons,
+                    // then it over-corrects and stalls (delivery oscillates → the
+                    // video freezes and A/V drifts). Fields read at call time so the
+                    // decoder (created just below) is picked up once it exists.
+                    _rtsp?.SetVideoBufferOccupancyProvider(
+                        () => (_pacer?.BufferedMs ?? 0) + (_videoDecoder?.InputQueuedMs ?? 0));
                 } catch (Exception ex) {
                     _log?.LogError($"[ext-sync] SetVideoBufferOccupancyProvider failed: {ex.Message}");
                 }
@@ -442,8 +457,19 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // a non-decodable P/B frame that the decoder skips, so anchoring the
             // offset here used a different origin than the pacer and skewed sync.
             if (Interlocked.Read(ref _firstVideoMauRtpRaw) < 0 && !AnchorGateOpen()) return;
+            // DIAGNOSTIC (temporary): log the first video MAUs' arriving rtpTs so we
+            // can tell whether a late first DECODED frame (seen: 12096ms while the
+            // play point was 530ms → offset clamped to 0 → seconds out) is a
+            // DELIVERY gap (arriving rtpTs jumps) or a DECODE skip (arriving rtpTs
+            // contiguous from the play point but no decodable frame until later).
+            int n = Interlocked.Increment(ref _videoMauDiagCount);
+            if (n <= 20) {
+                long ms = (long)rtpTs * 1000L / _videoClockHz;
+                _log?.LogDebug($"[ext-sync-diag] video MAU #{n} rtpTs={rtpTs} ({ms}ms) len={data?.Length ?? 0}");
+            }
             _videoDecoder?.SubmitPacket(data, rtpTs);
         }
+        private int _videoMauDiagCount;
 
         // A/V offset via the RTCP Sender Report NTP↔RTP mapping — the canonical
         // cross-stream sync. Each stream's SR ties its RTP clock to absolute
@@ -486,6 +512,28 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // offset comes from the PLAY response's RTP-Info (each stream's
             // play-point RTP timestamp) — epoch-free and available immediately.
             if (_rtsp != null && _rtsp.TryGetRtpInfoAvOffsetMs((uint)aRaw, (uint)vRaw, out long offsetMs)) {
+                // Capture the session RTP epoch ONCE (initial play, before any
+                // seek — the play points are reliable there). Reused by the
+                // epoch-invariant mode across seeks. Cheap; harmless when the mode
+                // is off.
+                if (!_sessionEpochSet && _rtsp.TryGetRtpInfoEpochMs(out long epMs)) {
+                    _sessionEpochMs = epMs;
+                    _sessionEpochSet = true;
+                    _log?.LogInfo($"[ext-sync] session RTP epoch captured = {epMs}ms");
+                }
+                // DEBUG epoch-invariant mode: recompute the offset from the stored
+                // epoch + the FRESH first-frame origins, rather than this seek's
+                // own RTP-Info pad diff (which WMPNss can report inconsistently).
+                // At the initial play this equals the per-seek value; it only
+                // diverges when a seek's play points drift from the true epoch.
+                if (EpochInvariantSync && _sessionEpochSet) {
+                    long v0ms = Interlocked.Read(ref _firstVideoMauWirePtsMs);
+                    long a0ms = _audioClockHz > 0 ? aRaw * 1000L / _audioClockHz : 0L;
+                    long epOffset = _sessionEpochMs - (v0ms - a0ms);
+                    _log?.LogInfo($"[ext-sync] epoch-invariant offset {epOffset}ms " +
+                                  $"(per-seek would be {offsetMs}ms; epoch {_sessionEpochMs}ms − (v0 {v0ms} − a0 {a0ms}))");
+                    offsetMs = epOffset;
+                }
                 // Sanity gate: no real A/V startup skew exceeds a few seconds.
                 // A larger value means the RTP-Info / first-MAU relationship
                 // didn't follow the prior-IDR-padding model — e.g. Live TV
@@ -675,11 +723,24 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 // master clock stutters, and the video pacer wedges and never
                 // recovers. At open/resume there's nothing to pause; just PLAY
                 // with the start position (the server seeks on the initial PLAY).
-                if (_isOpen) _rtsp?.Pause();
+                if (_isOpen) {
+                    _rtsp?.Pause();
+                    // Freeze the audio device clock too, so ReBaselineSync's
+                    // ClearBuffer captures a CLEAN segment-start (the frozen
+                    // playhead). Without this the still-playing device outputs
+                    // silence through the seek's brief underrun, drifting the
+                    // playhead past the true segment start → the re-anchor
+                    // over-catches-up and the seek lands slightly out of sync.
+                    // FF already freezes the renderer (trick-play audio stop),
+                    // which is why FF is clean and a seek wasn't.
+                    try { _renderer?.Pause(); } catch { }
+                }
                 _rtsp?.Play(startMs: (long)position.TotalMilliseconds, rate: _lastRequestedRate);
             } catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP seek failed: {ex.Message}"); }
 
             ReBaselineSync($"seek to {(long)position.TotalMilliseconds}ms");
+            // Resume the device now that the clean segment-start is captured.
+            if (_isOpen && _playRequested) { try { _renderer?.Play(); } catch { } }
             return Task.CompletedTask;
         }
 
@@ -718,6 +779,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             try { _decoder?.Flush(); } catch { }
             try { _videoDecoder?.Flush(); } catch { }
             try { _renderer?.ClearBuffer(); } catch { }
+            // Anchor the re-anchored video to where the new audio segment ACTUALLY
+            // starts playing (not the later video-frame-arrival master), so video
+            // catches up instead of baking in its decode latency as audio-ahead.
+            try { long seg = _renderer?.SegmentStartMasterMs ?? -1L; if (seg >= 0) _pacer?.SetReanchorMasterOverride(seg); } catch { }
             _pacer?.Reanchor();
             ResetMasterSmoothing();
             _log?.LogInfo($"[ext-sync] {reason} — re-baselining A/V sync");
@@ -756,6 +821,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             try { _decoder?.Flush(); } catch { }
             try { _videoDecoder?.Flush(); } catch { }
             try { _renderer?.ClearBuffer(); } catch { }
+            // Anchor the re-anchored video to where the new audio segment ACTUALLY
+            // starts playing (not the later video-frame-arrival master), so video
+            // catches up instead of baking in its decode latency as audio-ahead.
+            try { long seg = _renderer?.SegmentStartMasterMs ?? -1L; if (seg >= 0) _pacer?.SetReanchorMasterOverride(seg); } catch { }
             _pacer?.Reanchor();
             ResetMasterSmoothing();
             _log?.LogInfo("[ext-sync] trick-play exit → 1× — re-anchored, recomputing offset");
@@ -901,6 +970,8 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             _isOpen = false;
             _syncFinalized = false;
             _keepOffsetThisSync = false;   // new video computes its own offset fresh
+            _sessionEpochSet = false;      // new media = new RTP session = new epoch
+            _videoMauDiagCount = 0;        // re-arm the first-MAU arrival diagnostic
             _audioClockHz = 90000;
             _videoClockHz = 90000;
             Interlocked.Exchange(ref _firstAudioMauRtpRaw, -1L);
