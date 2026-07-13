@@ -134,15 +134,22 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             }
             _ctx = ffmpeg.avcodec_alloc_context3(codec);
             if (_ctx == null) throw new InvalidOperationException("libav: avcodec_alloc_context3 failed");
-            // Low-latency decode for live playback. Frame-threading (the
-            // default with thread_count=0) parallelises by buffering ~N future
-            // frames before emitting, adding ~0.5–1 s of output delay at 25fps
-            // — which makes video lag audio, because the pacer can only present
-            // frames the decoder has actually emitted. Single-threaded decode
-            // removes that delay entirely (only the codec's inherent B-frame
-            // reorder remains, a few frames). The FPS lab showed ample decode
-            // headroom, so real-time SD/HD playback is fine single-threaded.
-            _ctx->thread_count = 1;
+            // Decode threading. FRAME threading (the default with thread_count=0)
+            // parallelises by buffering ~N future frames before emitting, adding
+            // ~0.5–1 s of output delay at 25fps — which makes video lag audio,
+            // because the pacer can only present frames the decoder has emitted.
+            // So we do NOT use frame threading.
+            //
+            // SLICE threading, by contrast, parallelises WITHIN each frame across
+            // cores with NO multi-frame output delay — the frame is emitted as
+            // soon as its slices finish. Single-threaded 1080p H.264 was too heavy
+            // on this hardware (~16fps observed vs 25fps needed → the input queue
+            // backed up and playback slowed); slice threading restores the decode
+            // headroom without reintroducing the frame-threading lag. If the
+            // stream has only one slice per frame it transparently runs
+            // single-threaded, so SD / MPEG-2 (already fast) is unaffected.
+            _ctx->thread_count = Math.Min(Environment.ProcessorCount, 8);
+            _ctx->thread_type = ffmpeg.FF_THREAD_SLICE;
 
             int ret = ffmpeg.avcodec_open2(_ctx, codec, null);
             if (ret < 0) {
