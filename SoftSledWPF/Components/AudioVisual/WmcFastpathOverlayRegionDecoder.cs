@@ -7,9 +7,9 @@ namespace SoftSled.Components.AudioVisual {
     /// <summary>
     /// Decoder for WMC's MCX-specific RDP fast-path update code 0x0D, which
     /// is a multiplexed channel carrying audio data AND overlay-region
-    /// metadata. This class handles the metadata side; audio handlers
-    /// (<see cref="WmcFastpathAudioPlayer"/> / <see cref="WmcFastpathAudioDumper"/>)
-    /// keep handling their own message types in parallel — both subscribe
+    /// metadata. This class handles the metadata side; the audio handler
+    /// (<see cref="WmcFastpathAudioPlayer"/>)
+    /// keeps handling its own message types in parallel — both subscribe
     /// to the same dispatcher and each only acts on the types it owns.
     ///
     /// Wire format (derived from raw captures of an SUP-enabled session):

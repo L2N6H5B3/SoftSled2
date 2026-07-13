@@ -11,8 +11,8 @@ namespace SoftSled.Components.AudioVisual {
     /// <summary>
     /// Live playback of WMC's MCX-specific fast-path 0x0D audio stream.
     /// Subscribes to the patched libfreerdp's fast-path-unknown hook,
-    /// classifies each message identically to <see cref="WmcFastpathAudioDumper"/>
-    /// (28-byte handshake / 44-byte trailer or heartbeat / payload), strips
+    /// classifies each message (28-byte handshake / 44-byte trailer or
+    /// heartbeat / payload), strips
     /// the 44-byte format header, byte-swaps the BE 16-bit samples to LE,
     /// and pushes the resulting PCM into a NAudio buffered output device.
     ///
@@ -135,7 +135,7 @@ namespace SoftSled.Components.AudioVisual {
                             // Higher slot IDs mean WMC has more cached
                             // sounds than we've seen so far; that's fine,
                             // they go into the dictionary just like 0/1/2.
-                            _log?.LogInfo($"[fp0d] new slot 0x{slot:X2} — adding to cache");
+                            Trace($"new slot 0x{slot:X2} — adding to cache");
                             break;
                     }
 
@@ -188,8 +188,10 @@ namespace SoftSled.Components.AudioVisual {
                 }
 
                 if (len < PayloadHeaderBytes) {
+                    // Short control message with no audio payload — happens
+                    // constantly and carries nothing actionable. Count it for
+                    // the periodic stats line; no per-message logging.
                     Interlocked.Increment(ref _otherCount);
-                    _log?.LogInfo($"[fp0d] short message len={len} (no audio payload) — capturing");
                     return;
                 }
 
@@ -221,7 +223,7 @@ namespace SoftSled.Components.AudioVisual {
 
                 long n = Interlocked.Increment(ref _payloadCount);
                 double durationMs = (pcmLen * 1000.0) / (SampleRate * Channels * (BitsPerSample / 8));
-                _log?.LogInfo($"[fp0d] decoded #{n}: {len}B ({durationMs:F0} ms) — awaiting slot trailer");
+                Trace($"decoded #{n}: {len}B ({durationMs:F0} ms) — awaiting slot trailer");
             } catch (Exception ex) {
                 _log?.LogDebug($"[fp0d-player] {ex.Message}");
             }

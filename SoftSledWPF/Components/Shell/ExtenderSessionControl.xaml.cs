@@ -20,7 +20,6 @@ using SoftSledWPF.Components.Utility;
 namespace SoftSledWPF.Components.Shell {
     /// <summary>
     /// Reusable user control that hosts a live MCX Extender session
-    /// (FFME video pipeline + RDP framebuffer + MS-RRSP2 splash overlay).
     /// Extracted from the old FullScreenWindow so the shell can swap it
     /// in and out without recreating the WPF window itself.
     ///
@@ -68,7 +67,6 @@ namespace SoftSledWPF.Components.Shell {
         private const bool SplashPayloadBigEndian = true;
 
         private SoftSled.Components.AudioVisual.WmcFastpathAudioPlayer _audioPlayer;
-        private SoftSled.Components.AudioVisual.WmcFastpathAudioDumper _audioDumper;
         private SoftSled.Components.AudioVisual.WmcFastpathRawDumper _rawDumper;
         private SoftSled.Components.AudioVisual.WmcFastpathOverlayRegionDecoder _overlayDecoder;
         private SoftSledNative.FastpathCallback _fastpathDispatcher;
@@ -534,12 +532,6 @@ namespace SoftSledWPF.Components.Shell {
 
             // Create Fastpath Audio Player for UI Sounds
             _audioPlayer = new SoftSled.Components.AudioVisual.WmcFastpathAudioPlayer(cfg.LogRdpFastpath ? m_logger : null);
-            // Enable Fastpath Audio Dumping
-            string audioDumpDir = Environment.GetEnvironmentVariable("SOFTSLED_AUDIO_DUMP");
-            if (!string.IsNullOrWhiteSpace(audioDumpDir)) {
-                _audioDumper = new SoftSled.Components.AudioVisual.WmcFastpathAudioDumper(
-                    m_logger, audioDumpDir);
-            }
             // Enable Fastpath Raw Dumping
             string rawDumpDir = Environment.GetEnvironmentVariable("SOFTSLED_FASTPATH_RAW_DUMP");
             if (!string.IsNullOrWhiteSpace(rawDumpDir)) {
@@ -553,7 +545,6 @@ namespace SoftSledWPF.Components.Shell {
             _fastpathDispatcher = (user, code, data, length) => {
                 _rawDumper?.OnFastpath(user, code, data, length);
                 _audioPlayer?.OnFastpath(user, code, data, length);
-                _audioDumper?.OnFastpath(user, code, data, length);
                 _overlayDecoder?.OnFastpath(user, code, data, length);
             };
             freeRdpClient.SetFastpathCallback(_fastpathDispatcher);
@@ -735,7 +726,6 @@ namespace SoftSledWPF.Components.Shell {
             try { m_device?.Stop(); } catch { }
             m_device = null;
             _audioPlayer = null;
-            _audioDumper = null;
             _rawDumper = null;
             _overlayDecoder = null;
             _fastpathDispatcher = null;
