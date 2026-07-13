@@ -58,6 +58,15 @@ namespace SoftSled.Components.Configuration {
         // reports inconsistently. Default OFF (opt-in for A/B testing).
         public bool EpochInvariantSync = false;
 
+        // Media Playback Mode remote mappings. When ON, and the extender is
+        // showing full-screen video with NO WMC UI over the centre of the screen
+        // (i.e. actually watching, not in a menu/OSD), a few nav buttons are
+        // remapped to transport controls: Left/Right = Skip Back/Forward,
+        // OK/Enter = Play-Pause. The moment any UI covers the centre (seek bar,
+        // menu, OSD) the mappings revert to normal so you can navigate. Default
+        // OFF (opt-in).
+        public bool MediaPlaybackModeEnabled = true;
+
         // Keep the display (and system) awake while SoftSled is running, so
         // the Windows screen-saver / display-off / sleep idle timers don't
         // blank the screen during long playback or while idling on a menu

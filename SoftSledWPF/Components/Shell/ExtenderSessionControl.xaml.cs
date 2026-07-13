@@ -178,6 +178,33 @@ namespace SoftSledWPF.Components.Shell {
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
+        // ------- Media Playback Mode -----------------------------------
+        // When enabled AND IsMediaFocused() (full-screen video, no UI over the
+        // screen centre), these nav keys are remapped to transport controls and
+        // the raw key is swallowed. Values are PS/2 Set-1 scancode chords
+        // (0x100 bit = extended E0), replayed via SendScanCodeChordToWmc.
+        private bool _mediaModeEnabled;
+        private static readonly System.Collections.Generic.Dictionary<Key, int[]> MediaModeKeyChords =
+            new System.Collections.Generic.Dictionary<Key, int[]> {
+                { Key.Left,  new[] { 0x1D, 0x30 } },   // Ctrl+B  = Skip Back / Replay
+                { Key.Right, new[] { 0x1D, 0x21 } },   // Ctrl+F  = Skip Forward
+                { Key.Enter, new[] { 0x122 } },        // E0 0x22 = Media Play/Pause (toggle)
+            };
+
+        /// <summary>Set from config: enables the Media Playback Mode remap.</summary>
+        public bool MediaPlaybackModeEnabled { get => _mediaModeEnabled; set => _mediaModeEnabled = value; }
+
+        /// <summary>True when the extender is showing FULL-SCREEN video with NO
+        /// WMC UI over the dead-centre pixel (alpha==0) — i.e. actually watching,
+        /// not in a menu/OSD. Arms the Media Playback Mode remap.</summary>
+        private bool IsMediaFocused() {
+            try {
+                if (_surfaceRouter == null || !_surfaceRouter.IsVideoFullScreen) return false;
+                if (freeRdpClient == null || !freeRdpClient.TryGetCenterPixelAlpha(out byte a)) return false;
+                return a == 0;   // fully transparent centre = video showing through, no UI over it
+            } catch { return false; }
+        }
+
         /// <summary>
         /// Forward a WPF key event to the live RDP transport. Returns true
         /// if the key was consumed (so the shell can mark it handled).
@@ -187,6 +214,19 @@ namespace SoftSledWPF.Components.Shell {
 
             Key k = (e.Key == Key.System) ? e.SystemKey : e.Key;
             if (k == Key.None) return false;
+
+            // Media Playback Mode: while actually watching (full-screen, no UI over
+            // the centre), remap nav buttons to transport controls and swallow the
+            // raw key so WMC never sees it. The IsMediaFocused() pixel read only
+            // runs for the few mapped keys. The moment any UI covers the centre,
+            // this falls through and keys forward normally (so menus/OSD navigate).
+            if (_mediaModeEnabled && MediaModeKeyChords.TryGetValue(k, out int[] mchord) && IsMediaFocused()) {
+                if (!release && !e.IsRepeat) {
+                    SendScanCodeChordToWmc(mchord);
+                    m_logger?.LogInfo($"[media-mode] {k} → transport chord");
+                }
+                return true;   // consume press AND release
+            }
 
             int vk = KeyInterop.VirtualKeyFromKey(k);
             if (vk == 0) return false;
@@ -502,6 +542,7 @@ namespace SoftSledWPF.Components.Shell {
 
             // Load the SoftSled Config
             var cfg = SoftSledConfigManager.ReadConfig();
+            _mediaModeEnabled = cfg.MediaPlaybackModeEnabled;   // Media Playback Mode remap
             // Apply the env-var-driven diagnostic toggles to the process
             // environment so existing call sites (RtspWireDumper,
             // SplashRawDumper, WmcFastpathAudioPlayer, etc.) that read

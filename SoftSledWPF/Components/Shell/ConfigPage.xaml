@@ -85,10 +85,16 @@
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Keep screen awake while running"
                               Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkMediaMode"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Media Playback Mode remote mappings"
+                              Margin="0,16,0,0"
+                              Click="OnConfigChanged"/>
                     <TextBlock Style="{StaticResource WmcBodyStyle}"
                                Foreground="{StaticResource WmcSubtleTextBrush}"
                                Margin="10,4,0,0"
-                               TextWrapping="Wrap"/>
+                               TextWrapping="Wrap"
+                               Text="While watching full-screen video (no menu/OSD on screen), remaps Left/Right to Skip Back/Forward and OK to Play/Pause. Reverts to normal navigation the moment any WMC UI appears over the video."/>
                     
                 </StackPanel>
             </Grid>

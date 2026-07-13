@@ -69,6 +69,25 @@ namespace SoftSled.Components.Communication {
         /// </summary>
         public WriteableBitmap Bitmap => _bitmap;
 
+        /// <summary>Read the alpha byte of the dead-centre framebuffer pixel
+        /// (BGRA32; alpha = 4th byte). Used by Media Playback Mode to tell whether
+        /// WMC UI covers the centre (alpha≠0) or the video is showing through it
+        /// (alpha==0). Returns false if the framebuffer isn't ready. Best-effort:
+        /// the caller only invokes this during an ACTIVE session, so _fbInfo.Pixels
+        /// is valid; a torn read of one pixel is harmless for this heuristic.</summary>
+        public bool TryGetCenterPixelAlpha(out byte alpha) {
+            alpha = 0;
+            SoftSledNative.FramebufferInfo fb = _fbInfo;   // struct snapshot
+            if (fb.Pixels == IntPtr.Zero || fb.Width == 0 || fb.Height == 0 || fb.Stride == 0)
+                return false;
+            try {
+                long x = fb.Width / 2, y = fb.Height / 2;
+                long off = y * (long)fb.Stride + x * 4 + 3;   // +3 = alpha in BGRA
+                alpha = System.Runtime.InteropServices.Marshal.ReadByte(fb.Pixels, (int)off);
+                return true;
+            } catch { return false; }
+        }
+
         /// <summary>Raised once on the UI thread when the framebuffer is ready (ACTIVE + bitmap allocated).</summary>
         public event EventHandler FrameReady;
 

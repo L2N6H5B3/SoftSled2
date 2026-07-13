@@ -71,6 +71,11 @@ namespace SoftSled.Components.AudioVisual {
         // closes, or the host re-resolves a different surface rect.
         private Rect _currentPipRect = Rect.Empty;
 
+        /// <summary>True when a video surface is currently routed FULL-SCREEN
+        /// (a surface is active and it's not a PiP sub-rect). Used by the Media
+        /// Playback Mode input gate. Best-effort read from any thread.</summary>
+        public bool IsVideoFullScreen => _currentSurfaceId >= 0 && _currentPipRect.IsEmpty;
+
         public SurfaceRouter(WMCRenderMode mode,
                              Canvas canvas,
                              FrameworkElement primary,
