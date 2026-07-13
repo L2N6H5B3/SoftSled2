@@ -355,6 +355,10 @@ namespace SoftSled.Components.VirtualChannel {
 
                         // Create RTSP Client
                         rtspClient = new RTSPClient();
+                        // Feed the main app logger so the RTSP handshake timeline
+                        // (DESCRIBE/SETUP/PLAY sent+response, first RTP) lands in
+                        // the app log for startup-latency diagnosis.
+                        rtspClient.Logger = m_logger;
 
                         // Bind the new RTSP session to the controller so
                         // SeekAsync / SetRateAsync / SetAvailableBandwidth
