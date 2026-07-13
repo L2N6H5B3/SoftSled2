@@ -77,6 +77,10 @@ namespace SoftSled.Components.Input {
         // These values are exactly the mappings that were previously hard-coded
         // as McxRemoteInput.UsageToCmd / UsageToChord.
         public static readonly IReadOnlyList<RemoteCommandDef> Defs = new[] {
+            // Client-side session control. Default = the ESC key, which is what
+            // used to hard-quit the session — now it's just this rebindable
+            // command, so ESC can be freed up for anything else.
+            Local("ExitSession", "Exit Session (to menu)", RemoteLocalAction.ExitSession, Key.Escape),
             // --- Transport (Consumer page, report 0x02) ---
             Cmd("Play",       "Play",            9,  REPORT_CONSUMER, 0x00B0),
             Cmd("Pause",      "Pause",           8,  REPORT_CONSUMER, 0x00B1),
@@ -101,12 +105,8 @@ namespace SoftSled.Components.Input {
             // forwarding it as a command silently did nothing. WMC navigates back
             // on Backspace (Set-1 scancode 0x0E), so send that directly.
             Chord("Back",     "Back",           new[] { 0x0E }, REPORT_CONSUMER, 0x0224),
-            // Client-side session control. Default = the ESC key, which is what
-            // used to hard-quit the session — now it's just this rebindable
-            // command, so ESC can be freed up for anything else.
-            Local("ExitSession", "Exit Session (to menu)", RemoteLocalAction.ExitSession, Key.Escape),
             // --- Media Center menu buttons (MCE vendor page, report 0x03) ---
-            Cmd("GreenStart", "Green (Start)",  23,  REPORT_MCE, 0x000D),
+            Cmd("GreenStart", "Start (Green)",  23,  REPORT_MCE, 0x000D),
             Cmd("LiveTv",     "Live TV",        29,  REPORT_MCE, 0x0025),
             Cmd("RecordedTv", "Recorded TV",    27,  REPORT_MCE, 0x0048),
             Cmd("DvdMenu",    "DVD Menu",       30,  REPORT_MCE, 0x0024),
@@ -118,7 +118,7 @@ namespace SoftSled.Components.Input {
             // --- Teletext / coloured buttons (MCE vendor page) ---
             Cmd("Teletext",   "Teletext",       54,  REPORT_MCE, 0x005A),
             Cmd("Red",        "Red",            55,  REPORT_MCE, 0x005B),
-            Cmd("GreenTtx",   "Green (Teletext)", 56, REPORT_MCE, 0x005C),
+            Cmd("GreenTtx",   "Green",          56,  REPORT_MCE, 0x005C),
             Cmd("Yellow",     "Yellow",         57,  REPORT_MCE, 0x005D),
             Cmd("Blue",       "Blue",           58,  REPORT_MCE, 0x005E),
         };
