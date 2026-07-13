@@ -106,6 +106,7 @@
     <LangVersion>7.3</LangVersion>
     <ErrorReport>prompt</ErrorReport>
     <Prefer32Bit>true</Prefer32Bit>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <PropertyGroup>
     <ApplicationIcon>wmc.ico</ApplicationIcon>
@@ -230,7 +231,6 @@
     <Compile Include="Components\AudioVisual\FormatStructures\WAVEFORMATEX.cs" />
     <Compile Include="Components\AudioVisual\WindowsSystemAudio.cs" />
     <Compile Include="Components\AudioVisual\WmrptAudioDepacketizer.cs" />
-    <Compile Include="Components\AudioVisual\WmcFastpathAudioDumper.cs" />
     <Compile Include="Components\AudioVisual\WmcFastpathAudioPlayer.cs" />
     <Compile Include="Components\AudioVisual\WmcFastpathRawDumper.cs" />
     <Compile Include="Components\AudioVisual\WmcFastpathOverlayRegionDecoder.cs" />
