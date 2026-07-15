@@ -30,12 +30,44 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
     /// </summary>
     internal sealed class NAudioMasterRenderer : IDisposable {
 
-        // Buffer depth. 5 seconds is generous but matters: if the
-        // wire goes quiet (e.g. trick play, server-side mute), we
-        // want playback to continue until the buffer drains. After
-        // it drains, GetMediaTimeMs stops advancing — which is
-        // correct (silence at the device = no media-time progress).
-        private const double BufferSeconds = 5.0;
+        /// <summary>
+        /// Pass-through wave provider that pads underruns with silence (like
+        /// BufferedWaveProvider's ReadFully) but COUNTS every padded byte.
+        /// The device's GetPosition() counts rendered silence as "played", so
+        /// without this count each delivery gap permanently inflated the
+        /// master clock by the gap's length — after the gap, video was paced
+        /// that far ahead of the audible audio for the rest of the media,
+        /// compounding with every subsequent gap (observed: a ~1s wire stall
+        /// embedded 243ms of silence → video ~240ms early from then on).
+        /// Counting at the consume point is exact — no sampling heuristics.
+        /// </summary>
+        private sealed class SilenceCountingProvider : IWaveProvider {
+            private readonly BufferedWaveProvider _inner;   // ReadFully = false
+            private long _silenceBytes;
+            public SilenceCountingProvider(BufferedWaveProvider inner) { _inner = inner; }
+            public WaveFormat WaveFormat => _inner.WaveFormat;
+            public long SilenceBytes => Interlocked.Read(ref _silenceBytes);
+            public int Read(byte[] buffer, int offset, int count) {
+                int got;
+                try { got = _inner.Read(buffer, offset, count); }
+                catch { got = 0; }
+                if (got < count) {
+                    Array.Clear(buffer, offset + got, count - got);
+                    Interlocked.Add(ref _silenceBytes, count - got);
+                }
+                return count;   // always satisfy the device — no auto-stop, no clicks
+            }
+        }
+
+        // Buffer depth. Must hold the normal delivery cushion (~2s) PLUS a
+        // maximal content-gap fill (GapFillMaxMs of silence injected in one
+        // write — see WritePcm's gap fill) without overflowing, because
+        // DiscardOnBufferOverflow=false makes AddSamples throw on overflow
+        // and the dropped chunk would itself desync the clock. 20s of 16-bit
+        // 48k stereo is ~3.8MB — cheap. If the wire goes quiet (trick play,
+        // server-side mute) playback continues until the buffer drains; after
+        // that GetMediaTimeMs stops advancing — which is correct.
+        private const double BufferSeconds = 20.0;
 
         // Device latency target. Lower = less buffered in the driver,
         // but if it goes too low you get underrun stutter. 100 ms is
@@ -45,8 +77,14 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private readonly Logger _log;
         private readonly WaveFormat _format;
         private readonly BufferedWaveProvider _provider;
+        private readonly SilenceCountingProvider _silenceProvider;
         private readonly WaveOutEvent _device;
         private readonly object _gate = new object();
+        // Monotonic floor for GetMediaTimeMs: the silence subtraction can
+        // transiently dip (silence is counted at consume time, ~device-latency
+        // ahead of GetPosition's render time), and the clock must never run
+        // backwards under the pacer.
+        private long _lastMediaTimeMs;
 
         // PTS of the first PCM byte written. GetMediaTimeMs reports
         // (basePtsMs + samples_played_in_ms). This makes the
@@ -55,8 +93,22 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private long _basePtsMs;
         private bool _baseSet;
         private long _bytesWritten;
+        // Bytes written to the provider but DISCARDED unplayed by ClearBuffer
+        // (seek / trick-play exit / media halt). The master clock caps at real
+        // playable content = _bytesWritten − _bytesDiscarded; without the
+        // subtraction each clear permanently loosened the silence-stall cap by
+        // the cleared amount (cumulative over seeks), letting the clock run
+        // through that much underrun silence and drag slaved video ahead.
+        private long _bytesDiscarded;
         private long _segmentStartMasterMs = -1; // see ClearBuffer / SegmentStartMasterMs
         private bool _disposed;
+
+        // Diagnostic (av-timing): wall-clock since the device first started
+        // playing. Lets the controller compare the master clock (which is
+        // derived from GetPosition, i.e. the audio the device THINKS it has
+        // played) against real elapsed time — surfacing whether the audio
+        // clock leads/lags real-time and by how much.
+        private readonly System.Diagnostics.Stopwatch _playWall = new System.Diagnostics.Stopwatch();
 
         // Diagnostics — how many under/overrun events have we seen
         // in steady state. Cumulative since construction.
@@ -97,6 +149,45 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private long _heldBytes;
         private readonly System.Diagnostics.Stopwatch _holdWall = new System.Diagnostics.Stopwatch();
 
+        // ----- Audio content-gap fill (timestamp-aware feeding) -----
+        //
+        // The wire timestamps are the content timeline, but the master clock
+        // is byte-derived, and writing PCM byte-contiguously ERASES content
+        // gaps (recording defects / lost packets): post-gap audio plays early
+        // by the gap length, while video — paced by its own honestly-jumped
+        // PTS — correctly waits, ending up behind by exactly the gap for the
+        // rest of the media (observed: a recording missing ~5s of both
+        // streams). WMC/Xbox play both streams by timestamp, so a shared gap
+        // collapses for both together. Filling the gap with silence makes the
+        // byte clock isomorphic to the content timeline: audio goes quiet for
+        // the missing span, video holds its last frame to its jumped
+        // schedule, and both resume IN SYNC.
+        //
+        // Expected pts is derived from a (pts, authored-bytes) reference pair
+        // — never per-write accumulation, whose integer rounding (21.333ms
+        // PCM frames) would drift into false gaps. The reference re-seeds on
+        // ClearBuffer (seek / trick-play: the new position's pts jump is a
+        // legitimate discontinuity, not a gap) and on implausible jumps.
+        // Backwards jumps are the mirror image: the recording's audio timeline
+        // FOLDS BACK on itself (observed: −1914ms in one broadcast recording —
+        // a capture hiccup wrote overlapping audio). Replaying the overlap
+        // shifts the byte clock the other way (video ends up behind by the
+        // fold). Fix: TRIM the overlapped prefix of each incoming chunk until
+        // the timeline catches back up to where authored content already
+        // reached — the duplicate samples are dropped, the clock stays on the
+        // content timeline. Stateless per chunk: overlap = expected − pts; eat
+        // min(len, overlap); the ref pair is deliberately NOT re-based, so the
+        // deficit shrinks chunk by chunk until pts passes expected again.
+        private const int GapFillMinMs = 60;         // |gap| below: rtpTs quantisation / multi-frame packets — ignore
+        private const int GapDiscontinuityMs = 10000; // |gap| above: discontinuity — re-seed, no fill/trim
+        private long _gapRefPtsMs = long.MinValue;   // pts↔bytes reference; long.MinValue = re-seed on next write
+        private long _gapRefAuthoredBytes;
+        private long _authoredBytes;                 // content bytes accepted via WritePcm (data + gap fills)
+        private long _gapFilledBytes;                // cumulative gap-fill silence (diagnostic)
+        private long _overlapTrimmedBytes;           // cumulative overlap-trimmed audio (diagnostic)
+        private int  _lastTrimLogTick;               // rate-limit for per-chunk trim logging
+        private static readonly byte[] ZeroChunk = new byte[32768];
+
         public NAudioMasterRenderer(int sampleRate, int channels, int bitsPerSample, Logger log)
             : this(sampleRate, channels, bitsPerSample, log, startHeld: false) { }
 
@@ -112,12 +203,18 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 // is producing faster than the device can drain
                 // (shouldn't happen in normal playback).
                 DiscardOnBufferOverflow = false,
-                ReadFully = true,    // pad with silence on underrun (no clicks)
+                // Underrun silence is padded (and COUNTED) by the
+                // SilenceCountingProvider wrapper below, not here — with
+                // ReadFully=true the provider pads internally and the padded
+                // amount is unobservable, which is how underrun silence got
+                // silently baked into the master clock (see _silenceProvider).
+                ReadFully = false,
             };
+            _silenceProvider = new SilenceCountingProvider(_provider);
             _device = new WaveOutEvent {
                 DesiredLatency = DesiredLatencyMs,
             };
-            _device.Init(_provider);
+            _device.Init(_silenceProvider);
             _holding = startHeld;
             if (startHeld) {
                 _holdQueue = new Queue<byte[]>();
@@ -131,7 +228,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
 
         public void Play() {
             if (_disposed) return;
-            try { _device.Play(); }
+            try { _device.Play(); if (!_playWall.IsRunning) _playWall.Start(); }
             catch (Exception ex) { _log?.LogError($"[naudio-master] Play failed: {ex.Message}"); }
         }
 
@@ -148,17 +245,26 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         }
 
         /// <summary>
-        /// Discard any buffered-but-unplayed PCM. Used on resume-from-pause:
-        /// the server re-streams FROM the pause point, so the audio we'd
+        /// Discard any buffered-but-unplayed PCM. Used on seek / trick-play
+        /// exit: the server re-streams FROM the new point, so the audio we'd
         /// buffered ahead must be dropped or it would replay (an audible
-        /// repeat). The cumulative byte counters are deliberately left alone so
-        /// <see cref="GetMediaTimeMs"/> stays monotonic — it simply stalls
-        /// (capped at <c>_bytesWritten</c>) until fresh PCM arrives.
+        /// repeat). <c>_bytesWritten</c> stays cumulative (monotonic clock);
+        /// the discarded amount is tracked in <c>_bytesDiscarded</c> so the
+        /// clock's content cap (written − discarded) stays tight — it stalls
+        /// at real playable content until fresh PCM arrives.
         /// </summary>
         public void ClearBuffer() {
             if (_disposed) return;
             lock (_gate) {
+                // Account for the unplayed bytes we're about to discard so the
+                // master clock's content cap (written − discarded) stays tight
+                // (see _bytesDiscarded).
+                try { Interlocked.Add(ref _bytesDiscarded, _provider.BufferedBytes); } catch { }
                 try { _provider.ClearBuffer(); } catch { }
+                // Re-seed the content-gap tracker: the next segment's pts jump
+                // (seek / trick-play exit) is a legitimate discontinuity, not
+                // missing content — it must not trigger a silence fill.
+                _gapRefPtsMs = long.MinValue;
                 // Record the master-clock value at which the audio written AFTER
                 // this clear begins playing. The clock is min(bytesPlayed,
                 // bytesWritten)/rate. The buffered-but-now-cleared audio between
@@ -174,7 +280,12 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 long abps = _format.AverageBytesPerSecond;
                 long played = 0; try { played = _device.GetPosition(); } catch { }
                 if (played < 0) played = 0;
-                long realBytes = Math.Min(played, Interlocked.Read(ref _bytesWritten));
+                long content = Interlocked.Read(ref _bytesWritten) - Interlocked.Read(ref _bytesDiscarded);
+                // Same basis as GetMediaTimeMs: subtract rendered underrun
+                // silence so the pacer re-anchors to the true audible playhead.
+                long audible = played - _silenceProvider.SilenceBytes;
+                long realBytes = Math.Min(audible, content);
+                if (realBytes < 0) realBytes = 0;
                 Interlocked.Exchange(ref _segmentStartMasterMs, abps > 0 ? realBytes * 1000L / abps : -1L);
             }
         }
@@ -199,23 +310,75 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         public void WritePcm(byte[] pcm, int len, long ptsMs) {
             if (_disposed || pcm == null || len <= 0) return;
             bool releaseAfterUnlock = false;
+            long fillBytes = 0;
+            int pcmOffset = 0;
             lock (_gate) {
                 if (!_baseSet) {
                     _basePtsMs = ptsMs;
                     _baseSet = true;
                     _log?.LogInfo($"[naudio-master] first sample written, basePts={ptsMs}ms");
                 }
+                // Content-gap detection (see the field block above). Compare
+                // this chunk's pts against where the authored bytes say the
+                // timeline should be; a forward jump is missing content and
+                // gets filled with silence so the byte clock stays on the
+                // content timeline.
+                long abps = _format.AverageBytesPerSecond;
+                if (_gapRefPtsMs == long.MinValue || abps <= 0) {
+                    _gapRefPtsMs = ptsMs;
+                    _gapRefAuthoredBytes = _authoredBytes;
+                } else {
+                    long expected = _gapRefPtsMs + (_authoredBytes - _gapRefAuthoredBytes) * 1000L / abps;
+                    long gapMs = ptsMs - expected;
+                    if (gapMs >= GapFillMinMs && gapMs <= GapDiscontinuityMs) {
+                        long fb = gapMs * abps / 1000L;
+                        fillBytes = fb - (fb % _format.BlockAlign);
+                        Interlocked.Add(ref _gapFilledBytes, fillBytes);
+                        _log?.LogInfo($"[naudio-master] audio content gap {gapMs}ms (pts={ptsMs} " +
+                                      $"expected={expected}) — filling with silence to hold the content timeline");
+                    } else if (gapMs <= -GapFillMinMs && gapMs >= -GapDiscontinuityMs) {
+                        // Timeline fold-back: drop the overlapped prefix (see
+                        // the field block above). Whole-chunk drops just return.
+                        long ob = (-gapMs) * abps / 1000L;
+                        long eat = Math.Min(len, ob - (ob % _format.BlockAlign));
+                        if (eat > 0) {
+                            pcmOffset = (int)eat;
+                            Interlocked.Add(ref _overlapTrimmedBytes, eat);
+                            int now = Environment.TickCount;
+                            if (unchecked(now - _lastTrimLogTick) > 1000) {
+                                _lastTrimLogTick = now;
+                                _log?.LogInfo($"[naudio-master] audio timeline fold {gapMs}ms (pts={ptsMs} " +
+                                              $"expected={expected}) — trimming overlapped audio " +
+                                              $"(cumulative {Interlocked.Read(ref _overlapTrimmedBytes) * 1000L / abps}ms)");
+                            }
+                        }
+                    } else if (Math.Abs(gapMs) > GapDiscontinuityMs) {
+                        _log?.LogInfo($"[naudio-master] audio pts discontinuity {gapMs}ms (pts={ptsMs} " +
+                                      $"expected={expected}) — re-seeding gap tracking, no fill/trim");
+                        _gapRefPtsMs = ptsMs;
+                        _gapRefAuthoredBytes = _authoredBytes;
+                    }
+                    // |gap| under GapFillMinMs (multi-frame packets sharing one
+                    // pts, rtpTs quantisation) is expected — ignore.
+                }
+                len -= pcmOffset;
+                if (len <= 0 && fillBytes == 0) return;   // whole chunk was overlap
+                _authoredBytes += fillBytes + len;
+
                 if (_holding) {
-                    // Take a private copy — the caller (decoder) reuses
-                    // its scratch buffer between frames, so we can't
-                    // hold a reference to the supplied array.
+                    // Take private copies — the caller (decoder) reuses its
+                    // scratch buffer between frames, so we can't hold a
+                    // reference to the supplied array. Fill goes FIRST so the
+                    // gap sits where the content is actually missing.
+                    for (long rem = fillBytes; rem > 0; rem -= ZeroChunk.Length) {
+                        _holdQueue.Enqueue(new byte[Math.Min(rem, ZeroChunk.Length)]);
+                    }
                     byte[] copy = new byte[len];
-                    Buffer.BlockCopy(pcm, 0, copy, 0, len);
+                    Buffer.BlockCopy(pcm, pcmOffset, copy, 0, len);
                     _holdQueue.Enqueue(copy);
-                    _heldBytes += len;
+                    _heldBytes += fillBytes + len;
                     if (!_holdWall.IsRunning) _holdWall.Restart();
-                    long bps = _format.AverageBytesPerSecond;
-                    long heldMs = bps > 0 ? _heldBytes * 1000L / bps : 0;
+                    long heldMs = abps > 0 ? _heldBytes * 1000L / abps : 0;
                     // Release once we've buffered the pre-roll target — or the
                     // timeout fires (slow/short startup delivery), so the hold
                     // can't stall playback indefinitely. skip=0: KEEP the held
@@ -230,7 +393,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 }
             }
             if (releaseAfterUnlock) { ReleaseHold(0); return; }
-            FeedPcmInternal(pcm, 0, len);
+            for (long rem = fillBytes; rem > 0; rem -= ZeroChunk.Length) {
+                FeedPcmInternal(ZeroChunk, 0, (int)Math.Min(rem, ZeroChunk.Length));
+            }
+            if (len > 0) FeedPcmInternal(pcm, pcmOffset, len);
         }
 
         /// <summary>
@@ -367,9 +533,26 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 // video pacer slaved to it runs seconds ahead of the audio.
                 long bytesPlayed = _device.GetPosition();
                 if (bytesPlayed < 0) bytesPlayed = 0;
-                long written = Interlocked.Read(ref _bytesWritten);
-                long realBytes = Math.Min(bytesPlayed, written);
-                return realBytes * 1000L / abps;
+                // Playable content excludes bytes ClearBuffer discarded unplayed
+                // — they were written but will never sound, so counting them
+                // would let the clock run through that much silence first.
+                long written = Interlocked.Read(ref _bytesWritten)
+                             - Interlocked.Read(ref _bytesDiscarded);
+                // Subtract underrun silence the device rendered (counted
+                // exactly by SilenceCountingProvider): played − silence =
+                // real audio content actually audible. Without this, every
+                // delivery gap permanently advanced the clock by the gap
+                // length and video paced ahead of audio from then on.
+                long audible = bytesPlayed - _silenceProvider.SilenceBytes;
+                long realBytes = Math.Min(audible, written);
+                if (realBytes < 0) realBytes = 0;
+                long ms = realBytes * 1000L / abps;
+                // Monotonic floor (see _lastMediaTimeMs): consume-vs-render
+                // timing can make the subtraction dip briefly; never go back.
+                long last = Interlocked.Read(ref _lastMediaTimeMs);
+                if (ms < last) return last;
+                Interlocked.Exchange(ref _lastMediaTimeMs, ms);
+                return ms;
             } catch {
                 return 0;
             }
@@ -380,6 +563,71 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// Useful for log correlation with RTP-Info / RTCP SR
         /// timestamps from the server side.</summary>
         public long FirstSampleWirePtsMs => _baseSet ? _basePtsMs : 0;
+
+        // ----- av-timing diagnostics (see ExternalSyncMediaController's
+        // [av-timing] snapshot). All 0-relative, same basis as GetMediaTimeMs. -----
+
+        /// <summary>Uncapped device playback position in ms: bytes the device
+        /// reports it has PLAYED (GetPosition), including any silence padded on
+        /// underrun. Compare against <see cref="AudioWrittenMs"/>: if this
+        /// exceeds written, the device is playing silence past real content
+        /// (delivery underrun); if written exceeds this, audio is buffered
+        /// ahead of the playhead.</summary>
+        public long AudioPlayedMs {
+            get {
+                if (_disposed || !_baseSet) return 0;
+                try {
+                    long abps = _format.AverageBytesPerSecond;
+                    if (abps <= 0) return 0;
+                    long p = _device.GetPosition();
+                    if (p < 0) p = 0;
+                    return p * 1000L / abps;
+                } catch { return 0; }
+            }
+        }
+
+        /// <summary>Cumulative real audio content written to the device, in ms,
+        /// net of bytes ClearBuffer discarded unplayed (same basis as
+        /// <see cref="GetMediaTimeMs"/>'s content cap, so the [av-timing]
+        /// devSilence diagnostic stays meaningful across seeks).</summary>
+        public long AudioWrittenMs {
+            get {
+                if (_disposed || !_baseSet) return 0;
+                long abps = _format.AverageBytesPerSecond;
+                return abps > 0
+                    ? (Interlocked.Read(ref _bytesWritten) - Interlocked.Read(ref _bytesDiscarded)) * 1000L / abps
+                    : 0;
+            }
+        }
+
+        /// <summary>Wall-clock ms since the device first started playing
+        /// (0 until the first <see cref="Play"/>). Real-time reference for the
+        /// master clock.</summary>
+        public long WallSincePlayMs => _playWall.ElapsedMilliseconds;
+
+        /// <summary>Cumulative underrun silence the device has rendered, in ms
+        /// (counted exactly at the consume point by SilenceCountingProvider).
+        /// Diagnostic: this much of <see cref="AudioPlayedMs"/> is padding, not
+        /// content — the master clock subtracts it. Grows only during delivery
+        /// gaps; a steadily growing value mid-play means the wire is stalling.</summary>
+        public long SilencePaddedMs {
+            get {
+                long abps = _format.AverageBytesPerSecond;
+                return abps > 0 ? _silenceProvider.SilenceBytes * 1000L / abps : 0;
+            }
+        }
+
+        /// <summary>Cumulative content-gap silence inserted by WritePcm's
+        /// timestamp-gap fill, in ms. Diagnostic: missing CONTENT (recording
+        /// defect / packet loss) the clock deliberately plays through as dead
+        /// air to hold A/V alignment — unlike <see cref="SilencePaddedMs"/>,
+        /// which is late-delivery padding the clock subtracts.</summary>
+        public long GapFilledMs {
+            get {
+                long abps = _format.AverageBytesPerSecond;
+                return abps > 0 ? Interlocked.Read(ref _gapFilledBytes) * 1000L / abps : 0;
+            }
+        }
 
         /// <summary>Diagnostics: how many bytes the device has played
         /// vs how many bytes we've written. Useful for logging

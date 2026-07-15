@@ -82,6 +82,19 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         private long _framesDecoded;
         public long FramesDecoded => Interlocked.Read(ref _framesDecoded);
 
+        // Reorder-latency diagnostic (H.264 A/V residual hunt). Packets arrive in
+        // DECODE order carrying PRESENTATION rtpTs; the decoder emits in DISPLAY
+        // order only after buffering the B-frame reorder depth. Logged ONCE per
+        // stream: has_b_frames, how many packets were swallowed before the first
+        // frame emerged, the first decode-order timestamps, and the first emitted
+        // display PTS — to test whether the per-file offset residual tracks the
+        // decoder's reorder structure (audio is PCM = zero decode latency, so any
+        // A/V asymmetry is entirely video-side). Same worker thread as decode, so
+        // no locking needed.
+        private bool _reorderDiagDone;
+        private int _pktsSent;
+        private readonly System.Collections.Generic.List<long> _firstDecodeOrderRtp = new System.Collections.Generic.List<long>();
+
         /// <summary>Approx ms of UNDECODED video held in the input queue (coded
         /// MAUs waiting behind decode backpressure). The video BFR adds this to
         /// the pacer's decoded-frame span so the server sees our TRUE total video
@@ -264,6 +277,10 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         }
 
         private void SendPacket(AVPacket* pkt, QueuedPacket qp) {
+            if (!_reorderDiagDone) {
+                _pktsSent++;
+                if (_firstDecodeOrderRtp.Count < 12) _firstDecodeOrderRtp.Add(qp.RtpTs);
+            }
             fixed (byte* src = qp.Data) {
                 pkt->data = src;
                 pkt->size = qp.Data.Length;
@@ -319,6 +336,22 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             // packet), fall back to pts, then to a synthetic counter.
             long ts = frame->best_effort_timestamp;
             if (ts == ffmpeg.AV_NOPTS_VALUE) ts = frame->pts;
+
+            if (!_reorderDiagDone) {
+                _reorderDiagDone = true;
+                double fps = _ctx->framerate.den != 0 ? (double)_ctx->framerate.num / _ctx->framerate.den : 0;
+                long frameDur = fps > 0 ? (long)(1000.0 / fps) : 0;
+                // pktsBufferedBeforeFirst = reorder depth in packets; ×frameDur ≈ the
+                // display latency the reorder adds. decodeOrderRtp non-monotonic ⇒
+                // B-frames present (their count/pattern = the reorder structure).
+                string decOrder = string.Join(",", _firstDecodeOrderRtp);
+                _log?.LogInfo($"[libav-vpush] reorder-diag: has_b_frames={_ctx->has_b_frames} " +
+                              $"codecDelay={_ctx->delay} fps={fps:F2} frameDurMs={frameDur} " +
+                              $"pktsBufferedBeforeFirstFrame={_pktsSent} " +
+                              $"reorderLatencyMs≈{(_pktsSent > 1 ? (_pktsSent - 1) * frameDur : 0)} " +
+                              $"firstDisplayPts={ts} (bestEffort; rawPts={frame->pts}) " +
+                              $"decodeOrderRtp=[{decOrder}]");
+            }
             long ptsMs;
             if (ts == ffmpeg.AV_NOPTS_VALUE) {
                 ptsMs = _frameCounter * 1000 / 25; // assume 25fps if no PTS

@@ -45,6 +45,23 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         private long _framesPresented;
         public long FramesPresented => System.Threading.Interlocked.Read(ref _framesPresented);
 
+        /// <summary>Frames handed to <see cref="SubmitFrame"/> (the pacer's
+        /// release count). <c>FramesSubmitted - FramesPresented</c> is the
+        /// present-layer coalescing backlog — how far on-screen video lags the
+        /// frames the pacer already released. Diagnostic (av-timing).</summary>
+        public long FramesSubmitted => System.Threading.Interlocked.Read(ref _submittedCount);
+
+        // Present-rate diagnostic: SubmitFrame is called at the pacer's release
+        // rate (~25/s); DoPresent runs on the UI thread and COALESCES (a frame
+        // submitted while a present is still pending is skipped). If the UI/render
+        // thread can't keep up, presented << submitted → video judders/slows even
+        // though decode+pacer look perfect. Logged once/sec from SubmitFrame so it
+        // reports regardless of how far the present layer falls behind.
+        private long _submittedCount;
+        private int _presentStatTick;
+        private long _presentStatSubmitted;
+        private long _presentStatPresented;
+
         public D3DImagePresenter(Dispatcher dispatcher, IntPtr hwnd, Logger log) {
             _dispatcher = dispatcher;
             _log = log;
@@ -79,6 +96,9 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         public void SubmitFrame(IntPtr src, int srcStride, int w, int h) {
             if (_disposed || src == IntPtr.Zero || w <= 0 || h <= 0) return;
 
+            System.Threading.Interlocked.Increment(ref _submittedCount);
+            MaybePresentStats();
+
             bool schedule;
             lock (_gate) {
                 int stride = w * 4;
@@ -107,6 +127,28 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                     lock (_gate) { _presentPending = false; }
                 }
             }
+        }
+
+        private void MaybePresentStats() {
+            int now = System.Environment.TickCount;
+            if (_presentStatTick == 0) {
+                _presentStatTick = now;
+                _presentStatSubmitted = System.Threading.Interlocked.Read(ref _submittedCount);
+                _presentStatPresented = System.Threading.Interlocked.Read(ref _framesPresented);
+                return;
+            }
+            int elapsed = unchecked(now - _presentStatTick);
+            if (elapsed < 1000) return;
+            _presentStatTick = now;
+            long sub = System.Threading.Interlocked.Read(ref _submittedCount);
+            long pres = System.Threading.Interlocked.Read(ref _framesPresented);
+            long dSub = sub - _presentStatSubmitted;
+            long dPres = pres - _presentStatPresented;
+            _presentStatSubmitted = sub;
+            _presentStatPresented = pres;
+            double presFps = dPres * 1000.0 / elapsed;
+            _log?.LogInfo($"[d3dimg] present: submitted={dSub} presented={dPres} " +
+                          $"coalesced={dSub - dPres} → {presFps:F1}fps on screen (window={elapsed}ms)");
         }
 
         private void DoPresent() {

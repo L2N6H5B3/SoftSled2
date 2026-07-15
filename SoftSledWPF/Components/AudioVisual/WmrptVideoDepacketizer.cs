@@ -54,6 +54,12 @@ namespace SoftSled.Components.AudioVisual {
         private const int F_LAST_FRAGMENT   = 2;
         private const int F_COMPLETE_MAU    = 3;
 
+        // Payload-extension type carrying the ASF payload-extension systems (SDP extsys:
+        // B57532D6…/8 + 89143676…/1). The first 8 bytes (little-endian) are the B57532D6
+        // value — a 10 MHz (100 ns) FILE-GLOBAL content-presentation clock. Divided by
+        // 10000 it's content-ms, the shared cross-stream timeline (see EventData.ContentMs).
+        private const int EXT_TYPE_CONTENT  = 4;
+
         /// <summary>Per-SSRC reassembly state.</summary>
         private class StreamState {
             public List<byte[]> Fragments;           // null = not currently assembling
@@ -62,6 +68,7 @@ namespace SoftSled.Components.AudioVisual {
             public bool         FirstFragmentDiscont; // D1 bit captured from the F=1 packet
             public bool         FirstFragmentEncrypt; // E bit captured from the F=1 packet
             public uint         FirstFragmentTs;      // RTP timestamp from the F=1 packet
+            public long         FirstFragmentContentMs; // B57/NPT content-ms from the F=1 packet (-1 if none)
             public bool         PendingPostLossFlag;  // next emitted MAU was preceded by gap/loss
         }
 
@@ -96,6 +103,12 @@ namespace SoftSled.Components.AudioVisual {
             (uint)((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]);
         private static ulong ReadU64(byte[] b, int o) =>
             ((ulong)ReadU32(b, o) << 32) | ReadU32(b, o + 4);
+        // Little-endian u64 — ASF payload-extension data is LE (the B57 content clock).
+        private static ulong ReadU64LE(byte[] b, int o) {
+            ulong v = 0;
+            for (int i = 7; i >= 0; i--) v = (v << 8) | b[o + i];
+            return v;
+        }
         // 32.32 NTP fixed-point → seconds (double), for readable diagnostics.
         private static double NtpToSeconds(ulong ntp) =>
             (ntp >> 32) + (ntp & 0xFFFFFFFF) / 4294967296.0;
@@ -228,6 +241,7 @@ namespace SoftSled.Components.AudioVisual {
                                         out bool emittedMau) {
             emittedMau = false;
             int payloadHeaderStart = currentOffset;
+            long contentMs = -1;   // B57/NPT file-global content presentation time (ms); -1 if absent
 
             // -------- Bit Field 2 --------
             byte bitField2 = buf[currentOffset++];
@@ -277,6 +291,9 @@ namespace SoftSled.Components.AudioVisual {
                 if (d3Present) { if (currentOffset + 4 <= bufLen) decodeTime = ReadU32(buf, currentOffset); currentOffset += 4; }
                 if (pPresent)  { if (currentOffset + 4 <= bufLen) presTime   = ReadU32(buf, currentOffset); currentOffset += 4; }
                 if (nPresent)  { if (currentOffset + 8 <= bufLen) { npt = ReadU64(buf, currentOffset); hasNpt = true; } currentOffset += 8; }
+                // NPT is the file-global content time in plain ms (NOT NTP 32.32 format) —
+                // used as the content-clock fallback when the B57 extension is absent.
+                if (hasNpt) contentMs = (long)npt;
                 if (hasCorr && TimingSample != null
                     && (fragType == F_FIRST_FRAGMENT || fragType == F_COMPLETE_MAU)) {
                     try { TimingSample(NtpToSeconds(corrNtp), rtpTs); } catch { }
@@ -305,8 +322,14 @@ namespace SoftSled.Components.AudioVisual {
                         }
                         byte extHeader = buf[currentOffset++];
                         bool lastExt   = (extHeader & 0x80) != 0;
-                        // byte extType = (byte)(extHeader & 0x7F);
+                        byte extType   = (byte)(extHeader & 0x7F);
                         byte extLength = buf[currentOffset++];
+                        // Type-4 ext = the ASF payload-extension systems; first 8 bytes
+                        // (little-endian) = B57532D6, a 10 MHz content clock → content-ms.
+                        if (extType == EXT_TYPE_CONTENT && extLength >= 8 && currentOffset + 8 <= bufLen) {
+                            ulong ticks100ns = ReadU64LE(buf, currentOffset);
+                            contentMs = (long)(ticks100ns / 10000UL);   // prefer B57 over NPT
+                        }
                         currentOffset += extLength;
                         if (currentOffset > bufLen) {
                             Trace.WriteLine($"WMRTP Video Error SN {seqNum}: Extension overrun");
@@ -366,7 +389,7 @@ namespace SoftSled.Components.AudioVisual {
                         stream.Fragments = null;
                     }
                     EmitMau(data, rtpTs, syncPoint: sBit, discontinuity: d1Bit || stream.PendingPostLossFlag,
-                            encrypted: eBit, postLoss: stream.PendingPostLossFlag);
+                            encrypted: eBit, postLoss: stream.PendingPostLossFlag, contentMs: contentMs);
                     stream.PendingPostLossFlag = false;
                     emittedMau = true;
                     break;
@@ -379,6 +402,7 @@ namespace SoftSled.Components.AudioVisual {
                     stream.FirstFragmentDiscont  = d1Bit;
                     stream.FirstFragmentEncrypt  = eBit;
                     stream.FirstFragmentTs       = rtpTs;
+                    stream.FirstFragmentContentMs = contentMs;
                     break;
 
                 case F_MIDDLE_FRAGMENT:
@@ -405,7 +429,8 @@ namespace SoftSled.Components.AudioVisual {
                                     syncPoint: stream.FirstFragmentSync,
                                     discontinuity: stream.FirstFragmentDiscont || stream.PendingPostLossFlag,
                                     encrypted: stream.FirstFragmentEncrypt,
-                                    postLoss: stream.PendingPostLossFlag);
+                                    postLoss: stream.PendingPostLossFlag,
+                                    contentMs: stream.FirstFragmentContentMs);
                             stream.PendingPostLossFlag = false;
                             emittedMau = true;
                         } catch (Exception ex) {
@@ -440,7 +465,7 @@ namespace SoftSled.Components.AudioVisual {
             return result;
         }
 
-        private void EmitMau(byte[] mau, uint ts, bool syncPoint, bool discontinuity, bool encrypted, bool postLoss) {
+        private void EmitMau(byte[] mau, uint ts, bool syncPoint, bool discontinuity, bool encrypted, bool postLoss, long contentMs = -1) {
             if (mau == null || mau.Length == 0) return;
             NalUnitReady?.Invoke(this, new EventData {
                 data           = mau,
@@ -449,6 +474,7 @@ namespace SoftSled.Components.AudioVisual {
                 Discontinuity  = discontinuity,
                 Encrypted      = encrypted,
                 PostLoss       = postLoss,
+                ContentMs      = contentMs,
             });
         }
 

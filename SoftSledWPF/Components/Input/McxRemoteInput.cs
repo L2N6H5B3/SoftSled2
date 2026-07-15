@@ -77,6 +77,17 @@ namespace SoftSled.Components.Input {
         private bool _learning;
         private Action<int> _onLearned;
 
+        // ---- Hold diagnostics -------------------------------------------
+        // Temporary instrumentation to characterise press/repeat/release so we
+        // can design hold-gesture mapping. Logs a [hold] DOWN on first press, a
+        // [hold] repeat for each auto-repeat report while held, and a [hold] UP
+        // with the total held duration + repeat count on release. Behaviour is
+        // otherwise unchanged (commands still dispatch on every press report).
+        private readonly System.Diagnostics.Stopwatch _holdClock = System.Diagnostics.Stopwatch.StartNew();
+        private int  _holdKey = -1;
+        private long _holdDownMs;
+        private int  _holdRepeats;
+
         /// <summary>True while waiting to capture a button for the Remote page.</summary>
         public bool IsLearning => _learning;
 
@@ -293,7 +304,16 @@ namespace SoftSled.Components.Input {
                     int usage = (reportId == REPORT_CONSUMER && dataLen >= 3)
                         ? (buf[dataOff + 1] | (buf[dataOff + 2] << 8))
                         : buf[dataOff + 1];
-                    if (usage == 0) return true;   // release — nothing to do
+                    if (usage == 0) {
+                        // Release. Log the hold duration for the button that was
+                        // down (diagnostic), then nothing else to dispatch.
+                        if (_holdKey != -1) {
+                            long ms = _holdClock.ElapsedMilliseconds - _holdDownMs;
+                            _log?.LogInfo($"[hold] HID UP usage=0x{_holdKey & 0xFFFF:X4} heldMs={ms} repeats={_holdRepeats}");
+                            _holdKey = -1;
+                        }
+                        return true;
+                    }
 
                     int key = (reportId << 16) | usage;
 
@@ -302,6 +322,21 @@ namespace SoftSled.Components.Input {
                     if (_learning) {
                         CaptureLearn(key);
                         return true;
+                    }
+
+                    // Hold diagnostics: first press = DOWN, same-usage repeats =
+                    // auto-repeat while held. (Dispatch below is unchanged.)
+                    if (key == _holdKey) {
+                        _holdRepeats++;
+                        _log?.LogDebug($"[hold] HID repeat usage=0x{usage:X4} #{_holdRepeats} at {_holdClock.ElapsedMilliseconds - _holdDownMs}ms");
+                    } else {
+                        if (_holdKey != -1)
+                            _log?.LogInfo($"[hold] HID DOWN usage=0x{usage:X4} (previous 0x{_holdKey & 0xFFFF:X4} had no UP)");
+                        else
+                            _log?.LogInfo($"[hold] HID DOWN usage=0x{usage:X4}");
+                        _holdKey = key;
+                        _holdDownMs = _holdClock.ElapsedMilliseconds;
+                        _holdRepeats = 0;
                     }
 
                     if (_usageToLocal.TryGetValue(key, out RemoteLocalAction local)) {

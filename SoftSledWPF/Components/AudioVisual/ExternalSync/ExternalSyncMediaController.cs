@@ -55,6 +55,18 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private double _smoothMasterMs = -1;
         private long _smoothLastWallMs;
         private const int MaxClockLagMs = 1000;
+        // Above-real-time catch-up rate used to reconverge the smoothed clock to
+        // raw when it has fallen behind (see SmoothedMasterMs). Without this the
+        // smoother has NO way to close a gap — it only advances at real-time — so
+        // after the startup preroll burst raced raw ahead it parked a full
+        // MaxClockLagMs behind for the entire session, pacing all video ~1s off
+        // the true audio clock even on perfectly smooth recorded delivery. Capped
+        // at the same ≤15% momentary video-speed nudge the offset slew uses
+        // (PtsFramePacer.OffsetSlewMsPerSec), so a sustained live-TV over-delivery
+        // burst still can't be fully chased (smoother falls back toward the floor,
+        // preserving the original jitter rejection) while smooth delivery
+        // reconverges to raw — a true no-op, as originally intended.
+        private const int MaxClockCatchUpMsPerSec = 150;
 
         private SoftSled.Components.RTSP.RTSPClient _rtsp;
         private long _lastBandwidthBps = -1;
@@ -67,6 +79,16 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private LibAvVideoPushDecoder _videoDecoder;
         private PtsFramePacer _pacer;
         private readonly object _videoGate = new object();
+
+        // [av-timing] diagnostic: 1 Hz snapshot correlating the audio master
+        // clock (and its underlying played/written byte positions vs real
+        // wall-clock) against the video content the pacer has released and the
+        // present-layer backlog. Purpose: surface the residual A/V skew that the
+        // pacer's own drift accounting cannot see — the master→audible-audio and
+        // release→on-screen latencies that leave video visibly ahead of audio
+        // even when [pacer] drift ≈ 0. Diagnostic-only; never affects the clock.
+        private System.Threading.Timer _avTimingTimer;
+        private int _avTimingTick;
 
         // First audio + video MAU wire PTS (ms). Their difference is the wire
         // A/V offset the pacer needs. Each is converted from the stream's RTP
@@ -83,6 +105,20 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private long _firstAudioMauRtpRaw = -1;
         private long _firstVideoMauRtpRaw = -1;
         private bool _syncFinalized;
+        // CONTENT-clock reference per stream: the B57/NPT content-ms of the first
+        // (post-gate) MAU that carried one, PAIRED with that same MAU's wire ms.
+        // The pair lets UpdateSyncOffset re-express the content time at ANY other
+        // wire position (content and wire clocks advance 1:1 in ms within a
+        // stream): contentAt(x) = RefContentMs + (x − RefWireMs). This is what
+        // fixes the arrived-vs-decoded mismatch — the video sync origin is the
+        // first DECODED frame (pacer pts0), which on decode-skip files is LATER
+        // than the first arrived MAU the content value was read from. Latched
+        // here (gated, per position) rather than read from RTSPClient's latch so
+        // the pairing is exact and seek re-latching follows the anchor gate.
+        private long _audContentRefMs = -1;      // content-ms of the audio reference MAU
+        private long _audContentRefWireMs = -1;  // that MAU's wire pts (ms)
+        private long _vidContentRefMs = -1;      // content-ms of the video reference MAU
+        private long _vidContentRefWireMs = -1;  // that MAU's wire pts (ms)
         // After a seek, gate (re-)anchoring until the post-seek RTP-Info arrives.
         // _anchorMinRtpInfoGen = the RTSPClient.RtpInfoGeneration we must reach
         // before a MAU may anchor (0 = no gate, e.g. initial play). Without this,
@@ -94,6 +130,12 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         // No genuine A/V startup skew exceeds a few seconds; beyond this the
         // RTP-Info cross-stream offset is treated as bogus (Live TV npt=now).
         private const int MaxPlausibleOffsetMs = 5000;
+        // The B57/NPT CONTENT clock is authoritative (verified shared presentation
+        // timeline), so a large offset there is a legitimate long-GOP video I-frame
+        // lead-in (e.g. 6.2s), NOT garbage — use a far higher bound so it isn't
+        // wrongly clamped to 0 (which desyncs by seconds). Still bounded so a truly
+        // absurd value can't make the pacer buffer unbounded decoded frames.
+        private const int MaxPlausibleContentOffsetMs = 15000;
         private readonly System.Diagnostics.Stopwatch _srWaitClock = System.Diagnostics.Stopwatch.StartNew();
         private long _lastSrWaitLogMs = -100000;
 
@@ -112,6 +154,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             _videoJitterBufferMs = videoJitterBufferMs > 0 ? videoJitterBufferMs : 250;
             _log?.LogInfo($"[ext-sync] controller constructed (audioSyncOffset={audioSyncOffsetMs}ms, " +
                           $"videoJitterBuffer={_videoJitterBufferMs}ms)");
+            // Refactor step 1/2: surface the pure offset-policy self-test (fixture
+            // status) once at startup. Diagnostic only — proves the module loads
+            // and shows which fixtures still need ground truth.
+            try { _log?.LogInfo("[av-policy] " + AvSyncPolicy.SelfTest().Replace("\n", " | ")); } catch { }
         }
 
         // DEBUG: epoch-invariant sync mode (see SoftSledConfig.EpochInvariantSync).
@@ -275,11 +321,18 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             return false;
         }
 
-        private void OnAudioMau(byte[] data, uint rtpTs) {
+        private void OnAudioMau(byte[] data, uint rtpTs, long contentMs) {
             if (_decoder == null) return;
             // Discard pre-seek in-flight MAUs until the post-seek RTP-Info lands.
             if (Interlocked.Read(ref _firstAudioMauRtpRaw) < 0 && !AnchorGateOpen()) return;
             long ptsMs = (long)rtpTs * 1000L / _audioClockHz;
+            // Latch the content-clock reference (content-ms paired with THIS
+            // MAU's wire ms) from the first post-gate MAU carrying one. Wire ms
+            // is written first so a reader that sees content ≥ 0 sees both.
+            if (contentMs >= 0 && Interlocked.Read(ref _audContentRefMs) < 0) {
+                Interlocked.Exchange(ref _audContentRefWireMs, ptsMs);
+                Interlocked.Exchange(ref _audContentRefMs, contentMs);
+            }
             if (Interlocked.CompareExchange(ref _firstAudioMauWirePtsMs, ptsMs, -1L) == -1L) {
                 Interlocked.Exchange(ref _firstAudioMauRtpRaw, rtpTs);
                 _log?.LogDebug($"[ext-sync-anchor] first audio MAU rtpTs={rtpTs} ({ptsMs}ms, clk={_audioClockHz})");
@@ -346,8 +399,20 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 if (dt < 0) dt = 0;
                 _smoothLastWallMs = wallNow;
                 double adv = _smoothMasterMs + dt;     // advance at real-time
+                // Reconverge toward raw when behind, at a bounded (≤15%) rate.
+                // This is the fix for the "parked a full second behind" bug: the
+                // old code had no above-real-time term, so once the startup burst
+                // opened a gap it never closed. Bounded so a live-TV over-delivery
+                // swing still can't be fully chased (falls back toward the floor
+                // below), but smooth recorded delivery converges to raw.
+                double lag = raw - adv;
+                if (lag > 0) {
+                    double catchUp = dt * (MaxClockCatchUpMsPerSec / 1000.0);
+                    if (catchUp > lag) catchUp = lag;  // converge exactly, don't overshoot
+                    adv += catchUp;
+                }
                 if (adv > raw) adv = raw;              // never past available content (stall on underrun)
-                if (raw - adv > MaxClockLagMs) adv = raw - MaxClockLagMs; // bound catch-up lag
+                if (raw - adv > MaxClockLagMs) adv = raw - MaxClockLagMs; // hard safety floor (kept)
                 if (adv < _smoothMasterMs) adv = _smoothMasterMs;         // monotonic
                 _smoothMasterMs = adv;
                 return (long)adv;
@@ -356,6 +421,14 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
 
         private void ResetMasterSmoothing() {
             lock (_smoothLock) { _smoothMasterMs = -1; }
+        }
+
+        /// <summary>Current smoothed-clock value WITHOUT advancing it (diagnostic
+        /// only — the real advance happens in <see cref="SmoothedMasterMs"/>).
+        /// The [av-timing] snapshot logs this next to raw so the smoother's
+        /// convergence (or lag) is visible directly.</summary>
+        private long SmoothedMasterPeekMs() {
+            lock (_smoothLock) { return _smoothMasterMs < 0 ? 0 : (long)_smoothMasterMs; }
         }
 
         // ============================================================
@@ -373,6 +446,16 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 AVCodecID id = MapWireCodec(wireCodec);
                 int clockHz = MapClockHz(wireCodec);
                 _videoClockHz = clockHz;
+                // Codec-specific A/V trim. H.264: the RTP-Info play-point method
+                // counts the video first-I-frame lead-in (vPad) ONCE, but WMPNss
+                // needs it counted TWICE — so UpdateSyncOffset derives an extra
+                // vPad per-file below; H264ExtraSyncOffsetMs is only a small
+                // residual constant on top. MPEG-2 stays 0 (working sync untouched).
+                _videoIsH264 = (id == AVCodecID.AV_CODEC_ID_H264);
+                Interlocked.Exchange(ref _videoCodecTrimMs,
+                    _videoIsH264 ? H264ExtraSyncOffsetMs : 0L);   // refined with derived vPad in UpdateSyncOffset
+                _log?.LogInfo($"[ext-sync] video codec trim (pre-vPad) = {Interlocked.Read(ref _videoCodecTrimMs)}ms " +
+                              $"(codec={id})");
 
                 _pacer = new PtsFramePacer(
                     (ptr, stride, w, h) => _presenter?.SubmitFrame(ptr, stride, w, h),
@@ -397,6 +480,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                     _log?.LogError($"[ext-sync] SetVideoBufferOccupancyProvider failed: {ex.Message}");
                 }
                 UpdateSyncOffset();
+                StartAvTimingDiag();
 
                 var d = new LibAvVideoPushDecoder(id, clockHz, _log);
                 // Backpressure: decode at the pacer's (audio-slaved) drain rate,
@@ -449,7 +533,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             }
         }
 
-        private void OnVideoMau(byte[] data, uint rtpTs) {
+        private void OnVideoMau(byte[] data, uint rtpTs, long contentMs) {
             // Discard pre-seek in-flight MAUs until the post-seek RTP-Info lands.
             // NOTE: the video sync origin (_firstVideoMauRtpRaw / WirePtsMs) is now
             // captured in the decoder's OnFrame handler (first DECODED frame =
@@ -457,6 +541,14 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // a non-decodable P/B frame that the decoder skips, so anchoring the
             // offset here used a different origin than the pacer and skewed sync.
             if (Interlocked.Read(ref _firstVideoMauRtpRaw) < 0 && !AnchorGateOpen()) return;
+            // Latch the content-clock reference from the first post-gate MAU
+            // carrying one (paired with this MAU's wire ms). UpdateSyncOffset
+            // re-expresses it at the first DECODED frame's wire pts, which
+            // corrects the content offset on decode-skip lead-ins.
+            if (contentMs >= 0 && Interlocked.Read(ref _vidContentRefMs) < 0) {
+                Interlocked.Exchange(ref _vidContentRefWireMs, (long)rtpTs * 1000L / _videoClockHz);
+                Interlocked.Exchange(ref _vidContentRefMs, contentMs);
+            }
             // DIAGNOSTIC (temporary): log the first video MAUs' arriving rtpTs so we
             // can tell whether a late first DECODED frame (seen: 12096ms while the
             // play point was 530ms → offset clamped to 0 → seconds out) is a
@@ -485,19 +577,6 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             long aRaw = Interlocked.Read(ref _firstAudioMauRtpRaw);
             long vRaw = Interlocked.Read(ref _firstVideoMauRtpRaw);
             if (aRaw < 0 || vRaw < 0) return;
-            if (_keepOffsetThisSync) {
-                // Trick-play (FF/RW) return: reuse the offset established at the
-                // initial play — it's constant for the video, and the post-scale
-                // RTP-Info is unreliable, so we must NOT recompute it here.
-                _keepOffsetThisSync = false;
-                long keep = Interlocked.Read(ref _baseOffsetMs);
-                long trimK = Interlocked.Read(ref _liveTrimMs);
-                _pacer?.SetSyncOffsetMs(keep + trimK);
-                _syncFinalized = true;
-                _log?.LogInfo($"[ext-sync] offset KEPT across trick-play = {keep}ms + trim {trimK}ms " +
-                              $"→ {keep + trimK}ms (NOT recomputed — post-scale RTP-Info unreliable)");
-                return;
-            }
             // NOTE (2026-07-06): a codec-split "MPEG-2 = direct first-MAU diff"
             // path was tried (32nd fix) on the premise that MPEG-2 audio/video
             // share one RTP epoch. Disproven by log softsled-20260706-202311: the
@@ -511,7 +590,71 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // WMPNss doesn't send RTCP Sender Reports, so the cross-stream
             // offset comes from the PLAY response's RTP-Info (each stream's
             // play-point RTP timestamp) — epoch-free and available immediately.
-            if (_rtsp != null && _rtsp.TryGetRtpInfoAvOffsetMs((uint)aRaw, (uint)vRaw, out long offsetMs)) {
+            if (_rtsp != null && _rtsp.TryGetRtpInfoAvOffsetMs((uint)aRaw, (uint)vRaw, out long offsetMs, out long videoPadMs)) {
+                long rtpInfoCandidate = offsetMs;   // raw RTP-Info value, pre epoch-invariant/clamp (candidate logging)
+
+                // PREFERRED: the B57532D6 / NPT file-global CONTENT clock. Both streams'
+                // content times are on the shared ASF presentation timeline (not the
+                // per-stream Send-Time RTP epoch), so their difference is the true,
+                // epoch-free cross-stream offset — no vPad doubling, no direct-vs-
+                // rtpinfo selection, no per-session drift. When available it REPLACES the
+                // RTP-Info method entirely; the codec trim drops to just the residual.
+                //
+                // Each stream's content time is re-expressed AT ITS SYNC ORIGIN using
+                // the latched (content, wire-ms) reference pair — content and wire
+                // clocks advance 1:1 in ms within a stream. For video the origin is
+                // the first DECODED frame (the pacer's pts0), which on decode-skip
+                // lead-ins is LATER than the arrived MAU the content value came from;
+                // using the arrived MAU's content directly mis-aligned the offset by
+                // the skipped span (same arrived-vs-decoded class as the old RTP
+                // anchor bug). For audio origin == reference MAU, so the delta is 0.
+                long aRefC = Interlocked.Read(ref _audContentRefMs);
+                long vRefC = Interlocked.Read(ref _vidContentRefMs);
+                long a0ms  = Interlocked.Read(ref _firstAudioMauWirePtsMs);
+                long v0ms  = Interlocked.Read(ref _firstVideoMauWirePtsMs);
+                bool haveContent = aRefC >= 0 && vRefC >= 0 && a0ms >= 0 && v0ms >= 0;
+                if (haveContent) {
+                    long aContentMs = aRefC + (a0ms - Interlocked.Read(ref _audContentRefWireMs));
+                    long vSkipMs    = v0ms - Interlocked.Read(ref _vidContentRefWireMs);
+                    long vContentMs = vRefC + vSkipMs;
+                    long contentOffset = aContentMs - vContentMs;
+                    _log?.LogInfo($"[ext-sync] CONTENT offset (B57/NPT) = {contentOffset}ms " +
+                                  $"(audioContent={aContentMs}ms videoContent={vContentMs}ms" +
+                                  (vSkipMs != 0 ? $" [decode-skip corrected +{vSkipMs}ms]" : "") +
+                                  $"; rtpinfo was {rtpInfoCandidate}ms; Δ={contentOffset - rtpInfoCandidate}ms)");
+                    offsetMs = contentOffset;
+                    if (_videoIsH264) Interlocked.Exchange(ref _videoCodecTrimMs, H264ExtraSyncOffsetMs);
+                }
+
+                // FALLBACK (no content clock from the server): the RTP-Info method.
+                // H.264 derives the codec trim = video first-I-frame lead-in pad (vPad),
+                // picking min-magnitude of {direct, 2·vPad}. MPEG-2 keeps codec trim 0.
+                if (!haveContent && _videoIsH264) {
+                    // H.264 cross-stream offset selection. Two candidates:
+                    //   • 2·vPad = rtpinfo + vPad (RTP-Info play-point method,
+                    //     doubled — right when the A/V RTP epochs are independent).
+                    //   • direct = A0 − V0 (first-MAU diff — right when the epochs
+                    //     are comparable, in which case it comes out SMALL; when
+                    //     they're independent it blows up huge = obviously garbage).
+                    // Rule (validated on 3 precisely-tuned files: Play2 direct 3ms,
+                    // File2 2·vPad 280ms, Play7 2·vPad 28ms): take whichever has the
+                    // SMALLER magnitude — direct when it's plausibly small, else the
+                    // RTP-Info fallback. Derivable, no B-frame/fps dependence, no
+                    // manual trim. codecTrim carries (chosen − rtpinfo) so the base
+                    // (_baseOffsetMs=rtpinfo) + codecTrim lands on the chosen value.
+                    long twoVpad = offsetMs + videoPadMs;
+                    var dcand = AvSyncPolicy.ComputeDirect(aRaw, _audioClockHz, vRaw, _videoClockHz);
+                    long chosen; string src;
+                    if (dcand.Valid && Math.Abs(dcand.OffsetMs) < Math.Abs(twoVpad)) {
+                        chosen = dcand.OffsetMs; src = "direct";
+                    } else {
+                        chosen = twoVpad; src = "2·vPad";
+                    }
+                    Interlocked.Exchange(ref _videoCodecTrimMs, (chosen - offsetMs) + H264ExtraSyncOffsetMs);
+                    _log?.LogInfo($"[ext-sync] H.264 offset select: direct={(dcand.Valid ? dcand.OffsetMs.ToString() : "n/a")} " +
+                                  $"2·vPad={twoVpad} → chose {src}={chosen}ms " +
+                                  $"(codecTrim {chosen - offsetMs} + residual {H264ExtraSyncOffsetMs})");
+                }
                 // Capture the session RTP epoch ONCE (initial play, before any
                 // seek — the play points are reliable there). Reused by the
                 // epoch-invariant mode across seeks. Cheap; harmless when the mode
@@ -526,14 +669,30 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 // own RTP-Info pad diff (which WMPNss can report inconsistently).
                 // At the initial play this equals the per-seek value; it only
                 // diverges when a seek's play points drift from the true epoch.
-                if (EpochInvariantSync && _sessionEpochSet) {
-                    long v0ms = Interlocked.Read(ref _firstVideoMauWirePtsMs);
-                    long a0ms = _audioClockHz > 0 ? aRaw * 1000L / _audioClockHz : 0L;
+                if (EpochInvariantSync && _sessionEpochSet && !haveContent) {
+                    // a0ms/v0ms: the first-MAU wire origins already read above
+                    // for the content path (identical values).
                     long epOffset = _sessionEpochMs - (v0ms - a0ms);
                     _log?.LogInfo($"[ext-sync] epoch-invariant offset {epOffset}ms " +
                                   $"(per-seek would be {offsetMs}ms; epoch {_sessionEpochMs}ms − (v0 {v0ms} − a0 {a0ms}))");
                     offsetMs = epOffset;
                 }
+                // Refactor step 2: compute + log ALL offset candidates side-by-side
+                // via the pure AvSyncPolicy, and cross-check the legacy selection.
+                // DIAGNOSTIC ONLY — the applied offset below is unchanged
+                // (behaviour-preserving). This yields the direct-vs-rtpinfo-vs-corr
+                // data the discriminator needs, per file.
+                var cand = new AvSyncPolicy.Candidates(
+                    AvSyncPolicy.ComputeDirect(aRaw, _audioClockHz, vRaw, _videoClockHz),
+                    new AvSyncPolicy.Candidate(true, rtpInfoCandidate, "rtpinfo"),
+                    (_rtsp != null && _rtsp.TryGetCorrespondenceOffsetMs(out long corrMs))
+                        ? new AvSyncPolicy.Candidate(true, corrMs, "correspondence")
+                        : AvSyncPolicy.Candidate.None);
+                var legacy = AvSyncPolicy.ChooseLegacy(cand);
+                _log?.LogInfo($"[av-candidates] {cand} | legacy→{legacy.Source}={legacy.OffsetMs}ms" +
+                              (legacy.Clamped ? " (clamped)" : "") +
+                              $" (audioRtp={aRaw} videoRtp={vRaw} aClk={_audioClockHz} vClk={_videoClockHz})");
+
                 // Sanity gate: no real A/V startup skew exceeds a few seconds.
                 // A larger value means the RTP-Info / first-MAU relationship
                 // didn't follow the prior-IDR-padding model — e.g. Live TV
@@ -541,17 +700,21 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 // of seconds from the first delivered audio MAU and inflates
                 // the offset. In that case the streams' first MAUs actually
                 // arrive together (the live edge), so 0 is the right answer.
-                if (Math.Abs(offsetMs) > MaxPlausibleOffsetMs) {
-                    _log?.LogInfo($"[ext-sync] RTP-Info offset {offsetMs}ms implausible (>{MaxPlausibleOffsetMs}ms) " +
-                                  $"— falling back to 0 (streams assumed to start together, e.g. Live TV)");
+                int plausibleBound = haveContent ? MaxPlausibleContentOffsetMs : MaxPlausibleOffsetMs;
+                if (Math.Abs(offsetMs) > plausibleBound) {
+                    _log?.LogInfo($"[ext-sync] {(haveContent ? "content" : "RTP-Info")} offset {offsetMs}ms implausible " +
+                                  $"(>{plausibleBound}ms) — falling back to 0 (streams assumed to start together)");
                     offsetMs = 0;
+                    // Offset rejected → drop the H.264 codec trim back to just the residual.
+                    if (_videoIsH264) Interlocked.Exchange(ref _videoCodecTrimMs, H264ExtraSyncOffsetMs);
                 }
                 Interlocked.Exchange(ref _baseOffsetMs, offsetMs);
-                long offset = offsetMs + Interlocked.Read(ref _liveTrimMs);
+                long offset = offsetMs + EffectiveTrimMs();
                 _pacer?.SetSyncOffsetMs(offset);
                 _syncFinalized = true;
-                _log?.LogInfo($"[ext-sync] A/V offset = {offsetMs}ms + trim {Interlocked.Read(ref _liveTrimMs)}ms " +
-                              $"→ {offset}ms (audioRtp={aRaw} videoRtp={vRaw})");
+                _log?.LogInfo($"[ext-sync] A/V offset = {offsetMs}ms + trim {Interlocked.Read(ref _liveTrimMs)}ms" +
+                              (Interlocked.Read(ref _videoCodecTrimMs) != 0 ? $" + codecTrim {Interlocked.Read(ref _videoCodecTrimMs)}ms" : "") +
+                              $" → {offset}ms (audioRtp={aRaw} videoRtp={vRaw})");
             } else {
                 long now = _srWaitClock.ElapsedMilliseconds;
                 if (now - _lastSrWaitLogMs >= 2000) {
@@ -561,22 +724,28 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             }
         }
 
-        // Live A/V trim: the computed cross-stream RTP-Info offset
-        // (_baseOffsetMs) aligns the streams' content time, but a fixed
-        // residual remains from physical pipeline latency (video present
-        // chain vs audio device output) that software can't measure — only
-        // the eye can. _liveTrimMs is added on top and can be nudged during
-        // playback so the user can dial out that residual in real time.
-        // Initialised from config's AudioSyncOffsetMs in the ctor.
+        // Live A/V trim: the computed cross-stream offset (_baseOffsetMs)
+        // aligns the streams' content time, but a residual remains that
+        // software can't measure — only the eye can. _liveTrimMs is added on
+        // top and can be nudged during playback (Ctrl+]/Ctrl+[) to dial that
+        // residual out in real time. Seeded from config's AudioSyncOffsetMs
+        // (the user's persistent baseline, e.g. display/AVR latency) in the
+        // ctor AND re-seeded to it on every new media — the residual proved
+        // per-file, so nudges are per-media tuning and must not carry over.
         private long _baseOffsetMs;
         private long _liveTrimMs;
 
-        // Set by the trick-play (FF/RW → 1×) re-anchor: tells UpdateSyncOffset to
-        // KEEP the established cross-stream offset rather than recompute it. The
-        // offset is constant for a video (Xbox capture), and the RTP-Info the
-        // server returns right after server-side scale is unreliable for audio —
-        // recomputing from it produced 0ms vs the true value and raced the video.
-        private bool _keepOffsetThisSync;
+        // Extra A/V trim applied ONLY for the current video codec. H.264 needs a
+        // small positive (video-forward) trim for its larger present / B-frame
+        // reorder latency that the content-time offset can't measure; MPEG-2 = 0
+        // (leaves the working MPEG-2 config untouched). Combined with the user's
+        // _liveTrimMs at every point the pacer offset is set. Set from config's
+        // H264ExtraSyncOffsetMs when the H.264 video codec commits.
+        private long _videoCodecTrimMs;
+        private bool _videoIsH264;   // set at codec commit; gates the derived-vPad H.264 offset
+        public int H264ExtraSyncOffsetMs { get; set; }
+        private long EffectiveTrimMs() =>
+            Interlocked.Read(ref _liveTrimMs) + Interlocked.Read(ref _videoCodecTrimMs);
 
         /// <summary>Current user A/V trim in ms (positive = video earlier /
         /// less lag). Persist this back to config so it survives the session.</summary>
@@ -587,7 +756,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// negative delay it. Returns the new total trim (ms).</summary>
         public int NudgeAudioSyncTrim(int deltaMs) {
             long trim = Interlocked.Add(ref _liveTrimMs, deltaMs);
-            long offset = Interlocked.Read(ref _baseOffsetMs) + trim;
+            long offset = Interlocked.Read(ref _baseOffsetMs) + trim + Interlocked.Read(ref _videoCodecTrimMs);
             _pacer?.SetSyncOffsetMs(offset);
             _log?.LogInfo($"[ext-sync] A/V trim nudged {(deltaMs >= 0 ? "+" : "")}{deltaMs}ms " +
                           $"→ trim {trim}ms (base {Interlocked.Read(ref _baseOffsetMs)}ms → offset {offset}ms)");
@@ -754,6 +923,17 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// RTP-Info arrives (discards pre-change in-flight MAUs), resets the
         /// Correspondence estimator, and re-anchors the pacer. The user trim
         /// (_liveTrimMs) persists as the fixed residual.</summary>
+        /// <summary>Clear the per-position content-clock reference pairs so the
+        /// next position's first MAUs re-latch them. Must accompany every anchor
+        /// reset — stale refs would make the recomputed offset reuse the PREVIOUS
+        /// position's content times.</summary>
+        private void ResetContentRefs() {
+            Interlocked.Exchange(ref _audContentRefMs, -1L);
+            Interlocked.Exchange(ref _audContentRefWireMs, -1L);
+            Interlocked.Exchange(ref _vidContentRefMs, -1L);
+            Interlocked.Exchange(ref _vidContentRefWireMs, -1L);
+        }
+
         private void ReBaselineSync(string reason) {
             // A seek RECOMPUTES the offset (unlike trick-play, which keeps it):
             // each seek lands at a new point with new lead-in, so the offset
@@ -766,6 +946,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             Interlocked.Exchange(ref _firstVideoMauRtpRaw, -1L);
             Interlocked.Exchange(ref _firstAudioMauWirePtsMs, -1L);
             Interlocked.Exchange(ref _firstVideoMauWirePtsMs, -1L);
+            ResetContentRefs();   // new position = new content anchors
             Interlocked.Exchange(ref _anchorMinRtpInfoGen, (_rtsp?.RtpInfoGeneration ?? 0) + 1);
             _seekGateTick = Environment.TickCount;
             // The estimator still runs for diagnostics; reset it so its logged
@@ -812,6 +993,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             Interlocked.Exchange(ref _firstVideoMauRtpRaw, -1L);
             Interlocked.Exchange(ref _firstAudioMauWirePtsMs, -1L);
             Interlocked.Exchange(ref _firstVideoMauWirePtsMs, -1L);
+            ResetContentRefs();   // new position = new content anchors
             Interlocked.Exchange(ref _anchorMinRtpInfoGen, (_rtsp?.RtpInfoGeneration ?? 0) + 1);
             _seekGateTick = Environment.TickCount;
             try { _rtsp?.ResetCorrespondenceEstimator(); } catch { }
@@ -862,11 +1044,12 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP SetRate({rate}) failed: {ex.Message}"); }
             // Reaching here with normal=true means we were in trick play (prev
             // rate ≠ 1×) and are returning to 1× — that lands at a NEW position
-            // with NEW RTP-Info, so re-anchor the timeline. Use the dedicated
-            // trick-play path (NOT ReBaselineSync): it re-anchors but KEEPS the
-            // video's constant offset, because recomputing it from the unreliable
-            // post-scale RTP-Info raced the video. Entering trick play (rate≠1)
-            // needs nothing — the pacer is free-run and ignores the offset.
+            // with NEW RTP-Info, so re-anchor the timeline and RECOMPUTE the
+            // offset (the exit position's A/V lead-in differs from the initial
+            // play's, so the old offset no longer applies). Kept on a dedicated
+            // path (NOT ReBaselineSync) so it can evolve independently of
+            // seek/resume. Entering trick play (rate≠1) needs nothing — the
+            // pacer is free-run and ignores the offset.
             if (normal) {
                 // Returning to 1×: re-anchor (flushes the stale reservoir + clears
                 // the PCM buffer), then resume audio decode + playback so the new
@@ -937,13 +1120,16 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// <summary>Tear down the per-media decode pipeline (video decoder +
         /// pacer, audio decoder + renderer) and reset the sync-anchor state so
         /// the next media starts clean and rebuilds decoders for ITS codec.
-        /// Preserves session-scoped state: the presenter (session-owned) and
-        /// the user's live A/V trim (<see cref="_liveTrimMs"/>). Idempotent.</summary>
+        /// Preserves the session-owned presenter. The live A/V trim is reset to
+        /// the config baseline (<see cref="AudioSyncOffsetMs"/>): the residual
+        /// turned out to be per-file, so carrying one file's tuned trim into the
+        /// next contaminated its sync (and any subsequent tuning). Idempotent.</summary>
         private void ResetPipelineForNewMedia() {
             // Silence the device + freeze video BEFORE the dispose Joins below,
             // so a media switch (or any teardown) doesn't leak the old media's
             // buffered audio while we wait on the decode threads to exit.
             HaltPlaybackNow();
+            StopAvTimingDiag();
             lock (_videoGate) {
                 try { _videoDecoder?.Complete(); } catch { }
                 try { _videoDecoder?.Dispose(); } catch { }
@@ -969,9 +1155,9 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // MAUs re-anchor and the offset is recomputed from scratch.
             _isOpen = false;
             _syncFinalized = false;
-            _keepOffsetThisSync = false;   // new video computes its own offset fresh
             _sessionEpochSet = false;      // new media = new RTP session = new epoch
             _videoMauDiagCount = 0;        // re-arm the first-MAU arrival diagnostic
+            Interlocked.Exchange(ref _videoCodecTrimMs, 0L);  // re-set on next codec commit
             _audioClockHz = 90000;
             _videoClockHz = 90000;
             Interlocked.Exchange(ref _firstAudioMauRtpRaw, -1L);
@@ -984,7 +1170,18 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // off=0 → 2nd recording plays out of sync. (Was missing here.)
             Interlocked.Exchange(ref _firstAudioMauWirePtsMs, -1L);
             Interlocked.Exchange(ref _firstVideoMauWirePtsMs, -1L);
+            ResetContentRefs();
             Interlocked.Exchange(ref _baseOffsetMs, 0L);
+            // Reset the live trim to the config baseline. The trim was designed
+            // to carry a FIXED pipeline/display residual across media, but the
+            // residual is per-file — carrying one file's tuned value poisons the
+            // next file's sync and any tuning done from it (seen repeatedly:
+            // a trim dialled for one recording applied to the next).
+            long prevTrim = Interlocked.Exchange(ref _liveTrimMs, AudioSyncOffsetMs);
+            if (prevTrim != AudioSyncOffsetMs) {
+                _log?.LogInfo($"[ext-sync] live trim reset for new media: {prevTrim}ms → " +
+                              $"{AudioSyncOffsetMs}ms (per-media nudges don't carry over)");
+            }
             // New media gets a fresh RTSPClient (RtpInfoGeneration restarts at 0),
             // so clear the seek anchor-gate or it would block the new media.
             Interlocked.Exchange(ref _anchorMinRtpInfoGen, 0L);
@@ -999,8 +1196,76 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             _log?.LogInfo("[ext-sync] pipeline reset for new media");
         }
 
+        // ----- [av-timing] pipeline-latency diagnostic -----
+        //
+        // The cross-stream RTP-Info offset SoftSled applies is content-correct
+        // (verified against the Xbox, which syncs the same file with the same
+        // offset). Yet video still renders visibly ahead of audio, scaling with
+        // content complexity. That residual lives in SoftSled's OWN pipeline —
+        // the gaps the pacer's drift accounting is blind to:
+        //   • master→audible: the master clock is min(GetPosition, written); does
+        //     GetPosition (bytes the device "played") lead the audible audio, and
+        //     is the device chronically underrunning (played > written → silence)?
+        //   • release→on-screen: SubmitFrame coalesces on the UI thread, so
+        //     on-screen video lags the pacer's released frame by (submitted −
+        //     presented) frames.
+        // This snapshot logs both, 1 Hz, so the residual becomes a measurable
+        // number instead of a visual estimate. It reads only; it never feeds back
+        // into the clock or the offset.
+        private void StartAvTimingDiag() {
+            if (_avTimingTimer != null) return;
+            _avTimingTick = 0;
+            try {
+                _avTimingTimer = new System.Threading.Timer(
+                    _ => { try { LogAvTimingSnapshot(); } catch { } },
+                    null, 1000, 1000);
+            } catch { _avTimingTimer = null; }
+        }
+
+        private void StopAvTimingDiag() {
+            var t = _avTimingTimer;
+            _avTimingTimer = null;
+            if (t != null) { try { t.Dispose(); } catch { } }
+        }
+
+        private void LogAvTimingSnapshot() {
+            var r = _renderer;
+            var pc = _pacer;
+            var pr = _presenter;
+            if (r == null || pc == null) return;
+
+            long master   = r.GetMediaTimeMs();   // min(played, written) — the RAW clock
+            long smoothed = SmoothedMasterPeekMs();// what the pacer is actually slaved to
+            long smoothLag = master - smoothed;    // >0 ⇒ pacer clock lags true audio (the residual)
+            long played   = r.AudioPlayedMs;      // uncapped device GetPosition
+            long written  = r.AudioWrittenMs;     // real content handed to device
+            long wall     = r.WallSincePlayMs;    // real elapsed since Play()
+            long devSilence = played - written;   // >0 ⇒ device playing silence (underrun)
+            long padSil   = r.SilencePaddedMs;    // cumulative rendered silence (clock subtracts it)
+            long gapFill  = r.GapFilledMs;        // cumulative content-gap silence (played as dead air)
+            long masterVsWall = master - wall;    // clock drift from real-time
+
+            long vidRel   = pc.LastReleasedElapsedMs;  // video content the pacer released
+            long offset   = pc.CurrentSyncOffsetMs;
+            // Video content the pacer BELIEVES is on screen ≈ master + offset. The
+            // actual content presented lags that by the coalescing backlog.
+            long relLag   = vidRel - (master + offset); // pacer's own drift (≈0 normally)
+
+            long submitted = pr?.FramesSubmitted ?? 0;
+            long presented = pr?.FramesPresented ?? 0;
+            long presentBacklog = submitted - presented; // frames released but not on screen
+
+            _log?.LogInfo(
+                $"[av-timing] t={++_avTimingTick}s master={master} smoothed={smoothed} " +
+                $"smoothLag={smoothLag} wall={wall} (masterVsWall={masterVsWall}) " +
+                $"played={played} written={written} devSilence={devSilence} padSil={padSil} gapFill={gapFill} | " +
+                $"vidRelEl={vidRel} offset={offset} pacerDrift={relLag} | " +
+                $"present sub={submitted} pres={presented} backlog={presentBacklog}");
+        }
+
         public void Dispose() {
             _disposed = true;
+            StopAvTimingDiag();
             AttachRtspClient(null);   // detaches + resets the pipeline
             ResetPipelineForNewMedia();
             // _presenter is owned by the session; it disposes it.

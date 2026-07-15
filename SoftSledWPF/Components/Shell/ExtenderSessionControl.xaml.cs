@@ -611,6 +611,7 @@ namespace SoftSledWPF.Components.Shell {
             _extSyncController = new SoftSled.Components.AudioVisual.ExternalSync
                 .ExternalSyncMediaController(_avLogger, cfg.AudioSyncOffsetMs, cfg.VideoJitterBufferMs);
             _extSyncController.EpochInvariantSync = cfg.EpochInvariantSync;   // DEBUG A/V-sync mode
+            _extSyncController.H264ExtraSyncOffsetMs = cfg.H264ExtraSyncOffsetMs;  // H.264-only A/V trim
             AvCtrlHandler.MediaController = _extSyncController;
 
             // Create the GPU video presenter (D3D9Ex device + D3DImage) and
@@ -1280,19 +1281,15 @@ namespace SoftSledWPF.Components.Shell {
 
         /// <summary>Live A/V sync nudge (from a session hotkey). Positive delta
         /// advances video to reduce video-lags-audio; negative delays it. Applies
-        /// to the running pacer immediately and persists the new trim to config so
-        /// it carries to the next session. No-op if no controller is active.</summary>
+        /// to the running pacer immediately. PER-MEDIA only: the trim resets to
+        /// the config baseline on each new media and is deliberately NOT written
+        /// back to config — the residual proved per-file, so persisting a nudge
+        /// contaminated the next media's (and next session's) sync. Set the
+        /// persistent baseline (display/AVR latency) on the settings page.</summary>
         public void NudgeAvSync(int deltaMs) {
             var ctrl = _extSyncController;
             if (ctrl == null) return;
             int trim = ctrl.NudgeAudioSyncTrim(deltaMs);
-            // Persist so the dialled-in value survives reconnect.
-            try {
-                var cfg = SoftSledConfigManager.ReadConfig();
-                if (cfg != null) { cfg.AudioSyncOffsetMs = trim; SoftSledConfigManager.WriteConfig(cfg); }
-            } catch (Exception ex) {
-                m_logger?.LogError($"[av-sync] persist trim failed: {ex.Message}");
-            }
             // Surface the value on the logger overlay so it can be tuned by eye.
             m_logger?.LogInfo($"[av-sync] trim = {(trim >= 0 ? "+" : "")}{trim} ms " +
                               $"(video {(trim >= 0 ? "earlier" : "later")})");

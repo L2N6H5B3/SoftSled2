@@ -230,6 +230,14 @@ namespace SoftSled.Components.Configuration {
         // controller will consume this in its drift-correction loop.
         public int AudioSyncOffsetMs = 0;
 
+        // Extra A/V sync trim (ms) applied ONLY to H.264 video. Positive =
+        // advance video (compensate audio-ahead). H.264 needs a small
+        // video-forward trim for its larger present / B-frame reorder latency
+        // that the content-time offset can't measure; MPEG-2 recordings are
+        // unaffected (they sync at 0). Tune to taste; ~250–375 ms was the
+        // observed residual on a 50 fps H.264 recording.
+        public int H264ExtraSyncOffsetMs = 0;
+
         // Video jitter-buffer depth (ms) for the libav + D3DImage player.
         // Larger values buffer more decoded video to absorb bursty RTSP
         // delivery (the wire delivers in ~160 ms bursts around I-frames),

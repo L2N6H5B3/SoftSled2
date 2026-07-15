@@ -22,8 +22,8 @@ namespace SoftSled.Components.RTSP {
 
         #region Variables #####################################################
 
-        private string UserAgent = "User-Agent: MCExtender/1.50.X.090522.00"; // Assume Xbox 360?
-        //private string UserAgent = "User-Agent: MCExtender/1.50.0.0";
+        //private string UserAgent = "User-Agent: MCExtender/1.50.X.090522.00"; // Assume Xbox 360?
+        private string UserAgent = "User-Agent: MCExtender/1.50.0.0";
         //private string UserAgent = "User-Agent: MCExtender/1.0.0.0"; // Linksys Extender (Doesn't support H.264?)
 
         private string AcceptHeader = "Accept: application/sdp";
@@ -61,6 +61,19 @@ namespace SoftSled.Components.RTSP {
         System.Timers.Timer keepalive_timer = null;             // Used with RTSP keepalive
 
         List<RtspRequestSetup> setup_messages = new List<RtspRequestSetup>(); // Setup messages still to send
+
+        // Startup-latency instrumentation. Injected main app Logger + a
+        // stopwatch started when Connect() begins, so every handshake milestone
+        // (TCP connect, DESCRIBE/SETUP/PLAY sent+response, first RTP per stream)
+        // is emitted to the MAIN app log with an elapsed-ms offset. Previously
+        // the entire DESCRIBE→first-data window logged only via Debug.WriteLine
+        // and was invisible in production logs — a multi-second black box.
+        private SoftSled.Components.Diagnostics.Logger m_logger;
+        public SoftSled.Components.Diagnostics.Logger Logger { set { m_logger = value; } }
+        private readonly System.Diagnostics.Stopwatch _handshakeWall = new System.Diagnostics.Stopwatch();
+        private void LogTiming(string msg) {
+            try { m_logger?.LogInfo($"[rtsp-timing] +{_handshakeWall.ElapsedMilliseconds,5}ms  {msg}"); } catch { }
+        }
 
         Dictionary<int, WMFPayloadData> wmfPayloadDataDict = new Dictionary<int, WMFPayloadData>();
 
@@ -181,6 +194,13 @@ namespace SoftSled.Components.RTSP {
         // on the sync-controller dispatcher thread.
         private long _firstVideoMauWirePtsRaw = -1L;
 
+        // First audio/video MAU FILE-GLOBAL CONTENT time (ms), from the B57532D6 payload
+        // extension / NPT (see EventData.ContentMs). Unlike the RTP-Info play points
+        // (ASF Send Time), these share one presentation timeline, so their difference is
+        // the true epoch-free cross-stream A/V offset (see TryGetContentAvOffsetMs).
+        private long _firstVideoContentMs = -1L;
+        private long _firstAudioContentMs = -1L;
+
         // Per-stream play-point RTP timestamps from the PLAY response's
         // RTP-Info header (-1 = not seen). Each is its OWN stream's RTP clock.
         private long _audioRtpInfoRtptime = -1L;
@@ -253,6 +273,10 @@ namespace SoftSled.Components.RTSP {
                 if (System.Threading.Interlocked.CompareExchange(ref _firstVideoMauWirePtsRaw, unchecked((long)(uint)eventData.timestamp), -1L) == -1L) {
                     Debug.WriteLine($"[ext-sync-anchor] first video MAU rtpTs={eventData.timestamp}");
                 }
+                if (eventData.ContentMs >= 0
+                    && System.Threading.Interlocked.CompareExchange(ref _firstVideoContentMs, eventData.ContentMs, -1L) == -1L) {
+                    Debug.WriteLine($"[ext-sync-anchor] first video MAU contentMs={eventData.ContentMs}");
+                }
 
                 // Diagnostic tap for the Video FPS Lab — forwards the video
                 // elementary stream to a libav+D3DImage benchmark consumer when
@@ -276,7 +300,7 @@ namespace SoftSled.Components.RTSP {
                         }
                     }
                     try {
-                        _externalVideoMauArrived(eventData.data, eventData.timestamp);
+                        _externalVideoMauArrived(eventData.data, eventData.timestamp, eventData.ContentMs);
                     } catch (Exception ex) {
                         Debug.WriteLine($"[ext-video] mauArrived threw: {ex.Message}");
                     }
@@ -299,6 +323,10 @@ namespace SoftSled.Components.RTSP {
                 // videoDepacketizer.NalUnitReady above.
                 MonitorPts(isAudio: true, rtpTs: eventData.timestamp);
                 ArmDecoderOpenStopwatch();
+                if (eventData.ContentMs >= 0
+                    && System.Threading.Interlocked.CompareExchange(ref _firstAudioContentMs, eventData.ContentMs, -1L) == -1L) {
+                    Debug.WriteLine($"[ext-sync-anchor] first audio MAU contentMs={eventData.ContentMs}");
+                }
 
                 // External-audio consumer (Phase 2/3 of the FFME-bypass).
                 // When ExternalSyncMediaController is attached it owns
@@ -322,7 +350,7 @@ namespace SoftSled.Components.RTSP {
                         }
                     }
                     try {
-                        _externalAudioMauArrived(eventData.data, eventData.timestamp);
+                        _externalAudioMauArrived(eventData.data, eventData.timestamp, eventData.ContentMs);
                     } catch (Exception ex) {
                         Debug.WriteLine($"[ext-audio] mauArrived threw: {ex.Message}");
                     }
@@ -353,8 +381,41 @@ namespace SoftSled.Components.RTSP {
         /// since RTP-Info arrives with the PLAY response before any data).
         /// Logs all inputs to the always-on RTCP debug file.
         /// </summary>
-        public bool TryGetRtpInfoAvOffsetMs(uint firstAudioRtp, uint firstVideoRtp, out long offsetMs) {
+        /// <summary>Cross-stream A/V offset (ms) from the B57532D6 / NPT file-global CONTENT
+        /// clock: (audioFirstContent − videoFirstContent). Both are on the SHARED presentation
+        /// timeline (ASF Presentation Time, not the per-stream Send-Time RTP epoch), so this is
+        /// the true, epoch-free offset — no RTP-Info play points, no per-session drift. Sign
+        /// matches TryGetRtpInfoAvOffsetMs (negative ⇒ hold video later). Available once the
+        /// first MAU of each stream carrying a content extension/NPT has arrived; false until
+        /// then (or if the server doesn't populate the content clock).</summary>
+        public bool TryGetContentAvOffsetMs(out long offsetMs) => TryGetContentAvOffsetMs(out offsetMs, out _, out _);
+
+        /// <summary>As above, also returning the raw first-MAU content positions (ms) so the
+        /// controller can log them — to spot a file whose audio/video content clocks are NOT
+        /// on a shared epoch (which would make the difference meaningless).</summary>
+        public bool TryGetContentAvOffsetMs(out long offsetMs, out long audioContentMs, out long videoContentMs) {
             offsetMs = 0;
+            audioContentMs = System.Threading.Interlocked.Read(ref _firstAudioContentMs);
+            videoContentMs = System.Threading.Interlocked.Read(ref _firstVideoContentMs);
+            if (audioContentMs < 0 || videoContentMs < 0) return false;
+            offsetMs = audioContentMs - videoContentMs;
+            return true;
+        }
+
+        public bool TryGetRtpInfoAvOffsetMs(uint firstAudioRtp, uint firstVideoRtp, out long offsetMs)
+            => TryGetRtpInfoAvOffsetMs(firstAudioRtp, firstVideoRtp, out offsetMs, out _);
+
+        /// <summary>As above, but also returns <paramref name="videoPadMs"/> =
+        /// (video play-point − first video MAU), i.e. how far the first delivered
+        /// video frame sits PAST the RTP-Info play point (the first-I-frame lead-in
+        /// gap). For H.264 the correct hold is ~2× this pad, so the controller adds
+        /// a second vPad as the codec trim — empirically the RTP-Info play-point
+        /// method counts the video lead-in once when WMPNss needs it twice (see
+        /// ExternalSyncMediaController.UpdateSyncOffset). Diagnostic-derived; no
+        /// per-file trim required.</summary>
+        public bool TryGetRtpInfoAvOffsetMs(uint firstAudioRtp, uint firstVideoRtp, out long offsetMs, out long videoPadMs) {
+            offsetMs = 0;
+            videoPadMs = 0;
             long aInfo = System.Threading.Interlocked.Read(ref _audioRtpInfoRtptime);
             long vInfo = System.Threading.Interlocked.Read(ref _videoRtpInfoRtptime);
             if (aInfo < 0 || vInfo < 0) return false;
@@ -366,9 +427,30 @@ namespace SoftSled.Components.RTSP {
             long vPadMs = vPadTicks * 1000L / vClk;
             long aPadMs = aPadTicks * 1000L / aClk;
             offsetMs = vPadMs - aPadMs;
+            videoPadMs = vPadMs;
             RtcpDiagLog($"rtpinfo-offset vInfo={vInfo} V0={firstVideoRtp} vPad={vPadMs}ms " +
                         $"aInfo={aInfo} A0={firstAudioRtp} aPad={aPadMs}ms vClk={vClk} aClk={aClk} " +
                         $"→ offset={offsetMs}ms");
+            return true;
+        }
+
+        /// <summary>The cross-stream RTP epoch in ms: (video play-point) −
+        /// (audio play-point) from the current RTP-Info. Both play points map to
+        /// the SAME npt/content position, so this difference is the fixed offset
+        /// between the two streams' RTP clocks — constant for the session (the
+        /// clocks free-run and seeks don't reset them). Measured once at initial
+        /// play, it lets the epoch-invariant sync mode compute each seek's offset
+        /// from the stored epoch + the fresh first-frame origins, rather than
+        /// re-deriving it from post-seek RTP-Info that WMPNss may report
+        /// inconsistently.</summary>
+        public bool TryGetRtpInfoEpochMs(out long epochMs) {
+            epochMs = 0;
+            long aInfo = System.Threading.Interlocked.Read(ref _audioRtpInfoRtptime);
+            long vInfo = System.Threading.Interlocked.Read(ref _videoRtpInfoRtptime);
+            if (aInfo < 0 || vInfo < 0) return false;
+            long aClk = _audioClockHz > 0 ? _audioClockHz : 90000L;
+            long vClk = _videoClockHz > 0 ? _videoClockHz : 90000L;
+            epochMs = (vInfo * 1000L / vClk) - (aInfo * 1000L / aClk);
             return true;
         }
 
@@ -383,7 +465,11 @@ namespace SoftSled.Components.RTSP {
         // packet (the codec is known from SDP at that point);
         // _externalAudioMauArrived fires for each MAU.
         private Action<SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat> _externalAudioCodecCommit;
-        private Action<byte[], uint> _externalAudioMauArrived;
+        // (data, rtpTs, contentMs) — contentMs is the B57/NPT file-global content
+        // presentation time of the MAU in ms, or -1 when the wire carries none.
+        // Passed per-MAU so the consumer can pair a content value with the exact
+        // MAU (and hence the exact wire timestamp) it belongs to.
+        private Action<byte[], uint, long> _externalAudioMauArrived;
         private bool _externalAudioCodecFired;
 
         /// <summary>
@@ -397,7 +483,7 @@ namespace SoftSled.Components.RTSP {
         /// </summary>
         public void SetExternalAudioConsumer(
             Action<SoftSled.Components.AudioVisual.ExternalSync.ExternalAudioFormat> codecCommit,
-            Action<byte[], uint> mauArrived) {
+            Action<byte[], uint, long> mauArrived) {
             _externalAudioCodecCommit = codecCommit;
             _externalAudioMauArrived = mauArrived;
             _externalAudioCodecFired = false;   // re-arm for a new consumer
@@ -415,7 +501,8 @@ namespace SoftSled.Components.RTSP {
         // present via D3DImage. codecCommit fires once on the first MAU with
         // the committed wire codec string; mauArrived fires per MAU.
         private Action<string> _externalVideoCodecCommit;
-        private Action<byte[], uint> _externalVideoMauArrived;
+        // (data, rtpTs, contentMs) — see the audio counterpart above.
+        private Action<byte[], uint, long> _externalVideoMauArrived;
         private bool _externalVideoCodecFired;
 
         /// <summary>
@@ -427,7 +514,7 @@ namespace SoftSled.Components.RTSP {
         /// </summary>
         public void SetExternalVideoConsumer(
             Action<string> codecCommit,
-            Action<byte[], uint> mauArrived) {
+            Action<byte[], uint, long> mauArrived) {
             _externalVideoCodecCommit = codecCommit;
             _externalVideoMauArrived = mauArrived;
             _externalVideoCodecFired = false;   // re-arm for a new consumer
@@ -570,8 +657,17 @@ namespace SoftSled.Components.RTSP {
 
             Rtsp.RtspUtils.RegisterUri();
 
+            // Anchor the startup-latency clock at the very start of Connect so
+            // the TCP connect + DESCRIBE round-trip are included in the timeline.
+            _handshakeWall.Restart();
+            LogTiming("Connect() — opening RTSP socket");
+
             System.Diagnostics.Debug.WriteLine("Connecting to " + url);
             this.url = url;
+            // Per-play diagnostic tag (timestamp + mediaid) — every RTSP diag file
+            // for this play is named with it, so plays don't overwrite each other
+            // and each log links back to its PLAY request. Set before any dumper opens.
+            _diagTag = BuildDiagTag(url);
 
             Uri uri = new Uri(this.url);
             hostname = uri.Host;
@@ -600,12 +696,13 @@ namespace SoftSled.Components.RTSP {
             }
 
             rtsp_socket_status = RTSP_STATUS.Connected;
+            LogTiming("TCP connected");
 
             // Phase-0 wire dump: when SOFTSLED_RTSP_WIRE_DUMP=1 every byte
             // read/written on this socket is teed into %TEMP%\softsled-rtsp-wire.log
             // so we can extract the DESCRIBE response and decide between SDP
             // pgmpu and in-band ASF header strategies. No-op when env var is unset.
-            Rtsp.IRtspTransport listenerTransport = SoftSled.Components.Diagnostics.RtspWireDumper.MaybeWrap(rtsp_socket, null);
+            Rtsp.IRtspTransport listenerTransport = SoftSled.Components.Diagnostics.RtspWireDumper.MaybeWrap(rtsp_socket, null, _diagTag);
 
             // Connect a RTSP Listener to the RTSP Socket (or other Stream) to send RTSP messages and listen for RTSP replies
             rtsp_client = new Rtsp.RtspListener(listenerTransport);
@@ -626,11 +723,11 @@ namespace SoftSled.Components.RTSP {
                 // first 128B of payload to %TEMP%\softsled-rtp-wire.log when
                 // SOFTSLED_RTSP_WIRE_DUMP=1. Capped at 200 packets/label so a
                 // long playback doesn't fill disk.
-                SoftSled.Components.Diagnostics.RtspWireDumper.AttachUdpTap(video_udp_pair, "video", null);
+                SoftSled.Components.Diagnostics.RtspWireDumper.AttachUdpTap(video_udp_pair, "video", null, _diagTag);
                 video_udp_pair.DataReceived += Rtp_VideoDataReceived;
                 video_udp_pair.Start(); // start listening for data on the UDP ports
                 audio_udp_pair = new Rtsp.UDPSocket(50000, 51000); // give a range of 500 pairs (1000 addresses) to try incase some address are in use
-                SoftSled.Components.Diagnostics.RtspWireDumper.AttachUdpTap(audio_udp_pair, "audio", null);
+                SoftSled.Components.Diagnostics.RtspWireDumper.AttachUdpTap(audio_udp_pair, "audio", null, _diagTag);
                 audio_udp_pair.DataReceived += Rtp_AudioDataReceived;
                 audio_udp_pair.Start(); // start listening for data on the UDP ports
             }
@@ -649,6 +746,7 @@ namespace SoftSled.Components.RTSP {
             describe_message.AddHeader(SupportedHeader);
             describe_message.AddHeader(UserAgent);
             rtsp_client.SendMessage(describe_message);
+            LogTiming("DESCRIBE sent");
         }
 
         public void Pause() {
@@ -858,6 +956,7 @@ namespace SoftSled.Components.RTSP {
             }
 
             rtsp_client.SendMessage(play_message);
+            LogTiming($"PLAY sent (startMs={startMs} rate={rate:0.###})");
         }
 
         /// <summary>
@@ -1140,6 +1239,8 @@ namespace SoftSled.Components.RTSP {
             _audioClockHz = 0;
             _videoClockHz = 0;
             System.Threading.Interlocked.Exchange(ref _firstVideoMauWirePtsRaw, -1L);
+            System.Threading.Interlocked.Exchange(ref _firstVideoContentMs, -1L);
+            System.Threading.Interlocked.Exchange(ref _firstAudioContentMs, -1L);
             System.Threading.Interlocked.Exchange(ref _audioRtpInfoRtptime, -1L);
             System.Threading.Interlocked.Exchange(ref _videoRtpInfoRtptime, -1L);
             _pipelinesCommitted = false;
@@ -1226,6 +1327,18 @@ namespace SoftSled.Components.RTSP {
         /// cross-stream A/V offset in ms. Logged-cross-check value promoted to a
         /// live driver: the controller slews the pacer to it.</summary>
         public event Action<long> CorrespondenceOffsetReady;
+
+        /// <summary>Latest Correspondence-derived cross-stream offset estimate (ms),
+        /// if the steady-state fit has produced one this media. Read-only diagnostic
+        /// accessor so the controller can log it as a candidate alongside RTP-Info
+        /// and the direct diff. Returns false until an estimate exists.</summary>
+        public bool TryGetCorrespondenceOffsetMs(out long offsetMs) {
+            lock (_corrLock) {
+                if (double.IsNaN(_corrLastEstimate)) { offsetMs = 0; return false; }
+                offsetMs = (long)Math.Round(_corrLastEstimate);
+                return true;
+            }
+        }
 
         /// <summary>Clear the Correspondence-offset estimator's accumulated fit.
         /// Called on seek: the seek changes both streams' timeline, so pre-seek
@@ -1755,9 +1868,18 @@ namespace SoftSled.Components.RTSP {
                     RtcpDiagLog($"rtp-info UNKNOWN-URL entry='{trimmed}'");
                 }
             }
-            // New RTP-Info parsed (initial or post-seek) → bump generation so
-            // the controller knows the post-seek play-point timestamps are now
-            // available and it can safely re-anchor.
+            // New RTP-Info parsed (initial or post-seek) → the first-MAU CONTENT
+            // anchors belong to the PREVIOUS position, so reset them for re-latch
+            // on the new position's first MAUs. Without this they stayed latched
+            // from the initial play (only Stop() cleared them) and every post-seek
+            // offset recompute reused the initial position's content offset.
+            // Safe ordering: RTP is interleaved on the same TCP stream, so any
+            // stale pre-seek MAU arrives BEFORE this response parse and cannot
+            // re-latch after the reset.
+            System.Threading.Interlocked.Exchange(ref _firstAudioContentMs, -1L);
+            System.Threading.Interlocked.Exchange(ref _firstVideoContentMs, -1L);
+            // Bump generation so the controller knows the post-seek play-point
+            // timestamps are now available and it can safely re-anchor.
             System.Threading.Interlocked.Increment(ref _rtpInfoGeneration);
         }
 
@@ -1891,6 +2013,7 @@ namespace SoftSled.Components.RTSP {
             RtspData data_received = e.Message as RtspData;
             try {
                 if (System.Threading.Interlocked.Exchange(ref _vidRecvLoggedOnce, 1) == 0) {
+                    LogTiming("FIRST video RTP datagram");
                     int pt = e.Message.Data.Length > 1 ? (e.Message.Data[1] & 0x7F) : -1;
                     CommitDiagLog($"Rtp_VideoDataReceived: FIRST chan={data_received.Channel} pt={pt} " +
                                   $"video_data_channel={video_data_channel} video_rtcp_channel={video_rtcp_channel} " +
@@ -1920,6 +2043,7 @@ namespace SoftSled.Components.RTSP {
             RtspData data_received = e.Message as RtspData;
             try {
                 if (System.Threading.Interlocked.Exchange(ref _audRecvLoggedOnce, 1) == 0) {
+                    LogTiming("FIRST audio RTP datagram");
                     int pt = e.Message.Data.Length > 1 ? (e.Message.Data[1] & 0x7F) : -1;
                     CommitDiagLog($"Rtp_AudioDataReceived: FIRST chan={data_received.Channel} pt={pt} " +
                                   $"audio_data_channel={audio_data_channel} audio_rtcp_channel={audio_rtcp_channel} " +
@@ -2186,7 +2310,9 @@ namespace SoftSled.Components.RTSP {
                             Debug.WriteLine($"[ext-audio] codecCommit threw: {ex.Message}");
                         }
                     }
-                    try { _externalAudioMauArrived(frame, rtp_timestamp); } catch (Exception ex) {
+                    // RFC 2250 MPA framing carries no WMRTP payload extensions,
+                    // so there is no content clock on this path (-1).
+                    try { _externalAudioMauArrived(frame, rtp_timestamp, -1L); } catch (Exception ex) {
                         Debug.WriteLine($"[ext-audio] mauArrived threw: {ex.Message}");
                     }
                     return;
@@ -2411,6 +2537,7 @@ namespace SoftSled.Components.RTSP {
                     Debug.WriteLine("Got Error in DESCRIBE Reply " + message.ReturnCode + " " + message.ReturnMessage);
                     return;
                 }
+                LogTiming("DESCRIBE response received");
 
                 // If Keepalive Timer hasn't been configured
                 if (keepalive_timer == null) {
@@ -2711,6 +2838,7 @@ namespace SoftSled.Components.RTSP {
                 // Send the FIRST SETUP message and remove it from the list of Setup Messages
                 rtsp_client.SendMessage(setup_messages[0]);
                 setup_messages.RemoveAt(0);
+                LogTiming($"SETUP sent (first; {setup_messages.Count} more queued)");
             }
 
 
@@ -2724,6 +2852,7 @@ namespace SoftSled.Components.RTSP {
                     Debug.WriteLine("Got Error in SETUP Reply " + message.ReturnCode + " " + message.ReturnMessage);
                     return;
                 }
+                LogTiming("SETUP response received");
 
                 Debug.WriteLine("Got reply from Setup. Session is " + message.Session);
 
@@ -2854,6 +2983,7 @@ namespace SoftSled.Components.RTSP {
                     next_setup.AddHeader(SupportedHeader);
                     next_setup.AddHeader(UserAgent);
                     rtsp_client.SendMessage(next_setup);
+                    LogTiming($"SETUP sent (next; {setup_messages.Count - 1} more queued)");
 
                     setup_messages.RemoveAt(0);
                 } else {
@@ -2876,6 +3006,7 @@ namespace SoftSled.Components.RTSP {
                     Debug.WriteLine("Got Error in PLAY Reply " + message.ReturnCode + " " + message.ReturnMessage);
                     return;
                 }
+                LogTiming("PLAY response received — server should now start RTP");
 
                 // RTP-Info gives per-stream (seq, rtptime) for the first
                 // packet the server will send on each track. The rtptime
@@ -3116,9 +3247,35 @@ namespace SoftSled.Components.RTSP {
             }
         }
 
+        // Per-play diagnostic tag (timestamp + mediaid) set in Connect(). All the
+        // RTSP diag files for one play are named with it so successive plays don't
+        // overwrite each other and each file links back to its PLAY request.
+        private string _diagTag;
+
+        /// <summary>Build the per-play tag: "yyyyMMdd-HHmmss" plus the first 8 hex
+        /// chars of the request's mediaid (if present), e.g. 20260715-104530-f9b58a22.</summary>
+        private static string BuildDiagTag(string url) {
+            string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            try {
+                var m = System.Text.RegularExpressions.Regex.Match(
+                    url ?? "", "mediaid=([0-9A-Fa-f]{8})",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (m.Success) return stamp + "-" + m.Groups[1].Value;
+            } catch { }
+            return stamp;
+        }
+
+        /// <summary>Insert <see cref="_diagTag"/> before the extension of a diag file name.</summary>
+        private string TagFileName(string baseName) {
+            if (string.IsNullOrEmpty(_diagTag)) return baseName;
+            int dot = baseName.LastIndexOf('.');
+            return dot < 0 ? baseName + "-" + _diagTag
+                           : baseName.Substring(0, dot) + "-" + _diagTag + baseName.Substring(dot);
+        }
+
         // Diagnostic log for the wire-commit / FinalizePipelineSetup /
         // TrySetupMpegPsPipeline chain — written unconditionally to
-        // <configured-log-dir>/rtsp/softsled-commit-debug.log. Helps diagnose
+        // <configured-log-dir>/rtsp/softsled-commit-debug-<tag>.log. Helps diagnose
         // "RTP arriving but pipeline never commits" bugs by tracing exactly
         // which branch the pipeline-setup state machine takes.
         private System.IO.StreamWriter _commitDiagLog;
@@ -3127,14 +3284,14 @@ namespace SoftSled.Components.RTSP {
                 if (_commitDiagLog == null) {
                     string path = System.IO.Path.Combine(
                         ResolveRtspDiagDir(),
-                        "softsled-commit-debug.log");
+                        TagFileName("softsled-commit-debug.log"));
                     _commitDiagLog = new System.IO.StreamWriter(
                         new System.IO.FileStream(path,
                             System.IO.FileMode.Create,
                             System.IO.FileAccess.Write,
                             System.IO.FileShare.Read),
                         System.Text.Encoding.ASCII) { AutoFlush = true };
-                    _commitDiagLog.WriteLine($"# commit-debug, started {DateTime.Now:HH:mm:ss.fff}");
+                    _commitDiagLog.WriteLine($"# commit-debug, started {DateTime.Now:HH:mm:ss.fff}  url={url}");
                 }
                 _commitDiagLog.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {line}");
             } catch { /* never break the wire path because diag fails */ }
@@ -3148,14 +3305,14 @@ namespace SoftSled.Components.RTSP {
             if (_rtcpDiagLog != null) return;
             try {
                 string path = System.IO.Path.Combine(ResolveRtspDiagDir(),
-                                                     "softsled-rtcp-debug.log");
+                                                     TagFileName("softsled-rtcp-debug.log"));
                 _rtcpDiagLog = new System.IO.StreamWriter(
                     new System.IO.FileStream(path, System.IO.FileMode.Create,
                                              System.IO.FileAccess.Write,
                                              System.IO.FileShare.Read),
                     System.Text.Encoding.ASCII);
                 _rtcpDiagLog.AutoFlush = true;
-                _rtcpDiagLog.WriteLine($"# RTCP send-loop diagnostic, started {DateTime.Now:HH:mm:ss.fff}");
+                _rtcpDiagLog.WriteLine($"# RTCP send-loop diagnostic, started {DateTime.Now:HH:mm:ss.fff}  url={url}");
                 _rtcpDiagLog.WriteLine($"# columns: timestamp tick event details");
             } catch (Exception ex) {
                 Debug.WriteLine($"[rtcp-diag] log open failed: {ex.Message}");

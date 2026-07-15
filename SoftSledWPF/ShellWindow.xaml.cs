@@ -188,6 +188,12 @@ namespace SoftSledWPF {
 
         // ---- Keyboard routing -----------------------------------------
 
+        // ---- Keyboard hold diagnostics (temporary instrumentation) ------
+        private readonly System.Diagnostics.Stopwatch _kbHoldClock = System.Diagnostics.Stopwatch.StartNew();
+        private Key  _kbHoldKey = Key.None;
+        private long _kbHoldDownMs;
+        private int  _kbHoldRepeats;
+
         private void ShellWindow_PreviewKeyDown(object sender, KeyEventArgs e) {
             // Remote "learn" capture wins over EVERYTHING (incl. F11/F12 and the
             // ESC=leave-session gesture) so any key — ESC, F12, … — can be bound
@@ -199,6 +205,24 @@ namespace SoftSledWPF {
                     _remote.TryCompleteLearnWithKey(RemoteCommandCatalog.KeyboardUsageKey((int)lk))) {
                     e.Handled = true;
                     return;
+                }
+            }
+
+            // Keyboard hold diagnostics (any page). Records DOWN on first press,
+            // auto-repeat counts while held, and the total held time on UP — so we
+            // can characterise hold gestures for keyboard-sourced buttons (ESC/F12).
+            {
+                Key hk = e.Key == Key.System ? e.SystemKey : e.Key;
+                if (!IsModifierKey(hk)) {
+                    if (e.IsRepeat && hk == _kbHoldKey) {
+                        _kbHoldRepeats++;
+                        _logger?.LogDebug($"[hold] KBD repeat {hk} #{_kbHoldRepeats} at {_kbHoldClock.ElapsedMilliseconds - _kbHoldDownMs}ms");
+                    } else if (!e.IsRepeat) {
+                        _kbHoldKey = hk;
+                        _kbHoldDownMs = _kbHoldClock.ElapsedMilliseconds;
+                        _kbHoldRepeats = 0;
+                        _logger?.LogInfo($"[hold] KBD DOWN {hk}");
+                    }
                 }
             }
 
@@ -313,6 +337,16 @@ namespace SoftSledWPF {
         }
 
         private void ShellWindow_PreviewKeyUp(object sender, KeyEventArgs e) {
+            // Hold diagnostics: log the total held time on release.
+            {
+                Key hk = e.Key == Key.System ? e.SystemKey : e.Key;
+                if (hk == _kbHoldKey) {
+                    long ms = _kbHoldClock.ElapsedMilliseconds - _kbHoldDownMs;
+                    _logger?.LogInfo($"[hold] KBD UP {hk} heldMs={ms} repeats={_kbHoldRepeats}");
+                    _kbHoldKey = Key.None;
+                }
+            }
+
             // Session-only: forward key-up so the host sees clean
             // press/release pairs.
             if (CurrentPage is ExtenderSessionControl session) {

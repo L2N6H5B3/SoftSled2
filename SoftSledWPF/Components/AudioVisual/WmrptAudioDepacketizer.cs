@@ -43,6 +43,10 @@ namespace SoftSled.Components.AudioVisual {
         private const int F_LAST_FRAGMENT   = 2;
         private const int F_COMPLETE_MAU    = 3;
 
+        // Type-4 payload extension: first 8 bytes (LE) = B57532D6, a 10 MHz (100 ns)
+        // file-global content clock → content-ms (the shared cross-stream timeline).
+        private const int EXT_TYPE_CONTENT  = 4;
+
         private class StreamState {
             public List<byte[]> Fragments;
             public ushort?      ExpectedNextSeq;
@@ -50,6 +54,7 @@ namespace SoftSled.Components.AudioVisual {
             public bool         FirstFragmentDiscont;
             public bool         FirstFragmentEncrypt;
             public uint         FirstFragmentTs;
+            public long         FirstFragmentContentMs;
             public bool         PendingPostLossFlag;
         }
 
@@ -77,6 +82,11 @@ namespace SoftSled.Components.AudioVisual {
             (uint)((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]);
         private static ulong ReadU64(byte[] b, int o) =>
             ((ulong)ReadU32(b, o) << 32) | ReadU32(b, o + 4);
+        private static ulong ReadU64LE(byte[] b, int o) {
+            ulong v = 0;
+            for (int i = 7; i >= 0; i--) v = (v << 8) | b[o + i];
+            return v;
+        }
         private static double NtpToSeconds(ulong ntp) =>
             (ntp >> 32) + (ntp & 0xFFFFFFFF) / 4294967296.0;
 
@@ -150,6 +160,7 @@ namespace SoftSled.Components.AudioVisual {
                                         long sendTime, bool hasCorr, ulong corrNtp, uint corrRtp,
                                         out bool emittedMau) {
             emittedMau = false;
+            long contentMs = -1;   // B57/NPT file-global content presentation time (ms); -1 if absent
 
             byte bitField2 = buf[currentOffset++];
             int  fragType   = (bitField2 & BF2_F_MASK) >> BF2_F_SHIFT;
@@ -187,6 +198,7 @@ namespace SoftSled.Components.AudioVisual {
                 if (d3Present) { if (currentOffset + 4 <= bufLen) decodeTime = ReadU32(buf, currentOffset); currentOffset += 4; }
                 if (pPresent)  { if (currentOffset + 4 <= bufLen) presTime   = ReadU32(buf, currentOffset); currentOffset += 4; }
                 if (nPresent)  { if (currentOffset + 8 <= bufLen) { npt = ReadU64(buf, currentOffset); hasNpt = true; } currentOffset += 8; }
+                if (hasNpt) contentMs = (long)npt;   // NPT is plain content-ms; B57 (below) overrides
                 if (hasCorr && TimingSample != null
                     && (fragType == F_FIRST_FRAGMENT || fragType == F_COMPLETE_MAU)) {
                     try { TimingSample(NtpToSeconds(corrNtp), rtpTs); } catch { }
@@ -215,7 +227,10 @@ namespace SoftSled.Components.AudioVisual {
                         }
                         byte extHeader = buf[currentOffset++];
                         bool lastExt   = (extHeader & 0x80) != 0;
+                        byte extType   = (byte)(extHeader & 0x7F);
                         byte extLength = buf[currentOffset++];
+                        if (extType == EXT_TYPE_CONTENT && extLength >= 8 && currentOffset + 8 <= bufLen)
+                            contentMs = (long)(ReadU64LE(buf, currentOffset) / 10000UL);   // B57 10 MHz → ms
                         currentOffset += extLength;
                         if (currentOffset > bufLen) return false;
                         if (lastExt) break;
@@ -261,7 +276,7 @@ namespace SoftSled.Components.AudioVisual {
                         Trace.WriteLine($"WMRTP Audio Warning SN {seqNum}: F=3 received while assembling — discarding {stream.Fragments.Count} prior frags");
                         stream.Fragments = null;
                     }
-                    EmitMau(data, rtpTs, sBit, d1Bit || stream.PendingPostLossFlag, eBit, stream.PendingPostLossFlag);
+                    EmitMau(data, rtpTs, sBit, d1Bit || stream.PendingPostLossFlag, eBit, stream.PendingPostLossFlag, contentMs);
                     stream.PendingPostLossFlag = false;
                     emittedMau = true;
                     break;
@@ -274,6 +289,7 @@ namespace SoftSled.Components.AudioVisual {
                     stream.FirstFragmentDiscont = d1Bit;
                     stream.FirstFragmentEncrypt = eBit;
                     stream.FirstFragmentTs      = rtpTs;
+                    stream.FirstFragmentContentMs = contentMs;
                     break;
 
                 case F_MIDDLE_FRAGMENT:
@@ -298,7 +314,8 @@ namespace SoftSled.Components.AudioVisual {
                                     stream.FirstFragmentSync,
                                     stream.FirstFragmentDiscont || stream.PendingPostLossFlag,
                                     stream.FirstFragmentEncrypt,
-                                    stream.PendingPostLossFlag);
+                                    stream.PendingPostLossFlag,
+                                    stream.FirstFragmentContentMs);
                             stream.PendingPostLossFlag = false;
                             emittedMau = true;
                         } catch (Exception ex) {
@@ -333,7 +350,7 @@ namespace SoftSled.Components.AudioVisual {
             return result;
         }
 
-        private void EmitMau(byte[] mau, uint ts, bool syncPoint, bool discontinuity, bool encrypted, bool postLoss) {
+        private void EmitMau(byte[] mau, uint ts, bool syncPoint, bool discontinuity, bool encrypted, bool postLoss, long contentMs = -1) {
             if (mau == null || mau.Length == 0) return;
             // Audio block-alignment hint (16-bit stereo = 4 bytes/frame). Misalignment after a
             // post-loss reassembly would produce L/R channel swap or static.
@@ -346,6 +363,7 @@ namespace SoftSled.Components.AudioVisual {
                 Discontinuity = discontinuity,
                 Encrypted     = encrypted,
                 PostLoss      = postLoss,
+                ContentMs     = contentMs,
             });
         }
 
@@ -381,5 +399,13 @@ namespace SoftSled.Components.AudioVisual {
         /// <summary>This MAU was emitted directly after a packet-loss event. Consumer should
         /// probably skip it unless <see cref="SyncPoint"/> is also true (for video).</summary>
         public bool PostLoss { get; set; }
+
+        /// <summary>File-global CONTENT presentation time of this MAU, in ms, decoded from
+        /// the type-4 payload extension (the B57532D6 ASF payload-extension system, a 10 MHz
+        /// / 100 ns clock) — falling back to the NPT field. -1 if neither is present. Unlike
+        /// <see cref="timestamp"/> (a per-stream RTP epoch = ASF Send Time), this is the shared
+        /// presentation timeline, so (videoContentMs − audioContentMs) is the true, epoch-free
+        /// cross-stream A/V offset. See ExternalSyncMediaController / RTSPClient.</summary>
+        public long ContentMs { get; set; } = -1;
     }
 }

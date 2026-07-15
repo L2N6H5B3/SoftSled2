@@ -221,6 +221,7 @@
     <Compile Include="Components\AudioVisual\VideoFpsLab\PtsFramePacer.cs" />
     <Compile Include="Components\AudioVisual\VideoFpsLab\D3DImagePresenter.cs" />
     <Compile Include="Components\AudioVisual\VideoFpsLab\FfmpegRuntime.cs" />
+    <Compile Include="Components\AudioVisual\ExternalSync\AvSyncPolicy.cs" />
     <Compile Include="Components\AudioVisual\ExternalSync\ExternalAudioFormat.cs" />
     <Compile Include="Components\AudioVisual\ExternalSync\LibAvAudioDecoder.cs" />
     <Compile Include="Components\AudioVisual\ExternalSync\NAudioMasterRenderer.cs" />

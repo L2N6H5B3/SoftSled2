@@ -922,7 +922,7 @@ namespace SoftSled.Components.VirtualChannel {
                                 // WMPNss/McxDMS. Reverted to 0.
                                 byte[] trickModeResponse = DSLRCommunication.GetDWORDPropertyResponse(
                                     dispatchRequestHandleArray,
-                                    0
+                                    1
                                 );
                                 // Encapsulate the Response (Doesn't seem to work without this?)
                                 byte[] encapsulatedTrickModeResponse = DSLRCommunication.Encapsulate(trickModeResponse);

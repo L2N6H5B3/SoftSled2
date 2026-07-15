@@ -95,6 +95,12 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             SizeBufferForOffset(offsetMs, slew: false);
         }
 
+        /// <summary>The sync offset currently in effect (ms). Diagnostic
+        /// (av-timing): the pacer releases a frame when
+        /// <c>elapsed &lt;= master + this</c>, so on-screen video content ≈
+        /// <c>master + this</c>.</summary>
+        public long CurrentSyncOffsetMs => System.Threading.Interlocked.Read(ref _syncOffsetMs);
+
         /// <summary>Ease the offset toward <paramref name="target"/> at
         /// <see cref="OffsetSlewMsPerSec"/> (done in the release loop) so an
         /// auto-correction lands as a brief, smooth video speed nudge rather
@@ -190,6 +196,14 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         public long Released   => Interlocked.Read(ref _released);
         public long Underflows => Interlocked.Read(ref _underflows);
         public long Dropped    => Interlocked.Read(ref _dropped);
+
+        /// <summary>PTS (relative to the anchor frame, ms) of the most recently
+        /// RELEASED video frame — i.e. the video content the pacer believes is
+        /// on screen now. Diagnostic: the controller's [av-timing] snapshot
+        /// compares this against the audio master clock to expose the residual
+        /// A/V skew the pacer's own drift accounting can't see (release→present
+        /// and master→audible latencies).</summary>
+        public long LastReleasedElapsedMs { get { lock (_gate) { return _lastReleasedElapsed; } } }
 
         /// <summary>Largest gap (ms) between consecutive released frames since
         /// the last read. Reading resets it. Ideal ≈ the frame period (~40 ms).</summary>

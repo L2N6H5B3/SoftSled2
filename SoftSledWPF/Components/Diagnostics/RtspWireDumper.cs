@@ -86,19 +86,30 @@ namespace SoftSled.Components.Diagnostics {
         private const int PayloadHexBytes    = 128;
 
         private static StreamWriter _rtpLog;
+        private static string _rtpTag;   // the play tag the current _rtpLog belongs to
         private static readonly object _rtpLogGate = new object();
         private static readonly Stopwatch _rtpLogSw = Stopwatch.StartNew();
         // Per-(label, port) packet counter for the cap.
         private static readonly System.Collections.Generic.Dictionary<string, int> _rtpCounts
             = new System.Collections.Generic.Dictionary<string, int>();
 
+        /// <summary>Insert a per-play <paramref name="tag"/> before the extension so each
+        /// play gets its own file (e.g. softsled-rtp-wire-20260715-104530-f9b58a22.log)
+        /// instead of overwriting a single fixed name. Null/empty tag → base name.</summary>
+        private static string TaggedName(string baseName, string tag) {
+            if (string.IsNullOrEmpty(tag)) return baseName;
+            int dot = baseName.LastIndexOf('.');
+            return dot < 0 ? baseName + "-" + tag
+                           : baseName.Substring(0, dot) + "-" + tag + baseName.Substring(dot);
+        }
+
         /// <summary>
         /// Subscribe a packet-dumping handler to the given UDP socket pair's
         /// DataReceived event. No-op when the env-var toggle is off.
         /// </summary>
-        public static void AttachUdpTap(Rtsp.UDPSocket pair, string label, Logger log) {
+        public static void AttachUdpTap(Rtsp.UDPSocket pair, string label, Logger log, string tag = null) {
             if (!IsEnabled || pair == null) return;
-            EnsureRtpLog(log);
+            EnsureRtpLog(log, tag);
             pair.DataReceived += (sender, e) => {
                 try {
                     var data = e.Message as Rtsp.Messages.RtspData;
@@ -110,10 +121,20 @@ namespace SoftSled.Components.Diagnostics {
             };
         }
 
-        private static void EnsureRtpLog(Logger log) {
+        private static void EnsureRtpLog(Logger log, string tag) {
             lock (_rtpLogGate) {
+                // New play (tag changed) → close the old capture and start a fresh
+                // per-play file so earlier plays' RTP dumps are preserved (and the
+                // 200-packet cap counters reset for the new play).
+                if (_rtpLog != null && tag != _rtpTag) {
+                    try { _rtpLog.Dispose(); } catch { }
+                    _rtpLog = null;
+                    _rtpCounts.Clear();
+                    _rtpLogSw.Restart();   // per-play @+Xs timestamps start near 0
+                }
                 if (_rtpLog != null) return;
-                string path = DumpFilePath("softsled-rtp-wire.log");
+                _rtpTag = tag;
+                string path = DumpFilePath(TaggedName("softsled-rtp-wire.log", tag));
                 try {
                     _rtpLog = new StreamWriter(
                         new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read),
@@ -207,14 +228,13 @@ namespace SoftSled.Components.Diagnostics {
         /// Wraps the given transport with a tee if the env-var toggle is set;
         /// otherwise returns the transport unchanged.
         /// </summary>
-        public static IRtspTransport MaybeWrap(IRtspTransport inner, Logger log) {
+        public static IRtspTransport MaybeWrap(IRtspTransport inner, Logger log, string tag = null) {
             if (!IsEnabled) return inner;
 
-            string path = DumpFilePath("softsled-rtsp-wire.log");
+            string path = DumpFilePath(TaggedName("softsled-rtsp-wire.log", tag));
             try {
-                // Truncate on each new session so the dump corresponds to the
-                // most recent reproduction. Keeping a rolling history isn't
-                // worth the extra parsing burden for a debug aid.
+                // Per-play file (tagged with timestamp+mediaid) so each play's wire
+                // transcript is preserved instead of overwriting a single fixed name.
                 FileStream fs = new FileStream(path, FileMode.Create,
                                                FileAccess.Write, FileShare.Read);
                 var sink = new TimestampedTeeSink(fs);
