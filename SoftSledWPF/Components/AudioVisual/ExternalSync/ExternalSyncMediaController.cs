@@ -446,16 +446,14 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 AVCodecID id = MapWireCodec(wireCodec);
                 int clockHz = MapClockHz(wireCodec);
                 _videoClockHz = clockHz;
-                // Codec-specific A/V trim. H.264: the RTP-Info play-point method
-                // counts the video first-I-frame lead-in (vPad) ONCE, but WMPNss
-                // needs it counted TWICE — so UpdateSyncOffset derives an extra
-                // vPad per-file below; H264ExtraSyncOffsetMs is only a small
-                // residual constant on top. MPEG-2 stays 0 (working sync untouched).
+                // Codec trim starts at 0. With the B57 content clock (the normal
+                // case) no per-codec residual exists — the honest master clock +
+                // timestamp-faithful audio feed made every recording sync at the
+                // content offset alone. UpdateSyncOffset only sets a codec trim
+                // on the H.264 RTP-Info FALLBACK path (no content clock), where
+                // it carries the derived vPad selection.
                 _videoIsH264 = (id == AVCodecID.AV_CODEC_ID_H264);
-                Interlocked.Exchange(ref _videoCodecTrimMs,
-                    _videoIsH264 ? H264ExtraSyncOffsetMs : 0L);   // refined with derived vPad in UpdateSyncOffset
-                _log?.LogInfo($"[ext-sync] video codec trim (pre-vPad) = {Interlocked.Read(ref _videoCodecTrimMs)}ms " +
-                              $"(codec={id})");
+                Interlocked.Exchange(ref _videoCodecTrimMs, 0L);
 
                 _pacer = new PtsFramePacer(
                     (ptr, stride, w, h) => _presenter?.SubmitFrame(ptr, stride, w, h),
@@ -623,7 +621,9 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                                   (vSkipMs != 0 ? $" [decode-skip corrected +{vSkipMs}ms]" : "") +
                                   $"; rtpinfo was {rtpInfoCandidate}ms; Δ={contentOffset - rtpInfoCandidate}ms)");
                     offsetMs = contentOffset;
-                    if (_videoIsH264) Interlocked.Exchange(ref _videoCodecTrimMs, H264ExtraSyncOffsetMs);
+                    // Content clock in use → no codec trim (clears any value a
+                    // prior fallback-path recompute may have set).
+                    Interlocked.Exchange(ref _videoCodecTrimMs, 0L);
                 }
 
                 // FALLBACK (no content clock from the server): the RTP-Info method.
@@ -650,10 +650,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                     } else {
                         chosen = twoVpad; src = "2·vPad";
                     }
-                    Interlocked.Exchange(ref _videoCodecTrimMs, (chosen - offsetMs) + H264ExtraSyncOffsetMs);
+                    Interlocked.Exchange(ref _videoCodecTrimMs, chosen - offsetMs);
                     _log?.LogInfo($"[ext-sync] H.264 offset select: direct={(dcand.Valid ? dcand.OffsetMs.ToString() : "n/a")} " +
                                   $"2·vPad={twoVpad} → chose {src}={chosen}ms " +
-                                  $"(codecTrim {chosen - offsetMs} + residual {H264ExtraSyncOffsetMs})");
+                                  $"(codecTrim {chosen - offsetMs})");
                 }
                 // Capture the session RTP epoch ONCE (initial play, before any
                 // seek — the play points are reliable there). Reused by the
@@ -705,8 +705,8 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                     _log?.LogInfo($"[ext-sync] {(haveContent ? "content" : "RTP-Info")} offset {offsetMs}ms implausible " +
                                   $"(>{plausibleBound}ms) — falling back to 0 (streams assumed to start together)");
                     offsetMs = 0;
-                    // Offset rejected → drop the H.264 codec trim back to just the residual.
-                    if (_videoIsH264) Interlocked.Exchange(ref _videoCodecTrimMs, H264ExtraSyncOffsetMs);
+                    // Offset rejected → drop any fallback-path codec trim too.
+                    Interlocked.Exchange(ref _videoCodecTrimMs, 0L);
                 }
                 Interlocked.Exchange(ref _baseOffsetMs, offsetMs);
                 long offset = offsetMs + EffectiveTrimMs();
@@ -735,15 +735,16 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private long _baseOffsetMs;
         private long _liveTrimMs;
 
-        // Extra A/V trim applied ONLY for the current video codec. H.264 needs a
-        // small positive (video-forward) trim for its larger present / B-frame
-        // reorder latency that the content-time offset can't measure; MPEG-2 = 0
-        // (leaves the working MPEG-2 config untouched). Combined with the user's
-        // _liveTrimMs at every point the pacer offset is set. Set from config's
-        // H264ExtraSyncOffsetMs when the H.264 video codec commits.
+        // Codec-derived offset correction, used ONLY on the H.264 RTP-Info
+        // FALLBACK path (server without the B57 content clock): carries the
+        // min-magnitude {direct, 2·vPad} selection as (chosen − rtpinfo) so
+        // base + trim lands on the chosen value. 0 whenever the content clock
+        // is in use (the normal case — no per-codec residual exists there; the
+        // old H264ExtraSyncOffsetMs config constant was a workaround for
+        // master-clock corruption, removed once the clock was fixed).
+        // Combined with the user's _liveTrimMs wherever the pacer offset is set.
         private long _videoCodecTrimMs;
         private bool _videoIsH264;   // set at codec commit; gates the derived-vPad H.264 offset
-        public int H264ExtraSyncOffsetMs { get; set; }
         private long EffectiveTrimMs() =>
             Interlocked.Read(ref _liveTrimMs) + Interlocked.Read(ref _videoCodecTrimMs);
 

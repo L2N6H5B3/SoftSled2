@@ -611,7 +611,6 @@ namespace SoftSledWPF.Components.Shell {
             _extSyncController = new SoftSled.Components.AudioVisual.ExternalSync
                 .ExternalSyncMediaController(_avLogger, cfg.AudioSyncOffsetMs, cfg.VideoJitterBufferMs);
             _extSyncController.EpochInvariantSync = cfg.EpochInvariantSync;   // DEBUG A/V-sync mode
-            _extSyncController.H264ExtraSyncOffsetMs = cfg.H264ExtraSyncOffsetMs;  // H.264-only A/V trim
             AvCtrlHandler.MediaController = _extSyncController;
 
             // Create the GPU video presenter (D3D9Ex device + D3DImage) and
