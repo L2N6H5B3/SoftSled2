@@ -55,8 +55,36 @@ namespace SoftSled.Components.AudioVisual {
             int.TryParse(Environment.GetEnvironmentVariable("SOFTSLED_AUDIO_DEBOUNCE_MS"),
                          out int v) ? v : 50;
 
+        // Max audio allowed to sit queued ahead of a NEW sound. The output is a
+        // plain FIFO, so appending sound after sound (rapid menu scrolling fires
+        // one per move) makes playback fall further and further behind the user's
+        // input — "the clicks queue up". When a new sound arrives and more than
+        // this much is still buffered, we drop the backlog first so the newest
+        // sound plays right away, matching the real extender's retrigger
+        // behaviour. An isolated sound has nothing buffered ahead of it and plays
+        // in full. Tuneable via SOFTSLED_AUDIO_MAX_QUEUE_MS; 0 disables (revert to
+        // pure FIFO). 120 ms caps the latency at roughly one short UI blip.
+        private static readonly int MaxQueuedMs =
+            int.TryParse(Environment.GetEnvironmentVariable("SOFTSLED_AUDIO_MAX_QUEUE_MS"),
+                         out int q) ? q : 120;
+
         private byte _lastPlayedSlot;
         private long _lastPlayedAtTicks; // 0 = never
+
+        // Head-sound tracking for the bounded-latency drop below. We can't tell
+        // from BufferedDuration alone whether the buffer holds ONE long sound
+        // still playing (the ~6 s intro chime) or a STACK of short clicks — both
+        // read as "lots buffered". So we remember the duration + start time of
+        // the sound currently at the head of the buffer: a long sound in
+        // progress is protected (never cut), while short-click backlog is
+        // collapsed. Head is (re)set whenever a sound starts into an idle buffer
+        // or after a clear; strays dropped during a long sound leave it intact.
+        private long   _headStartTicks;   // 0 = nothing playing
+        private double _headDurationMs;
+        // A sound at least this long is treated as a protected "long" sound (the
+        // intro chime is ~6 s; UI clicks are well under 500 ms), so a stray UI
+        // sound firing during it neither cuts it short nor queues audibly behind.
+        private const int LongSoundMs = 400;
 
         // Multi-slot cache of decoded PCM, keyed by the trailer's last byte.
         // WMC's MCX audio protocol uses slot-indexed caching:
@@ -76,11 +104,14 @@ namespace SoftSled.Components.AudioVisual {
             _trace = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SOFTSLED_AUDIO_TRACE"));
             _format = new WaveFormat(SampleRate, BitsPerSample, Channels);
 
-            // Buffer sized for the longest expected payload (intro chime
-            // is 6 s; allow some overhead). DiscardOnBufferOverflow keeps
-            // the player alive if the server unexpectedly floods us.
+            // Buffer sized for the longest expected payload (intro chime is
+            // ~6 s; allow overhead) — 8 s. The bounded-latency drop below is what
+            // keeps rapid UI sounds from stacking; this cap is just the safety
+            // net (DiscardOnBufferOverflow keeps the player alive if the server
+            // ever floods us). Not shrunk to ~1 s because the intro chime is a
+            // single long AddSamples that must fit whole.
             _buffer = new BufferedWaveProvider(_format) {
-                BufferDuration = TimeSpan.FromSeconds(10),
+                BufferDuration = TimeSpan.FromSeconds(8),
                 DiscardOnBufferOverflow = true,
             };
 
@@ -180,6 +211,40 @@ namespace SoftSled.Components.AudioVisual {
                     }
                     _lastPlayedSlot = slot;
                     _lastPlayedAtTicks = DateTime.UtcNow.Ticks;
+
+                    long now = DateTime.UtcNow.Ticks;
+                    double bufferedMs = _buffer.BufferedDuration.TotalMilliseconds;
+                    double incomingMs = toPlay.Length * 1000.0 / _format.AverageBytesPerSecond;
+
+                    if (MaxQueuedMs > 0 && bufferedMs > MaxQueuedMs) {
+                        // Something is still playing with real backlog. Is it one
+                        // long sound (the chime) or a stack of short clicks?
+                        double headRemainingMs = _headStartTicks == 0 ? 0
+                            : _headDurationMs - (now - _headStartTicks) / (double)TimeSpan.TicksPerMillisecond;
+                        if (_headDurationMs >= LongSoundMs && headRemainingMs > MaxQueuedMs) {
+                            // A long sound is still playing — protect it: don't
+                            // cut it, and don't queue this stray sound audibly
+                            // behind it. Drop the incoming sound. (This is the
+                            // intro-chime case: WMC fires focus/transition sounds
+                            // during it that used to clear the chime.)
+                            Trace($"slot=0x{slot:X2} {action} dropped — long sound playing "
+                                  + $"({(long)headRemainingMs}ms of {(long)_headDurationMs}ms left)");
+                            return;
+                        }
+                        // Short-click backlog: drop it so the newest sound plays
+                        // now instead of stacking (the "clicks queue up when I
+                        // scroll fast" symptom), and this sound becomes the head.
+                        Trace($"dropping {_buffer.BufferedBytes}B click backlog "
+                              + $"({(long)bufferedMs}ms > {MaxQueuedMs}ms) before slot=0x{slot:X2} {action}");
+                        _buffer.ClearBuffer();
+                        _headStartTicks = now; _headDurationMs = incomingMs;
+                    } else if (bufferedMs < 10) {
+                        // Idle buffer — this sound starts playing now and becomes
+                        // the head (records duration for the long-sound check).
+                        _headStartTicks = now; _headDurationMs = incomingMs;
+                    }
+                    // else: small (< budget) backlog — let it append seamlessly;
+                    // the head stays as tracked (short, so unprotected next time).
 
                     _buffer.AddSamples(toPlay, 0, toPlay.Length);
                     Trace($"trailer slot=0x{slot:X2} {action}: {toPlay.Length}B "
