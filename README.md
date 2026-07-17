@@ -20,6 +20,7 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 * Extender Device Media Control (DMCT)
 * Interface Sounds
 * RDP Bitmap OR Remote Rendering capabilities
+* RC6 remote control forwarder
 * Audio RTSP Playback
    * MP3
    * PCM
@@ -29,18 +30,18 @@ A revival of the old SoftSled Project, an open source Windows Media Center Exten
 
 ## Future Requirements
 * Implement media controls (play/pause/previous/next) media from client
-* Create RC6 remote control forwarder
 
 
 ## Possible Features to Add
 * Create settings areas (perhaps could be used for dedicated device)
     * WLAN
-    * Display
-    * Audio
+ 
+## Notes
+Currently there is a 3s pause by WMPNss during the SETUP RTSP requests - it seems like WMPNss is waiting for something before sending the response, but times out and sends a response anyway.  Need to figure out why...
 
 ## Installation and configuration
 ### Prerequisites
-* Windows 7 OR Windows 8 with Media Center (yes, SoftSled2 works with WMC8)
+* Windows 7
 
 ## Notes
 ### Certificates
