@@ -152,7 +152,6 @@ namespace SoftSledWPF.Components.Shell {
                 ChkPopups.IsChecked            = _config.EnablePopups;
                 ChkToolbar.IsChecked           = _config.EnableToolbar;
                 ChkMouseInput.IsChecked        = _config.EnableMouseInput;
-                ChkLogger.IsChecked            = _config.EnableLogger;
                 ChkLogDevCaps.IsChecked        = _config.LogDevCapsChannel;
                 ChkLogMcxSess.IsChecked        = _config.LogMcxSessChannel;
                 ChkLogAvCtrl.IsChecked         = _config.LogAvCtrlChannel;
@@ -234,7 +233,7 @@ namespace SoftSledWPF.Components.Shell {
                     BtnRemoteReset.Focus();
                     break;
                 case View.Debugging:
-                    ChkLogger.Focus();
+                    ChkLogDevCaps.Focus();
                     break;
                 case View.About:
                     // Nothing focusable — focus the page itself so back keys
@@ -295,7 +294,6 @@ namespace SoftSledWPF.Components.Shell {
             _config.EnablePopups            = ChkPopups.IsChecked == true;
             _config.EnableToolbar           = ChkToolbar.IsChecked == true;
             _config.EnableMouseInput        = ChkMouseInput.IsChecked == true;
-            _config.EnableLogger            = ChkLogger.IsChecked == true;
             _config.LogDevCapsChannel       = ChkLogDevCaps.IsChecked == true;
             _config.LogMcxSessChannel       = ChkLogMcxSess.IsChecked == true;
             _config.LogAvCtrlChannel        = ChkLogAvCtrl.IsChecked == true;

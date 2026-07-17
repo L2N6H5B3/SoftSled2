@@ -105,19 +105,5 @@
                 </Grid>
             </StackPanel>
         </Grid>
-
-        <!-- Debug logger overlay. Hidden by default; ShellWindow toggles
-             visibility via a Ctrl+L shortcut when something needs eyeballing. -->
-        <TextBox x:Name="loggerTextBox"
-                 HorizontalAlignment="Right"
-                 VerticalAlignment="Stretch"
-                 Width="300"
-                 Margin="5"
-                 TextWrapping="Wrap"
-                 Background="#A0000000"
-                 Foreground="#E0E0E0"
-                 BorderBrush="#60FFFFFF"
-                 IsReadOnly="True"
-                 VerticalScrollBarVisibility="Auto" Visibility="Collapsed"/>
     </Grid>
 </UserControl>

@@ -29,8 +29,8 @@ namespace SoftSledWPF {
         // CompositeLogger fanning out to the Debug sink (ShellLogger) AND the
         // app-lifetime file logger (App.AppLog, created in App.OnStartup) so
         // shell- and pairing-time diagnostics are captured to the logfile from
-        // the outset — not only once a live session opens its own
-        // TextBoxLogger. App.AppLog is null when file logging is disabled, and
+        // the outset — not only once a live session starts. App.AppLog is
+        // null when file logging is disabled, and
         // CompositeLogger skips null children, so this is safe either way.
         private readonly Logger _logger = new CompositeLogger(new ShellLogger(), App.AppLog);
 
@@ -281,22 +281,6 @@ namespace SoftSledWPF {
             // path so it acts as a "leave session" gesture; without that,
             // the only way out would be to alt-F4 the window.
             if (CurrentPage is ExtenderSessionControl session) {
-                // Ctrl+L: local logger overlay toggle. Must be handled
-                // BEFORE ForwardKey so we don't ship it into RDP — the
-                // session-active path catches every key by design, which
-                // is why the previous Ctrl+L attempt did nothing.
-                //
-                // Check the modifier (Ctrl held) AND the bare key (L) —
-                // WPF reports Key.L for both 'l' and 'L' so a single
-                // comparison suffices. Also short-circuits if the user
-                // is pressing a different Ctrl+letter sequence.
-                if (e.Key == Key.L &&
-                    (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control) {
-                    session.ToggleLogger();
-                    e.Handled = true;
-                    return;
-                }
-
                 // Ctrl+] / Ctrl+[ : live A/V sync nudge (20 ms steps). ']'
                 // advances video (fixes video-lags-audio), '[' delays it.
                 // Intercepted before ForwardKey so the brackets don't reach
@@ -721,8 +705,7 @@ namespace SoftSledWPF {
     /// <summary>
     /// Minimal Logger that writes to System.Diagnostics so the shell can
     /// hand a non-null logger to pre-session pages (e.g. PairingPage's
-    /// ExtenderDevice) without needing a visible TextBox. The session
-    /// page creates its own TextBoxLogger with its own surface.
+    /// ExtenderDevice). The session page builds its own sinks.
     /// </summary>
     internal class ShellLogger : Logger {
         protected override void OnLogInfo(string message)

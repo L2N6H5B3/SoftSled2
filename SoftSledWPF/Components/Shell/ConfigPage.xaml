@@ -307,16 +307,6 @@
                               PanningMode="VerticalOnly"
                               Focusable="False">
                 <StackPanel HorizontalAlignment="Left" Width="640">
-                    <CheckBox x:Name="ChkLogger"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Show on-screen log overlay"
-                              Click="OnConfigChanged"/>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="10,16,0,24"
-                               TextWrapping="Wrap"
-                               Text="The log overlay appears on the right edge of the session view. You can also toggle it during a session with Ctrl+L."/>
-
                     <CheckBox x:Name="ChkLogDevCaps"
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Include DevCaps VirtualChannel logs"

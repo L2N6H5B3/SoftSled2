@@ -3,10 +3,10 @@ using System;
 namespace SoftSled.Components.Diagnostics {
     /// <summary>
     /// Fan-out logger: broadcasts every Log call to a set of child
-    /// loggers. Used to mirror the on-screen <see cref="TextBoxLogger"/>
-    /// to a <see cref="FileLogger"/> so a crash that closes the app
-    /// before the user can read the textbox still leaves a captured
-    /// log on disk for post-mortem.
+    /// loggers — e.g. a Debug-output sink alongside a
+    /// <see cref="FileLogger"/>, so diagnostics reach both the debugger
+    /// and a file that survives a crash for post-mortem. With no children
+    /// it acts as a no-op sink.
     ///
     /// <para>Child failures don't propagate — if one logger throws, the
     /// others still receive the message. This matches the philosophy

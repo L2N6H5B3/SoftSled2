@@ -28,7 +28,20 @@ namespace SoftSled.Components.RTSP {
 
         private string AcceptHeader = "Accept: application/sdp";
         private string LanguageHeader = "Accept-Language: en-us, *;q=0.1";
-        private string SupportedHeader = "Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile";
+        // DIAGNOSTIC toggle — HARD-CODED (env vars don't reach a Visual-Studio /
+        // F5-launched process, so a flag in source is the reliable way to test).
+        // When true, drops com.microsoft.wm.srvppair from Supported: the one token
+        // the Xbox omits that we send (server pipe-pair = a server→client reverse
+        // channel), to test whether WMPNss waits ~3s per SETUP trying to arrange
+        // it. Confirmed NOT DRM-related: requesting wmdrm-nd + dropping WMDRMND=0
+        // changed neither the timing nor the (still-plaintext, still-working)
+        // playback. Load-bearing tokens (rtp.asf payload framing, eosmsg EOS) are
+        // kept, so playback is unaffected either way. Set back to FALSE for normal
+        // builds once the experiment is done.
+        private static readonly bool SetupTest = false;   // ← flip to test; false = normal
+        private string SupportedHeader = SetupTest
+            ? "Supported: com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile"
+            : "Supported: com.microsoft.wm.srvppair, com.microsoft.wm.sswitch, com.microsoft.wm.eosmsg, com.microsoft.wm.predstrm, com.microsoft.wm.fastcache, com.microsoft.wm.locid, com.microsoft.wm.rtp.asf, dlna.announce, dlna.rtx, dlna.rtx-dup, com.microsoft.wm.startupprofile";
 
         Rtsp.RtspTcpTransport rtsp_socket = null;               // RTSP connection
         volatile RTSP_STATUS rtsp_socket_status = RTSP_STATUS.WaitingToConnect;
@@ -718,7 +731,7 @@ namespace SoftSled.Components.RTSP {
             // If the RTP transport is MULTICAST, we have to wait for the SETUP message to get the Multicast Address from the RTSP server
             this.rtp_transport = rtp_transport;
             if (rtp_transport == RTP_TRANSPORT.UDP) {
-                video_udp_pair = new Rtsp.UDPSocket(50000, 51000); // give a range of 500 pairs (1000 addresses) to try incase some address are in use
+                video_udp_pair = new Rtsp.UDPSocket(49000, 49999); // give a range of 500 pairs (1000 addresses) to try incase some address are in use
                 // Phase-0c UDP RTP tap: parses RTP header per packet and dumps
                 // first 128B of payload to %TEMP%\softsled-rtp-wire.log when
                 // SOFTSLED_RTSP_WIRE_DUMP=1. Capped at 200 packets/label so a
@@ -726,7 +739,7 @@ namespace SoftSled.Components.RTSP {
                 SoftSled.Components.Diagnostics.RtspWireDumper.AttachUdpTap(video_udp_pair, "video", null, _diagTag);
                 video_udp_pair.DataReceived += Rtp_VideoDataReceived;
                 video_udp_pair.Start(); // start listening for data on the UDP ports
-                audio_udp_pair = new Rtsp.UDPSocket(50000, 51000); // give a range of 500 pairs (1000 addresses) to try incase some address are in use
+                audio_udp_pair = new Rtsp.UDPSocket(4900, 4999); // give a range of 500 pairs (1000 addresses) to try incase some address are in use
                 SoftSled.Components.Diagnostics.RtspWireDumper.AttachUdpTap(audio_udp_pair, "audio", null, _diagTag);
                 audio_udp_pair.DataReceived += Rtp_AudioDataReceived;
                 audio_udp_pair.Start(); // start listening for data on the UDP ports

@@ -249,7 +249,6 @@
     <Compile Include="Components\Diagnostics\FileLogger.cs" />
     <Compile Include="Components\Diagnostics\Logger.cs" />
     <Compile Include="Components\Diagnostics\RtspWireDumper.cs" />
-    <Compile Include="Components\Diagnostics\TextBoxLogger.cs" />
     <Compile Include="Components\Extender\ContentHandler.cs" />
     <Compile Include="Components\Extender\Archive\Crypto.cs" />
     <Compile Include="Components\Extender\ExtenderCapabilities.cs" />

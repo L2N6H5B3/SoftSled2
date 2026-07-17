@@ -1077,13 +1077,6 @@ namespace SoftSledWPF.Components.Shell {
         }
 
         void InitialiseLogger() {
-            // Build the underlying loggers. The textbox is the in-session
-            // overlay (Ctrl+L to show); the file sink is the post-mortem
-            // capture that survives a crash. Composing them through
-            // CompositeLogger keeps every existing m_logger.Log* call
-            // site unchanged while broadcasting to both sinks transparently.
-            var textboxLogger = new TextBoxLogger(loggerTextBox, Window.GetWindow(this));
-
             // PREFER the app-lifetime file logger created in App.OnStartup.
             // It captures global exception handlers and any pre-session
             // diagnostics. The session and the app share the same file so
@@ -1110,14 +1103,14 @@ namespace SoftSledWPF.Components.Shell {
                 }
             }
 
-            m_logger = fileSink != null
-                ? (Logger)new CompositeLogger(textboxLogger, fileSink)
-                : textboxLogger;
+            // With no file sink (LogToFile off) a childless CompositeLogger
+            // stands in as a no-op sink, so every m_logger.Log* call site
+            // stays null-safe without needing a guard.
+            m_logger = fileSink ?? (Logger)new CompositeLogger();
             m_logger.IsLoggingDebug = true;
 
-            // Session-start marker — useful both in the textbox and in
-            // the file timeline (e.g. when the app log contains multiple
-            // sessions from a long-running process).
+            // Session-start marker — orients the file timeline when the app
+            // log contains multiple sessions from a long-running process.
             if (fileSinkIsAppOwned) {
                 m_logger.LogInfo("[session] start — file sink: app log (shared across sessions)");
             } else if (_fileLogger != null) {
@@ -1125,15 +1118,6 @@ namespace SoftSledWPF.Components.Shell {
             } else {
                 m_logger.LogInfo("[session] start — file sink: none (LogToFile is off)");
             }
-
-            // Apply the persistent EnableLogger toggle from config. The
-            // textbox starts Collapsed in XAML so the default ("not shown")
-            // requires no change; if config asks for it on, show it now.
-            try {
-                if (SoftSledConfigManager.ReadConfig().EnableLogger) {
-                    SetLoggerVisible(true);
-                }
-            } catch { /* config read failure → leave hidden */ }
         }
 
         /// <summary>
@@ -1239,43 +1223,6 @@ namespace SoftSledWPF.Components.Shell {
                 cfg.EnableAudioTrace     ? "1" : null); } catch { }
             try { Environment.SetEnvironmentVariable("SOFTSLED_AUDIO_VIA_NAUDIO",
                 cfg.EnableAudioViaNAudio ? "1" : null); } catch { }
-        }
-
-        /// <summary>
-        /// Show or hide the on-screen logger textbox. Called by:
-        ///   * <see cref="InitialiseLogger"/> at session start (reads config)
-        ///   * <see cref="ToggleLogger"/> when the user presses Ctrl+L
-        ///   * the Debugging config-page checkbox handler in the shell
-        ///
-        /// Idempotent and safe to call from any thread (marshals to UI).
-        /// </summary>
-        public void SetLoggerVisible(bool visible) {
-            if (!Dispatcher.CheckAccess()) {
-                Dispatcher.BeginInvoke(new Action(() => SetLoggerVisible(visible)));
-                return;
-            }
-            if (loggerTextBox != null) {
-                loggerTextBox.Visibility = visible
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
-            }
-        }
-
-        /// <summary>
-        /// Flip the logger textbox visibility. Used by the Ctrl+L shortcut
-        /// in <see cref="ShellWindow"/> — provides a transient on/off toggle
-        /// without touching the persistent <c>EnableLogger</c> config
-        /// (so a quick "let me peek at the log" doesn't permanently change
-        /// the user's preference).
-        /// </summary>
-        public void ToggleLogger() {
-            if (!Dispatcher.CheckAccess()) {
-                Dispatcher.BeginInvoke(new Action(ToggleLogger));
-                return;
-            }
-            if (loggerTextBox == null) return;
-            bool visible = loggerTextBox.Visibility == Visibility.Visible;
-            SetLoggerVisible(!visible);
         }
 
         /// <summary>Live A/V sync nudge (from a session hotkey). Positive delta

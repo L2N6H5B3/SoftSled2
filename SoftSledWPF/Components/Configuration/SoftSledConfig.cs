@@ -100,13 +100,6 @@ namespace SoftSled.Components.Configuration {
         // unaffected. Default ON.
         public bool EnableMouseInput = true;
 
-        // When true, the on-screen log overlay (loggerTextBox in
-        // ExtenderSessionControl) is visible at session start. Independently
-        // toggleable at runtime via Ctrl+L. Default OFF — the overlay is
-        // a developer diagnostic, not something the average couch user
-        // wants on top of the WMC UI.
-        public bool EnableLogger = false;
-
         // Play splash-channel UI sound effects (Sound_Play / SoundBuffer_LoadSoundData
         // from MS-RRSP2 §2.2.4.19/§2.2.4.20). WMC's MCE shell ships
         // navigation clicks / focus chimes / error sounds through the splash
