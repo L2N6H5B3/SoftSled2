@@ -245,6 +245,7 @@
     <Compile Include="Components\Communication\SoftSledNative.cs" />
     <Compile Include="Components\Configuration\SoftSledConfig.cs" />
     <Compile Include="Components\Configuration\SoftSledConfigManager.cs" />
+    <Compile Include="Components\Configuration\DiagnosticsPaths.cs" />
     <Compile Include="Components\Diagnostics\CompositeLogger.cs" />
     <Compile Include="Components\Diagnostics\FileLogger.cs" />
     <Compile Include="Components\Diagnostics\Logger.cs" />

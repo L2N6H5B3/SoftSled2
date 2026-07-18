@@ -110,6 +110,13 @@ namespace SoftSledWPF.Components.Shell {
         // ShowConnectingOverlay calls don't restart the rotation from 0.
         private bool _spinnerRunning;
 
+        // DEBUG toggle (SoftSledConfig.AlwaysShowRdp), snapshotted at Start().
+        // Suppresses the connecting curtain and pins rdpDisplay Visible for the
+        // whole session so a connection that never reaches shellOpen can still
+        // be watched. Read in Start() rather than StartInternal because the
+        // curtain goes up before StartInternal's config read happens.
+        private bool _alwaysShowRdp;
+
         // Mouse-forwarding state. _mouseEnabled mirrors SoftSledConfig.EnableMouseInput
         // and is re-read on Start so a toggle in the config UI takes effect on
         // next session. _pressedMouseFlags tracks which buttons we believe the
@@ -513,10 +520,22 @@ namespace SoftSledWPF.Components.Shell {
             if (_started) return;
             _started = true;
 
-            // Visible feedback while FreeRDP works through the connect /
-            // security / channel-bind handshake. Hidden the instant we
-            // observe State.Active in FreeRdpClient_StateChanged.
-            ShowConnectingOverlay("Waiting to connect to Windows Media Center");
+            // Snapshot the always-show-RDP debug toggle BEFORE the curtain
+            // would go up — StartInternal's config read happens a dispatcher
+            // tick too late to suppress it.
+            try { _alwaysShowRdp = SoftSledConfigManager.ReadConfig().AlwaysShowRdp; }
+            catch { _alwaysShowRdp = false; }
+
+            if (_alwaysShowRdp) {
+                // Show the framebuffer from the outset — the whole point is to
+                // watch a connection that may never reach shellOpen.
+                if (rdpDisplay != null) rdpDisplay.Visibility = Visibility.Visible;
+            } else {
+                // Visible feedback while FreeRDP works through the connect /
+                // security / channel-bind handshake. Hidden the instant we
+                // observe State.Active in FreeRdpClient_StateChanged.
+                ShowConnectingOverlay("Waiting to connect to Windows Media Center");
+            }
 
             // Defer the heavy initialisation (FFME, FreeRDP shim, channel
             // handlers, config read, UPnP device) by one dispatcher cycle at
@@ -610,7 +629,6 @@ namespace SoftSledWPF.Components.Shell {
             // OnLoaded and attached then (see AttachVideoPresenterWhenReady).
             _extSyncController = new SoftSled.Components.AudioVisual.ExternalSync
                 .ExternalSyncMediaController(_avLogger, cfg.AudioSyncOffsetMs, cfg.VideoJitterBufferMs);
-            _extSyncController.EpochInvariantSync = cfg.EpochInvariantSync;   // DEBUG A/V-sync mode
             AvCtrlHandler.MediaController = _extSyncController;
 
             // Create the GPU video presenter (D3D9Ex device + D3DImage) and
@@ -823,6 +841,10 @@ namespace SoftSledWPF.Components.Shell {
         /// </summary>
         private void ShowConnectingOverlay(string message) {
             if (ConnectingOverlay == null) return;
+            // Debug toggle: never draw the curtain over the framebuffer.
+            // Belt-and-braces — Start() already skips the initial call, but
+            // this catches any later re-show path.
+            if (_alwaysShowRdp) return;
             ConnectingStatusText.Text = message;
             ConnectingOverlay.Visibility = Visibility.Visible;
             StartSpinner();
@@ -1093,7 +1115,7 @@ namespace SoftSledWPF.Components.Shell {
                 try {
                     var cfg = SoftSledConfigManager.ReadConfig();
                     if (cfg.LogToFile) {
-                        string logFilePath = ResolveLogFilePath(cfg.LogFileDirectory);
+                        string logFilePath = ResolveLogFilePath(cfg.DiagnosticsDirectory);
                         _fileLogger = new FileLogger(logFilePath);
                         fileSink = _fileLogger;
                     }
@@ -1122,54 +1144,35 @@ namespace SoftSledWPF.Components.Shell {
 
         /// <summary>
         /// Build the absolute path to the session log file. The directory
-        /// is taken from <paramref name="configuredDir"/> when non-empty,
-        /// otherwise defaults to <c>%LocalAppData%/SoftSled/Logs</c>. The
-        /// filename is per-session and timestamped so concurrent runs
-        /// don't clobber each other and so the user can correlate a
-        /// crash by its timestamp.
+        /// is the configured diagnostics root's <c>Logs</c> subfolder (see
+        /// DiagnosticsPaths). The filename is per-session and timestamped so
+        /// concurrent runs don't clobber each other and so the user can
+        /// correlate a crash by its timestamp.
         /// </summary>
-        private static string ResolveLogFilePath(string configuredDir) {
-            string dir = configuredDir;
-            if (string.IsNullOrWhiteSpace(dir)) {
-                string localAppData = Environment.GetFolderPath(
-                    Environment.SpecialFolder.LocalApplicationData);
-                dir = System.IO.Path.Combine(localAppData, "SoftSled", "Logs");
-            }
-            string fileName = $"softsled-{DateTime.Now:yyyyMMdd-HHmmss}-pid{System.Diagnostics.Process.GetCurrentProcess().Id}.log";
-            return System.IO.Path.Combine(dir, fileName);
-        }
+        private static string ResolveLogFilePath(string configuredRoot)
+            => SoftSled.Components.Configuration.DiagnosticsPaths.NewLogFilePath(configuredRoot);
 
         /// <summary>
         /// Returns the directory the file logger is writing to (or would
         /// write to per current config), without actually opening a file.
-        /// Used by the "Open log folder" button on the Debugging page.
+        /// Used by the "Open diagnostics folder" button on the Debugging page.
         /// </summary>
         internal static string GetLogDirectoryForConfig() {
             try {
-                var cfg = SoftSledConfigManager.ReadConfig();
-                return System.IO.Path.GetDirectoryName(ResolveLogFilePath(cfg.LogFileDirectory));
+                return SoftSled.Components.Configuration.DiagnosticsPaths.LogsDir();
             } catch {
                 return null;
             }
         }
 
         /// <summary>
-        /// Root directory for diagnostic dumps — splash raw bytes,
-        /// fastpath payloads, audio PCM. Surfaced by the Debugging
-        /// page's "Open dumps folder" button. Honours
-        /// <see cref="SoftSledConfig.DumpsDirectory"/>; falls back to
-        /// the platform default when empty.
+        /// Root directory for diagnostic dumps — splash raw bytes, fastpath
+        /// payloads, RTSP/RTP wire. Falls back to the platform default when
+        /// the configured root is empty.
         /// </summary>
         internal static string GetDumpsRootDirectory() {
             try {
-                string dir = null;
-                try { dir = SoftSledConfigManager.ReadConfig()?.DumpsDirectory; } catch { }
-                if (string.IsNullOrWhiteSpace(dir)) {
-                    dir = System.IO.Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                        "SoftSled", "Dumps");
-                }
-                return dir;
+                return SoftSled.Components.Configuration.DiagnosticsPaths.DumpsRoot();
             } catch {
                 return null;
             }
@@ -1179,7 +1182,7 @@ namespace SoftSledWPF.Components.Shell {
         /// Translate the diagnostic-toggle config fields into process-
         /// scope environment variables that the existing SOFTSLED_*
         /// consumers (RtspWireDumper, SplashRawDumper,
-        /// WmcFastpathAudioPlayer, RTSPClient audio routing) already
+        /// WmcFastpathRawDumper, RTSPClient audio routing) already
         /// read. The config values always WIN over any shell-set env
         /// vars — a ticked checkbox is the most explicit signal of
         /// intent we can get. An unticked box clears the corresponding
@@ -1192,8 +1195,6 @@ namespace SoftSledWPF.Components.Shell {
                                  ? System.IO.Path.Combine(dumpsRoot, "splash")   : null;
             string fastpathDir = cfg.EnableFastpathRawDump && dumpsRoot != null
                                  ? System.IO.Path.Combine(dumpsRoot, "fastpath") : null;
-            string audioDir    = cfg.EnableAudioDump       && dumpsRoot != null
-                                 ? System.IO.Path.Combine(dumpsRoot, "audio")    : null;
             // RTSP/RTP wire dump lives alongside the other dumps under the
             // configured dumps root — NOT %TEMP%. RtspWireDumper writes
             // softsled-rtsp-wire.log + softsled-rtp-wire.log into this dir.
@@ -1213,7 +1214,6 @@ namespace SoftSledWPF.Components.Shell {
             // writes rdpgfx-raw.log — it only dumps when this var is set, so
             // nulling it here keeps it off regardless of any stale value.
             try { Environment.SetEnvironmentVariable("SOFTSLED_RDPGFX_RAW_DUMP",   null); }        catch { }
-            try { Environment.SetEnvironmentVariable("SOFTSLED_AUDIO_DUMP",        audioDir); }    catch { }
             // Prefer the configured dumps dir; fall back to "1" (→ %TEMP% in the
             // dumper) only if the dumps root couldn't be resolved while enabled,
             // so toggling it on never silently produces nothing.
@@ -1221,8 +1221,6 @@ namespace SoftSledWPF.Components.Shell {
                 rtspDir ?? (cfg.EnableRtspWireDump ? "1" : null)); } catch { }
             try { Environment.SetEnvironmentVariable("SOFTSLED_AUDIO_TRACE",
                 cfg.EnableAudioTrace     ? "1" : null); } catch { }
-            try { Environment.SetEnvironmentVariable("SOFTSLED_AUDIO_VIA_NAUDIO",
-                cfg.EnableAudioViaNAudio ? "1" : null); } catch { }
         }
 
         /// <summary>Live A/V sync nudge (from a session hotkey). Positive delta
@@ -1351,7 +1349,13 @@ namespace SoftSledWPF.Components.Shell {
             bool isRui = renderMode == SoftSled.Components.Extender.WMCRenderMode.RUI;
             Dispatcher.BeginInvoke(new Action(() => {
                 if (e.shellOpen) {
-                    if (!isRui) {
+                    if (_alwaysShowRdp) {
+                        // Debug toggle overrides the RUI rule below: show the
+                        // raw framebuffer whatever the render mode. In RUI it
+                        // WILL paint over the splash composition and the video
+                        // plane — that's the trade you asked for.
+                        rdpDisplay.Visibility = Visibility.Visible;
+                    } else if (!isRui) {
                         rdpDisplay.Visibility = Visibility.Visible;
                     } else {
                         // Be defensive — if anything previously
@@ -1369,7 +1373,10 @@ namespace SoftSledWPF.Components.Shell {
                     // seconds before WMC actually loads its UI.
                     HideConnectingOverlay();
                 } else {
-                    rdpDisplay.Visibility = Visibility.Hidden;
+                    // Debug toggle: keep showing the framebuffer after a shell
+                    // close too — that transition is often exactly what's being
+                    // diagnosed.
+                    if (!_alwaysShowRdp) rdpDisplay.Visibility = Visibility.Hidden;
                     // Shell closed. Deliberately do NOT re-show the
                     // connecting overlay here — the curtain should only
                     // appear during the initial session start, not after

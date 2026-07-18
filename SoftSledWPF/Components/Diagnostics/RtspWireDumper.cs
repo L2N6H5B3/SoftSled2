@@ -15,7 +15,7 @@ namespace SoftSled.Components.Diagnostics {
     /// <c>softsled-rtp-wire.log</c>).
     ///
     /// Toggle on with <c>SOFTSLED_RTSP_WIRE_DUMP</c>. The session sets this to
-    /// the configured dumps directory (<c>&lt;DumpsDirectory&gt;\rtsp</c>) so
+    /// the configured dumps directory (<c>&lt;DiagnosticsDirectory&gt;\Dumps\rtsp</c>) so
     /// the dump lands alongside the other diagnostic dumps in the folder the
     /// Debugging page points at. A bare <c>SOFTSLED_RTSP_WIRE_DUMP=1</c> (e.g.
     /// set manually in a shell) still works and falls back to <c>%TEMP%</c>.
@@ -47,7 +47,7 @@ namespace SoftSled.Components.Diagnostics {
         /// <summary>
         /// Directory the dump files are written to. The session sets
         /// <c>SOFTSLED_RTSP_WIRE_DUMP</c> to the configured dumps dir
-        /// (<c>&lt;DumpsDirectory&gt;\rtsp</c>); a bare <c>"1"</c>/<c>"true"</c>/
+        /// (<c>&lt;DiagnosticsDirectory&gt;\Dumps\rtsp</c>); a bare <c>"1"</c>/<c>"true"</c>/
         /// <c>"yes"</c> (shell-set) falls back to <c>%TEMP%</c>. Returns null
         /// when the dumper is disabled.
         /// </summary>

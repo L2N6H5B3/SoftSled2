@@ -3,6 +3,12 @@ using System.Collections.Generic;
 namespace SoftSled.Components.Configuration {
     public class SoftSledConfig {
         public bool IsPaired = false;
+        // Write-only BY DESIGN — nothing reads this back. ExtenderDevice
+        // derives the live UDN from the UPnP device each launch and records
+        // it here purely as a human-readable breadcrumb: the same uuid shows
+        // up on the Windows host attached to the MCX account, so having it in
+        // the config file is what lets you tell which account is ours.
+        // Cleared on unpair. Don't "clean up" as dead config.
         public string DeviceUDN = "";
         public string RdpLoginHost = "";
         public string RdpLoginUserName = "";
@@ -46,17 +52,13 @@ namespace SoftSled.Components.Configuration {
         // ratio keeps the client area matched and removes the bars. Only
         // affects windowed mode — full-screen fills the monitor and isn't
         // resizable. Default ON.
+        //
+        // Deliberately NOT surfaced in the settings UI (removed by request) —
+        // edit Config.xml to change it. Still read and honoured by ShellWindow
+        // every time settings change, and it round-trips through the settings
+        // page untouched because ConfigPage saves the config object it loaded.
+        // Don't "clean up" as dead config.
         public bool LockWindowAspectRatio = true;
-
-        // DEBUG / experimental A/V-sync mode. The cross-stream RTP epoch (the
-        // fixed offset between the audio and video RTP clocks) is constant for a
-        // recording's session — the clocks free-run from session start and seeks
-        // don't reset them. When ON, the controller measures that epoch ONCE at
-        // the initial play (reliable RTP-Info) and reuses it to compute the offset
-        // after each seek — offset = epoch − (videoOrigin − audioOrigin) — instead
-        // of re-deriving it from the seek's own RTP-Info, which WMPNss sometimes
-        // reports inconsistently. Default OFF (opt-in for A/B testing).
-        public bool EpochInvariantSync = false;
 
         // Media Playback Mode remote mappings. When ON, and the extender is
         // showing full-screen video with NO WMC UI over the centre of the screen
@@ -64,7 +66,7 @@ namespace SoftSled.Components.Configuration {
         // remapped to transport controls: Left/Right = Skip Back/Forward,
         // OK/Enter = Play-Pause. The moment any UI covers the centre (seek bar,
         // menu, OSD) the mappings revert to normal so you can navigate. Default
-        // OFF (opt-in).
+        // ON.
         public bool MediaPlaybackModeEnabled = true;
 
         // Keep the display (and system) awake while SoftSled is running, so
@@ -112,12 +114,10 @@ namespace SoftSled.Components.Configuration {
 
         // Per-virtual-channel + fastpath log toggles. Each gates whether
         // the corresponding handler's diagnostic output reaches the
-        // logger (and the on-screen overlay). Persisted only — no
-        // call sites consume these yet; the handlers still log
-        // unconditionally. Wire-up is intentionally deferred until the
-        // per-channel volume becomes a problem worth filtering. Default
-        // OFF so a future enable doesn't surprise users with a wall of
-        // text.
+        // logger: ExtenderSessionControl passes m_logger to the handler
+        // when the toggle is on and null when it's off, so an unticked
+        // box silences that channel at the source. Default OFF so the
+        // log isn't a wall of text.
         public bool LogDevCapsChannel = false;
         public bool LogMcxSessChannel = false;
         public bool LogAvCtrlChannel  = false;
@@ -132,25 +132,56 @@ namespace SoftSled.Components.Configuration {
         // events were always emitted before this toggle existed.
         public bool LogAvPlayback     = true;
 
-        // Mirror every textbox-logger line to a timestamped file under
-        // LogFileDirectory. Critical for diagnosing release-build crashes
-        // on remote machines where the on-screen overlay is unreachable
-        // (the app may close before any session UI is up). Defaulted ON
+        // Write every log line to a timestamped file under
+        // <DiagnosticsDirectory>\Logs. Critical for diagnosing release-build crashes
+        // on remote machines (the app may close before any session UI is
+        // up), and the only log sink there is. Defaulted ON
         // because the cost is negligible (a few KB/s, auto-flushed) and
         // a captured log is the difference between "we know what crashed"
         // and "please reproduce while I shoulder-surf".
         public bool   LogToFile        = true;
-        // Directory the per-session log file is created in. Empty string
-        // means "use the platform default" — %LocalAppData%/SoftSled/Logs
-        // on Windows. Resolved at session start; changes take effect on
-        // the NEXT session, not mid-flight.
+
+        // ONE root for every kind of diagnostic output. See DiagnosticsPaths:
+        //   <root>\Logs\   — the per-session log file
+        //   <root>\Dumps\  — splash / fastpath / rtsp raw dumps
+        // Empty string means "use the platform default" — %LocalAppData%\SoftSled.
+        // Log changes take effect on the NEXT app launch (the app log opens at
+        // startup); dump changes on the NEXT session start (the dump dirs are
+        // pushed into env vars then).
+        public string DiagnosticsDirectory = "";
+
+        // ---- Legacy, migration-only ----------------------------------
+        // Superseded by DiagnosticsDirectory (which is a ROOT holding Logs\ and
+        // Dumps\, where these two were the leaf dirs themselves). Kept public so
+        // XmlSerializer still reads the elements out of an existing Config.xml —
+        // MigrateLegacyPaths() folds them into DiagnosticsDirectory so an
+        // upgrade doesn't silently relocate a user's chosen folder. Not
+        // surfaced in the UI and not read by anything else. Safe to delete once
+        // no config in the wild carries them.
         public string LogFileDirectory = "";
-        // Directory the advanced diagnostic dumps (splash raw bytes,
-        // fastpath payloads, audio PCM) are written under. Empty string
-        // means "use the platform default" — %LocalAppData%/SoftSled/Dumps.
-        // Changes take effect on the NEXT session start (the dump dirs
-        // are pushed into env vars at session-start time).
         public string DumpsDirectory   = "";
+
+        /// <summary>
+        /// Fold the pre-merge <see cref="LogFileDirectory"/> /
+        /// <see cref="DumpsDirectory"/> settings into the single
+        /// <see cref="DiagnosticsDirectory"/> root. In-memory only and
+        /// idempotent — deliberately NOT written back from the read path (that
+        /// would race across the many threads that call ReadConfig); the next
+        /// ordinary settings write persists it. LogFileDirectory wins when the
+        /// two disagree, since it's the one the app log used.
+        /// </summary>
+        internal void MigrateLegacyPaths() {
+            if (string.IsNullOrWhiteSpace(DiagnosticsDirectory)) {
+                string legacy = !string.IsNullOrWhiteSpace(LogFileDirectory)
+                    ? LogFileDirectory
+                    : DumpsDirectory;
+                if (!string.IsNullOrWhiteSpace(legacy)) DiagnosticsDirectory = legacy;
+            }
+            // Folded (or nothing to fold) — clear them so the next ordinary
+            // WriteConfig drops the dead elements from Config.xml.
+            LogFileDirectory = "";
+            DumpsDirectory   = "";
+        }
 
         // ---- Advanced / env-var-driven diagnostics --------------------
         //
@@ -158,7 +189,8 @@ namespace SoftSled.Components.Configuration {
         // call sites already check at session-start time. At session
         // start, ExtenderSessionControl applies these into the process-
         // scope env vars so existing consumers (RtspWireDumper.cs,
-        // SplashRawDumper.cs, WmcFastpathAudioPlayer.cs, etc.) don't
+        // SplashRawDumper.cs, WmcFastpathRawDumper.cs,
+        // WmcFastpathAudioPlayer.cs) don't
         // need to change. Path-style dumps auto-route to
         // %LocalAppData%/SoftSled/Dumps/<x>; the Debugging page surfaces
         // an "Open" button so you can find them without typing the
@@ -179,9 +211,6 @@ namespace SoftSled.Components.Configuration {
         // SOFTSLED_FASTPATH_RAW_DUMP). Useful for the GDI-mode overlay
         // diagnostics. Off by default.
         public bool EnableFastpathRawDump = false;
-        // Dump fastpath audio PCM payloads as per-slot WAV files
-        // (mirrors SOFTSLED_AUDIO_DUMP). Off by default.
-        public bool EnableAudioDump       = false;
         // Wire-level dump of every RTSP request and response on the
         // control channel (mirrors SOFTSLED_RTSP_WIRE_DUMP). Off by
         // default — the dump grows with session activity but is
@@ -191,10 +220,17 @@ namespace SoftSled.Components.Configuration {
         // (mirrors SOFTSLED_AUDIO_TRACE). Off by default — gets
         // noisy when audio is actively playing.
         public bool EnableAudioTrace      = false;
-        // Route RTSP audio through NAudio instead of the FFME path
-        // (mirrors SOFTSLED_AUDIO_VIA_NAUDIO). Diagnostic / fallback
-        // for audio-stack troubleshooting. Off by default.
-        public bool EnableAudioViaNAudio  = false;
+        // DEBUG: keep the raw RDP framebuffer on screen for the whole session.
+        // Normally the "connecting" curtain covers everything until the WMC
+        // shell reports open, and rdpDisplay is deliberately kept Hidden in RUI
+        // mode (there the splash channel IS the UI, and the host's fallback
+        // framebuffer would paint over the splash composition and the video
+        // plane). Both of those hide exactly what you need to see when a
+        // connection never completes — so this toggle suppresses the curtain
+        // and forces rdpDisplay Visible from session start regardless of render
+        // mode or shell state. Expect a broken-looking picture in RUI: that's
+        // the point. Off by default. Takes effect on the next session.
+        public bool AlwaysShowRdp         = false;
 
         // Initial desktop / session resolution requested from the RDP
         // server. Picked from the resolution overlay in the Video sub-
@@ -217,10 +253,11 @@ namespace SoftSled.Components.Configuration {
         // delays video instead (via FFME SpeedRatio nudges) to wait
         // for audio.
         //
-        // Range clamped at ±250 ms — beyond that any pipeline
-        // problem is structural rather than offsettable.
-        // Phase 1: stored only, not yet applied. The Phase 2 sync
-        // controller will consume this in its drift-correction loop.
+        // Clamped at ±500 ms in the settings page (AudioSyncOffsetClampMs)
+        // — beyond that any pipeline problem is structural rather than
+        // offsettable. Consumed by ExternalSyncMediaController as its
+        // per-media trim baseline; the live Ctrl+[ / Ctrl+] nudge adjusts
+        // the running pacer only and is deliberately NOT persisted here.
         public int AudioSyncOffsetMs = 0;
 
         // (H264ExtraSyncOffsetMs removed 2026-07-15: the "H.264 residual" it

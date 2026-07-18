@@ -431,9 +431,11 @@ namespace SoftSledWPF {
             cfgPage.AttachRemote(_remote);
             cfgPage.CloseRequested        += (s, _) => PopPage();
             cfgPage.ConfigChanged         += (s, _) => {
-                // Resolution and the aspect-lock toggle live here — re-read
-                // and re-apply so a new ratio (or enable/disable) takes
-                // effect immediately without a restart.
+                // The resolution picker lives here, and the lock's target ratio
+                // is derived from it (SessionWidth/SessionHeight) — re-read and
+                // re-apply so a newly picked resolution reshapes the window
+                // immediately without a restart. (The lock's on/off flag is
+                // config-file-only now; it has no tickbox to change.)
                 var c = SoftSledConfigManager.ReadConfig();
                 RefreshAspectLockFromConfig(c);
                 ApplyAspectRatioToCurrentWindow();

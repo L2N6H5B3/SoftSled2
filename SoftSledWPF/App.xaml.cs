@@ -485,14 +485,8 @@ namespace SoftSledWPF {
                 var cfg = SoftSledConfigManager.ReadConfig();
                 if (!cfg.LogToFile) return;
 
-                string dir = cfg.LogFileDirectory;
-                if (string.IsNullOrWhiteSpace(dir)) {
-                    dir = Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                        "SoftSled", "Logs");
-                }
-                string fileName = $"softsled-{DateTime.Now:yyyyMMdd-HHmmss}-pid{System.Diagnostics.Process.GetCurrentProcess().Id}.log";
-                string fullPath = Path.Combine(dir, fileName);
+                string fullPath = SoftSled.Components.Configuration
+                    .DiagnosticsPaths.NewLogFilePath(cfg.DiagnosticsDirectory);
 
                 AppLog = new FileLogger(fullPath);
                 AppLog.IsLoggingDebug = true;

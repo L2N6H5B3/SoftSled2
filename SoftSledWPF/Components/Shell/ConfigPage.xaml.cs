@@ -1,7 +1,6 @@
 using SoftSled.Components.Configuration;
 using SoftSled.Components.Input;
 using System;
-using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -9,7 +8,8 @@ using System.Windows.Input;
 namespace SoftSledWPF.Components.Shell {
     /// <summary>
     /// WMC-styled nested settings page. The root menu lists categories
-    /// (General / Extender / Video / About); selecting one swaps the
+    /// (General / Pairing / Video / Audio / UI / Remote / Debugging);
+    /// selecting one swaps the
     /// visible sub-view. Backspace/ESC pops one level — when already at
     /// the root we raise <see cref="CloseRequested"/> so the shell pops
     /// us back to the landing page.
@@ -21,7 +21,7 @@ namespace SoftSledWPF.Components.Shell {
     public partial class ConfigPage : UserControl {
 
         /// <summary>Sub-view currently visible. Used by ESC handler.</summary>
-        private enum View { Root, General, Pairing, Video, Audio, Ui, Remote, Debugging, About }
+        private enum View { Root, General, Pairing, Video, Audio, Ui, Remote, Debugging }
         private View _currentView = View.Root;
         private SoftSledConfig _config;
         private bool _suppressWrite;
@@ -140,9 +140,7 @@ namespace SoftSledWPF.Components.Shell {
                 ChkFullScreen.IsChecked        = _config.RunFullScreen;
                 ChkCloseOnWmcClose.IsChecked   = _config.CloseOnWmcClose;
                 ChkKeepScreenAwake.IsChecked   = _config.KeepScreenAwake;
-                ChkLockAspect.IsChecked        = _config.LockWindowAspectRatio;
                 ChkMediaMode.IsChecked         = _config.MediaPlaybackModeEnabled;
-                ChkEpochSync.IsChecked         = _config.EpochInvariantSync;
                 ChkRemoteRendering.IsChecked   = _config.EnableRemoteRendering;
                 Chk2DAnimations.IsChecked      = _config.Enable2DAnimations;
                 ChkIntenseAnimations.IsChecked = _config.EnableIntenseAnimations;
@@ -158,22 +156,16 @@ namespace SoftSledWPF.Components.Shell {
                 ChkLogRdpFastpath.IsChecked    = _config.LogRdpFastpath;
                 ChkLogAvPlayback.IsChecked     = _config.LogAvPlayback;
                 ChkLogToFile.IsChecked         = _config.LogToFile;
-                LogFolderPath.Text             = SoftSledWPF.Components.Shell
-                                                          .ExtenderSessionControl
-                                                          .GetLogDirectoryForConfig()
-                                                  ?? "(default: %LocalAppData%/SoftSled/Logs)";
+                DiagFolderPath.Text            = SoftSled.Components.Configuration
+                                                          .DiagnosticsPaths.RootFrom(
+                                                              _config.DiagnosticsDirectory);
 
                 // Advanced env-var-driven toggles (Debugging sub-view).
                 ChkDumpSplashRaw.IsChecked     = _config.EnableSplashRawDump;
                 ChkDumpFastpathRaw.IsChecked   = _config.EnableFastpathRawDump;
-                ChkDumpAudio.IsChecked         = _config.EnableAudioDump;
                 ChkDumpRtspWire.IsChecked      = _config.EnableRtspWireDump;
                 ChkAudioTrace.IsChecked        = _config.EnableAudioTrace;
-                ChkAudioViaNAudio.IsChecked    = _config.EnableAudioViaNAudio;
-                DumpFolderPath.Text            = SoftSledWPF.Components.Shell
-                                                          .ExtenderSessionControl
-                                                          .GetDumpsRootDirectory()
-                                                  ?? "(default: %LocalAppData%/SoftSled/Dumps)";
+                ChkAlwaysShowRdp.IsChecked     = _config.AlwaysShowRdp;
                 RefreshResolutionButton();
                 RefreshAudioSyncDisplay();
                 RefreshJitterBufferDisplay();
@@ -183,9 +175,6 @@ namespace SoftSledWPF.Components.Shell {
                     ? $"Paired with {_config.RdpLoginHost} (user {_config.RdpLoginUserName})"
                     : "Not paired — choose Start Extender from the main menu to pair.";
                 UnpairButton.IsEnabled = _config.IsPaired;
-
-                AboutVersionText.Text = "Version " +
-                    Assembly.GetExecutingAssembly().GetName().Version;
             } finally {
                 _suppressWrite = false;
             }
@@ -203,7 +192,6 @@ namespace SoftSledWPF.Components.Shell {
             UiView.Visibility        = view == View.Ui        ? Visibility.Visible : Visibility.Collapsed;
             RemoteView.Visibility    = view == View.Remote    ? Visibility.Visible : Visibility.Collapsed;
             DebuggingView.Visibility = view == View.Debugging ? Visibility.Visible : Visibility.Collapsed;
-            AboutView.Visibility     = view == View.About     ? Visibility.Visible : Visibility.Collapsed;
 
             BreadcrumbText.Text = view == View.Root ? "" : view.ToString().ToLowerInvariant();
             HeaderText.Text     = view == View.Root ? "settings" : "settings";
@@ -235,11 +223,6 @@ namespace SoftSledWPF.Components.Shell {
                 case View.Debugging:
                     ChkLogDevCaps.Focus();
                     break;
-                case View.About:
-                    // Nothing focusable — focus the page itself so back keys
-                    // still route here.
-                    this.Focus();
-                    break;
             }
         }
 
@@ -268,7 +251,6 @@ namespace SoftSledWPF.Components.Shell {
             else if (item == ItemUi)         ShowView(View.Ui);
             else if (item == ItemRemote)   { BuildRemoteRows(); ShowView(View.Remote); }
             else if (item == ItemDebugging)  ShowView(View.Debugging);
-            else if (item == ItemAbout)      ShowView(View.About);
         }
 
         // ---- Live tickbox persistence ---------------------------------
@@ -282,9 +264,7 @@ namespace SoftSledWPF.Components.Shell {
             _config.RunFullScreen           = ChkFullScreen.IsChecked == true;
             _config.CloseOnWmcClose         = ChkCloseOnWmcClose.IsChecked == true;
             _config.KeepScreenAwake         = ChkKeepScreenAwake.IsChecked == true;
-            _config.LockWindowAspectRatio   = ChkLockAspect.IsChecked == true;
             _config.MediaPlaybackModeEnabled = ChkMediaMode.IsChecked == true;
-            _config.EpochInvariantSync      = ChkEpochSync.IsChecked == true;
             _config.EnableRemoteRendering   = ChkRemoteRendering.IsChecked == true;
             _config.Enable2DAnimations      = Chk2DAnimations.IsChecked == true;
             _config.EnableIntenseAnimations = ChkIntenseAnimations.IsChecked == true;
@@ -302,10 +282,9 @@ namespace SoftSledWPF.Components.Shell {
             _config.LogToFile               = ChkLogToFile.IsChecked == true;
             _config.EnableSplashRawDump     = ChkDumpSplashRaw.IsChecked == true;
             _config.EnableFastpathRawDump   = ChkDumpFastpathRaw.IsChecked == true;
-            _config.EnableAudioDump         = ChkDumpAudio.IsChecked == true;
             _config.EnableRtspWireDump      = ChkDumpRtspWire.IsChecked == true;
             _config.EnableAudioTrace        = ChkAudioTrace.IsChecked == true;
-            _config.EnableAudioViaNAudio    = ChkAudioViaNAudio.IsChecked == true;
+            _config.AlwaysShowRdp           = ChkAlwaysShowRdp.IsChecked == true;
 
             try {
                 SoftSledConfigManager.WriteConfig(_config);
@@ -477,57 +456,34 @@ namespace SoftSledWPF.Components.Shell {
         }
 
         /// <summary>
-        /// Open the directory where session log files are written. Falls
-        /// back to launching the parent if the leaf doesn't exist yet
-        /// (it's created lazily when a session opens its first file).
+        /// Open the diagnostics root — the session logs (Logs\) and the raw
+        /// dumps (Dumps\) both live under it. Falls back to launching the
+        /// parent if the leaf doesn't exist yet: it's created lazily by
+        /// whichever sink writes first.
         /// </summary>
-        private void OnOpenLogFolderClick(object sender, RoutedEventArgs e) {
-            OpenFolderOrExplain("log",
-                SoftSledWPF.Components.Shell.ExtenderSessionControl.GetLogDirectoryForConfig());
+        private void OnOpenDiagFolderClick(object sender, RoutedEventArgs e) {
+            OpenFolderOrExplain("diagnostics",
+                SoftSled.Components.Configuration.DiagnosticsPaths
+                    .RootFrom(_config?.DiagnosticsDirectory));
         }
 
         /// <summary>
-        /// Open the root dump directory (siblings: splash/, fastpath/,
-        /// audio/). Auto-creates the directory if it doesn't exist yet —
-        /// individual sub-dirs are created lazily by the dumper that
-        /// owns them.
+        /// "Change diagnostics folder" — opens a folder picker, stores the
+        /// chosen root in <see cref="SoftSledConfig.DiagnosticsDirectory"/>,
+        /// and refreshes the displayed path. Logs move on the next app launch
+        /// (the AppLog is opened at App.OnStartup, so mid-session changes
+        /// don't move the open file); dumps move on the next session start
+        /// (the dump dirs are pushed into env vars then).
         /// </summary>
-        private void OnOpenDumpFolderClick(object sender, RoutedEventArgs e) {
-            OpenFolderOrExplain("dump",
-                SoftSledWPF.Components.Shell.ExtenderSessionControl.GetDumpsRootDirectory());
-        }
-
-        /// <summary>
-        /// "Change log folder" — opens a folder picker, stores the
-        /// chosen path in <see cref="SoftSledConfig.LogFileDirectory"/>,
-        /// and refreshes the displayed path. Takes effect on next app
-        /// launch (the AppLog is opened at App.OnStartup; mid-session
-        /// changes don't move the open file).
-        /// </summary>
-        private void OnChangeLogFolderClick(object sender, RoutedEventArgs e) {
+        private void OnChangeDiagFolderClick(object sender, RoutedEventArgs e) {
             if (_config == null) return;
-            string chosen = PickFolder("Choose folder for SoftSled log files", _config.LogFileDirectory);
+            string chosen = PickFolder("Choose folder for SoftSled diagnostic output",
+                                       _config.DiagnosticsDirectory);
             if (chosen == null) return;
-            _config.LogFileDirectory = chosen;
+            _config.DiagnosticsDirectory = chosen;
             try { SoftSledConfigManager.WriteConfig(_config); }
             catch (Exception ex) { MessageBox.Show("Couldn't save config: " + ex.Message); return; }
-            LogFolderPath.Text = chosen;
-        }
-
-        /// <summary>
-        /// "Change dumps folder" — same UX as above but stores into
-        /// <see cref="SoftSledConfig.DumpsDirectory"/>. Takes effect on
-        /// next session start (dump dirs are pushed into env vars at
-        /// session-start time, not app-start).
-        /// </summary>
-        private void OnChangeDumpFolderClick(object sender, RoutedEventArgs e) {
-            if (_config == null) return;
-            string chosen = PickFolder("Choose folder for SoftSled dump output", _config.DumpsDirectory);
-            if (chosen == null) return;
-            _config.DumpsDirectory = chosen;
-            try { SoftSledConfigManager.WriteConfig(_config); }
-            catch (Exception ex) { MessageBox.Show("Couldn't save config: " + ex.Message); return; }
-            DumpFolderPath.Text = chosen;
+            DiagFolderPath.Text = chosen;
         }
 
         /// <summary>

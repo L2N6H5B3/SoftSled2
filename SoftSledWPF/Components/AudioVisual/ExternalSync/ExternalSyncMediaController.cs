@@ -160,14 +160,6 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             try { _log?.LogInfo("[av-policy] " + AvSyncPolicy.SelfTest().Replace("\n", " | ")); } catch { }
         }
 
-        // DEBUG: epoch-invariant sync mode (see SoftSledConfig.EpochInvariantSync).
-        // Settable from the session on construction. When on, a seek's offset is
-        // computed from the once-measured session RTP epoch + the fresh first-frame
-        // origins, instead of the seek's own (sometimes inconsistent) RTP-Info.
-        public bool EpochInvariantSync { get; set; }
-        private long _sessionEpochMs;    // measured once per media at the initial play
-        private bool _sessionEpochSet;   // reset per media in ResetPipelineForNewMedia
-
         /// <summary>Bind the session-owned GPU presenter. Must be called before
         /// video starts (the session does this right after construction).</summary>
         public void AttachVideoPresenter(D3DImagePresenter presenter) {
@@ -589,7 +581,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // offset comes from the PLAY response's RTP-Info (each stream's
             // play-point RTP timestamp) — epoch-free and available immediately.
             if (_rtsp != null && _rtsp.TryGetRtpInfoAvOffsetMs((uint)aRaw, (uint)vRaw, out long offsetMs, out long videoPadMs)) {
-                long rtpInfoCandidate = offsetMs;   // raw RTP-Info value, pre epoch-invariant/clamp (candidate logging)
+                long rtpInfoCandidate = offsetMs;   // raw RTP-Info value, pre content-clock/clamp (candidate logging)
 
                 // PREFERRED: the B57532D6 / NPT file-global CONTENT clock. Both streams'
                 // content times are on the shared ASF presentation timeline (not the
@@ -654,28 +646,6 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                     _log?.LogInfo($"[ext-sync] H.264 offset select: direct={(dcand.Valid ? dcand.OffsetMs.ToString() : "n/a")} " +
                                   $"2·vPad={twoVpad} → chose {src}={chosen}ms " +
                                   $"(codecTrim {chosen - offsetMs})");
-                }
-                // Capture the session RTP epoch ONCE (initial play, before any
-                // seek — the play points are reliable there). Reused by the
-                // epoch-invariant mode across seeks. Cheap; harmless when the mode
-                // is off.
-                if (!_sessionEpochSet && _rtsp.TryGetRtpInfoEpochMs(out long epMs)) {
-                    _sessionEpochMs = epMs;
-                    _sessionEpochSet = true;
-                    _log?.LogInfo($"[ext-sync] session RTP epoch captured = {epMs}ms");
-                }
-                // DEBUG epoch-invariant mode: recompute the offset from the stored
-                // epoch + the FRESH first-frame origins, rather than this seek's
-                // own RTP-Info pad diff (which WMPNss can report inconsistently).
-                // At the initial play this equals the per-seek value; it only
-                // diverges when a seek's play points drift from the true epoch.
-                if (EpochInvariantSync && _sessionEpochSet && !haveContent) {
-                    // a0ms/v0ms: the first-MAU wire origins already read above
-                    // for the content path (identical values).
-                    long epOffset = _sessionEpochMs - (v0ms - a0ms);
-                    _log?.LogInfo($"[ext-sync] epoch-invariant offset {epOffset}ms " +
-                                  $"(per-seek would be {offsetMs}ms; epoch {_sessionEpochMs}ms − (v0 {v0ms} − a0 {a0ms}))");
-                    offsetMs = epOffset;
                 }
                 // Refactor step 2: compute + log ALL offset candidates side-by-side
                 // via the pure AvSyncPolicy, and cross-check the legacy selection.
@@ -1156,7 +1126,6 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // MAUs re-anchor and the offset is recomputed from scratch.
             _isOpen = false;
             _syncFinalized = false;
-            _sessionEpochSet = false;      // new media = new RTP session = new epoch
             _videoMauDiagCount = 0;        // re-arm the first-MAU arrival diagnostic
             Interlocked.Exchange(ref _videoCodecTrimMs, 0L);  // re-set on next codec commit
             _audioClockHz = 90000;

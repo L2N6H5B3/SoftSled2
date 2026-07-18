@@ -6,6 +6,23 @@
              mc:Ignorable="d"
              Background="Transparent"
              d:DesignHeight="720" d:DesignWidth="1280">
+    <UserControl.Resources>
+        <!-- Root-menu items keep the shared WmcListItemStyle's look and
+             padding, and spend the slot freed by dropping the About page on a
+             little extra breathing room between them (margin 2 -> 3).
+             RootView's bottom margin is trimmed to suit: the list is
+             Top-aligned, so that margin is purely where clipping starts and
+             moving it changes nothing about where the items sit. Local to this
+             page so the landing page and first-run wizard, which share
+             WmcListItemStyle, are untouched. The page is inside a Viewbox over
+             a fixed 1280x720 grid, so these are exact logical pixels at any
+             window size or DPI — see the measured fit in RootView below. -->
+        <Style x:Key="ConfigRootItemStyle"
+               TargetType="ListBoxItem"
+               BasedOn="{StaticResource WmcListItemStyle}">
+            <Setter Property="Margin" Value="0,3"/>
+        </Style>
+    </UserControl.Resources>
     <Viewbox Stretch="Uniform">
         <Grid Width="1280" Height="720">
 
@@ -26,12 +43,19 @@
                        VerticalAlignment="Top"/>
 
             <!-- ===== Root menu ============================================ -->
+            <!-- Bottom margin is 20 rather than the sub-views' 80 so the eight
+                 items (~490px at the roomier spacing) clear the clip boundary
+                 with ~13px to spare. Not trimmed further: the list would then
+                 run close enough to the screen edge to risk being lost to TV
+                 overscan. Top margin stays 200 so the list starts exactly
+                 where it always has, in line with every sub-view. -->
             <Grid x:Name="RootView"
-                  Margin="100,200,100,80"
+                  Margin="100,200,100,20"
                   Visibility="Visible">
                 <ListBox x:Name="RootMenu"
                          Style="{StaticResource WmcListBoxStyle}"
-                         ItemContainerStyle="{StaticResource WmcListItemStyle}"
+                         ItemContainerStyle="{StaticResource ConfigRootItemStyle}"
+                         ScrollViewer.VerticalScrollBarVisibility="Disabled"
                          Width="520"
                          HorizontalAlignment="Left"
                          VerticalAlignment="Top"
@@ -45,7 +69,6 @@
                     <ListBoxItem x:Name="ItemUi"        Content="UI"/>
                     <ListBoxItem x:Name="ItemRemote"    Content="Remote"/>
                     <ListBoxItem x:Name="ItemDebugging" Content="Debugging"/>
-                    <ListBoxItem x:Name="ItemAbout"     Content="About"/>
                 </ListBox>
             </Grid>
 
@@ -63,16 +86,9 @@
                               Foreground="{StaticResource WmcSubtleTextBrush}"
                               Margin="10,16,0,0"
                               Text="Tip: press F11 at any time to toggle full screen without changing this setting."/>
-                    <CheckBox x:Name="ChkLockAspect"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Lock window shape to selected resolution"
-                              Margin="0,16,0,0"
-                              Click="OnConfigChanged"/>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="10,4,0,0"
-                               TextWrapping="Wrap"
-                               Text="Constrains window resizing to the aspect ratio of the resolution chosen in Video settings, removing the black bars on the edges. Has no effect in full screen."/>
+                    <!-- No aspect-lock tickbox by request: LockWindowAspectRatio
+                         stays live in Config.xml (ShellWindow still honours it),
+                         it's just not surfaced here. -->
                     <CheckBox x:Name="ChkAutoStart"
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Auto-start the extender session on launch"
@@ -328,17 +344,6 @@
                               Content="Include A/V (libav / sync) logs"
                               Click="OnConfigChanged"/>
 
-                    <CheckBox x:Name="ChkEpochSync"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Epoch-invariant A/V sync (experimental)"
-                              Margin="0,16,0,0"
-                              Click="OnConfigChanged"/>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="10,4,0,8"
-                               TextWrapping="Wrap"
-                               Text="After seeking, reuse the audio/video clock offset measured at the start of playback rather than re-deriving it from each seek. May improve lip-sync after seeking on some recordings. Takes effect on the next session."/>
-
                     <!-- File logging — survives a crash so release-build
                          hangs on remote machines can still be diagnosed. -->
                     <CheckBox x:Name="ChkLogToFile"
@@ -350,31 +355,45 @@
                                Foreground="{StaticResource WmcSubtleTextBrush}"
                                Margin="10,4,0,8"
                                TextWrapping="Wrap"
-                               Text="A timestamped log file is created per session in the folder shown below. Auto-flushed so a crash still leaves a captured log on disk."/>
+                               Text="A timestamped log file is created per session. Auto-flushed so a crash still leaves a captured log on disk."/>
+
+                    <!-- ONE folder for every kind of diagnostic output: the
+                         session logs and the raw dumps below both live under
+                         this root (Logs\ and Dumps\). -->
+                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
+                               Text="Diagnostics folder"
+                               Foreground="{StaticResource WmcTextBrush}"
+                               Margin="0,24,0,4"/>
+                    <TextBlock Style="{StaticResource WmcBodyStyle}"
+                               Foreground="{StaticResource WmcSubtleTextBrush}"
+                               Margin="0,0,0,8"
+                               TextWrapping="Wrap"
+                               Text="Everything SoftSled writes for diagnosis goes under this one folder: session logs in Logs\, and the raw dumps below in Dumps\."/>
                     <StackPanel Orientation="Horizontal" Margin="10,0,0,0">
-                        <TextBlock x:Name="LogFolderPath"
+                        <TextBlock x:Name="DiagFolderPath"
                                    Style="{StaticResource WmcBodyStyle}"
                                    Foreground="{StaticResource WmcSubtleTextBrush}"
                                    VerticalAlignment="Center"
                                    TextWrapping="Wrap"
                                    MaxWidth="360"
                                    Text="(folder)"/>
-                        <Button x:Name="BtnOpenLogFolder"
+                        <Button x:Name="BtnOpenDiagFolder"
                                 Content="Open"
                                 Margin="12,0,0,0"
                                 Padding="14,4"
-                                Click="OnOpenLogFolderClick"/>
-                        <Button x:Name="BtnChangeLogFolder"
+                                Click="OnOpenDiagFolderClick"/>
+                        <Button x:Name="BtnChangeDiagFolder"
                                 Content="Change..."
                                 Margin="6,0,0,0"
                                 Padding="14,4"
-                                Click="OnChangeLogFolderClick"/>
+                                Click="OnChangeDiagFolderClick"/>
                     </StackPanel>
                     <TextBlock Style="{StaticResource WmcBodyStyle}"
                                Foreground="{StaticResource WmcSubtleTextBrush}"
                                Margin="10,4,0,0"
                                FontSize="12"
-                               Text="Log path changes take effect on the NEXT app launch."/>
+                               TextWrapping="Wrap"
+                               Text="Log path changes take effect on the NEXT app launch; dump paths on the next session start."/>
 
                     <!-- Video jitter buffer (libav + D3DImage player). -->
                     <TextBlock Style="{StaticResource WmcSubtitleStyle}"
@@ -431,7 +450,7 @@
                                Foreground="{StaticResource WmcSubtleTextBrush}"
                                Margin="0,0,0,16"
                                TextWrapping="Wrap"
-                               Text="Mirror of the SOFTSLED_* environment variables. Files are written to the folder shown below. Changes take effect on the NEXT session start."/>
+                               Text="Mirror of the SOFTSLED_* environment variables. Files are written to Dumps\ under the diagnostics folder above. Changes take effect on the NEXT session start."/>
 
                     <CheckBox x:Name="ChkDumpSplashRaw"
                               Style="{StaticResource WmcCheckBoxStyle}"
@@ -441,34 +460,10 @@
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Dump RDP fastpath payloads (SOFTSLED_FASTPATH_RAW_DUMP)"
                               Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkDumpAudio"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Dump fastpath audio PCM (SOFTSLED_AUDIO_DUMP)"
-                              Click="OnConfigChanged"/>
                     <CheckBox x:Name="ChkDumpRtspWire"
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Dump RTSP control-channel wire (SOFTSLED_RTSP_WIRE_DUMP)"
                               Click="OnConfigChanged"/>
-
-                    <StackPanel Orientation="Horizontal" Margin="10,8,0,0">
-                        <TextBlock x:Name="DumpFolderPath"
-                                   Style="{StaticResource WmcBodyStyle}"
-                                   Foreground="{StaticResource WmcSubtleTextBrush}"
-                                   VerticalAlignment="Center"
-                                   TextWrapping="Wrap"
-                                   MaxWidth="360"
-                                   Text="(folder)"/>
-                        <Button x:Name="BtnOpenDumpFolder"
-                                Content="Open"
-                                Margin="12,0,0,0"
-                                Padding="14,4"
-                                Click="OnOpenDumpFolderClick"/>
-                        <Button x:Name="BtnChangeDumpFolder"
-                                Content="Change..."
-                                Margin="6,0,0,0"
-                                Padding="14,4"
-                                Click="OnChangeDumpFolderClick"/>
-                    </StackPanel>
 
                     <TextBlock Style="{StaticResource WmcSubtitleStyle}"
                                Text="Advanced behaviour toggles"
@@ -478,33 +473,24 @@
                                Foreground="{StaticResource WmcSubtleTextBrush}"
                                Margin="0,0,0,16"
                                TextWrapping="Wrap"
-                               Text="These change runtime behaviour rather than producing files. Use for isolating audio-pipeline issues."/>
+                               Text="These change runtime behaviour rather than producing files. Use for isolating audio-pipeline and connection issues."/>
 
                     <CheckBox x:Name="ChkAudioTrace"
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Verbose fastpath audio trace (SOFTSLED_AUDIO_TRACE)"
                               Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkAudioViaNAudio"
+                    <CheckBox x:Name="ChkAlwaysShowRdp"
                               Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Route RTSP audio via NAudio (SOFTSLED_AUDIO_VIA_NAUDIO)"
+                              Content="Always show RDP framebuffer"
+                              Margin="0,16,0,0"
                               Click="OnConfigChanged"/>
-                </StackPanel>
-                </ScrollViewer>
-            </Grid>
-
-            <!-- ===== About sub-view ======================================= -->
-            <Grid x:Name="AboutView"
-                  Margin="100,200,100,80"
-                  Visibility="Collapsed">
-                <StackPanel HorizontalAlignment="Left" Width="640">
-                    <TextBlock Style="{StaticResource WmcSubtitleStyle}" Text="SoftSled" Foreground="{StaticResource WmcTextBrush}"/>
-                    <TextBlock x:Name="AboutVersionText" Style="{StaticResource WmcBodyStyle}"/>
                     <TextBlock Style="{StaticResource WmcBodyStyle}"
                                Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="0,16,0,0"
+                               Margin="10,4,0,8"
                                TextWrapping="Wrap"
-                               Text="A clean-room Windows Media Center Extender client. See the project README for credits and the protocol notes."/>
+                               Text="Skips the 'connecting' overlay and keeps the raw RDP picture on screen for the whole session, even before Media Center's shell opens. For diagnosing connections that never complete. Expect a broken-looking picture in RUI mode — the framebuffer will paint over the splash UI and video. Takes effect on the next session."/>
                 </StackPanel>
+                </ScrollViewer>
             </Grid>
 
             <!-- ===== Unpair confirm overlay =============================== -->

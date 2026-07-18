@@ -24,6 +24,11 @@ namespace SoftSled.Components.Configuration {
                 config = (SoftSledConfig)xmlSerializer.Deserialize(textReader);
             }
 
+            // Carry a pre-merge Config.xml's log/dump folders over to the single
+            // DiagnosticsDirectory root so an upgrade keeps writing where the
+            // user pointed it. In-memory only — see MigrateLegacyPaths.
+            config.MigrateLegacyPaths();
+
             return config;
         }
 

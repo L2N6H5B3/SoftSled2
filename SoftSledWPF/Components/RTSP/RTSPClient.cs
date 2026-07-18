@@ -447,27 +447,6 @@ namespace SoftSled.Components.RTSP {
             return true;
         }
 
-        /// <summary>The cross-stream RTP epoch in ms: (video play-point) −
-        /// (audio play-point) from the current RTP-Info. Both play points map to
-        /// the SAME npt/content position, so this difference is the fixed offset
-        /// between the two streams' RTP clocks — constant for the session (the
-        /// clocks free-run and seeks don't reset them). Measured once at initial
-        /// play, it lets the epoch-invariant sync mode compute each seek's offset
-        /// from the stored epoch + the fresh first-frame origins, rather than
-        /// re-deriving it from post-seek RTP-Info that WMPNss may report
-        /// inconsistently.</summary>
-        public bool TryGetRtpInfoEpochMs(out long epochMs) {
-            epochMs = 0;
-            long aInfo = System.Threading.Interlocked.Read(ref _audioRtpInfoRtptime);
-            long vInfo = System.Threading.Interlocked.Read(ref _videoRtpInfoRtptime);
-            if (aInfo < 0 || vInfo < 0) return false;
-            long aClk = _audioClockHz > 0 ? _audioClockHz : 90000L;
-            long vClk = _videoClockHz > 0 ? _videoClockHz : 90000L;
-            epochMs = (vInfo * 1000L / vClk) - (aInfo * 1000L / aClk);
-            return true;
-        }
-
-
         #region External Audio Consumer #######################################
 
         // External-audio consumer.
@@ -3238,21 +3217,17 @@ namespace SoftSled.Components.RTSP {
 
         #region Utility #######################################################
 
-        // Resolve the directory for RTSP diagnostic logs: an "rtsp" subfolder
-        // under the configured main log directory (SoftSledConfig.LogFileDirectory,
-        // default %LocalAppData%/SoftSled/Logs) so they sit alongside the
-        // session logs instead of in %TEMP%. Falls back to %TEMP% if config
-        // resolution or directory creation fails, so diagnostics are never lost.
+        // Resolve the directory for the per-play RTSP diagnostic logs: the same
+        // <DiagnosticsRoot>\Dumps\rtsp folder the RTSP wire dump writes to, so
+        // every RTSP artefact for a play sits together. (Before the folder
+        // settings were merged this read a different config field than the wire
+        // dumper, so the two could land in two separate "rtsp" folders.) Falls
+        // back to %TEMP% if config resolution or directory creation fails, so
+        // diagnostics are never lost.
         private static string ResolveRtspDiagDir() {
             try {
-                string dir = null;
-                try { dir = SoftSled.Components.Configuration.SoftSledConfigManager.ReadConfig()?.LogFileDirectory; } catch { }
-                if (string.IsNullOrWhiteSpace(dir)) {
-                    dir = System.IO.Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                        "SoftSled", "Logs");
-                }
-                dir = System.IO.Path.Combine(dir, "rtsp");
+                string dir = System.IO.Path.Combine(
+                    SoftSled.Components.Configuration.DiagnosticsPaths.DumpsRoot(), "rtsp");
                 System.IO.Directory.CreateDirectory(dir);
                 return dir;
             } catch {
