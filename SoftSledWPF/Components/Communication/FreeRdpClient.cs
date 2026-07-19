@@ -46,16 +46,32 @@ namespace SoftSled.Components.Communication {
         private SoftSledNative.FramebufferInfo _fbInfo;
         private WriteableBitmap _bitmap;
 
-        // Paint coalescer: worker-thread paint callbacks union into _pendingRect
-        // under _paintLock. A single BeginInvoke drains the union on the UI
-        // thread. Multiple frames that arrive while the UI thread is busy collapse
-        // into one composite blit — caps Dispatcher queue depth at one and keeps
-        // GFX/H.264 burst frames from stalling the UI. _flushAction is allocated
-        // once to avoid per-paint closure allocation.
+        // Paint coalescer: worker-thread paint callbacks accumulate the frame's
+        // dirty rects into _pendingRects under _paintLock. A single BeginInvoke
+        // drains them on the UI thread, which blits each rect separately. Keeping
+        // the rects discrete (rather than unioning them into one bounding box)
+        // matters because a WMC frame often touches a few far-apart regions
+        // (clock, menu, focus highlight) whose bounding box can be the whole
+        // screen — blitting the box would CPU-copy and GPU-resample a full frame
+        // of unchanged pixels. Multiple frames that arrive while the UI thread is
+        // busy simply keep appending, so the queue depth stays capped at one
+        // dispatch. If a burst pushes the rect count past _maxPendingRects we
+        // collapse to a single bounding box (bounded worst case). The two lists
+        // are swapped on drain so the worker never blocks on the UI blit and no
+        // per-frame list allocation occurs. _flushAction is cached to avoid
+        // per-paint closure allocation.
+        private struct DirtyRect {
+            public int X, Y, W, H;
+            public DirtyRect(int x, int y, int w, int h) { X = x; Y = y; W = w; H = h; }
+        }
+        private const int _maxPendingRects = 64;
         private readonly object _paintLock = new object();
         private bool _paintDispatchPending;
-        private bool _pendingRectValid;
-        private int _pendingRX, _pendingRY, _pendingRW, _pendingRH;
+        private bool _pendingCoalesced;   // true once we've collapsed to slot 0
+        private System.Collections.Generic.List<DirtyRect> _pendingRects =
+            new System.Collections.Generic.List<DirtyRect>(_maxPendingRects);
+        private System.Collections.Generic.List<DirtyRect> _drainRects =
+            new System.Collections.Generic.List<DirtyRect>(_maxPendingRects);
         private readonly Action _flushAction;
 
         public event EventHandler<DataReceived> DataReceived;
@@ -289,8 +305,8 @@ namespace SoftSled.Components.Communication {
 
         // Multi-rect paint callback. <paramref name="rects"/> points at shim-owned
         // memory holding <paramref name="count"/> SoftSledNative.Rect structs;
-        // valid only for the duration of the call. We read each one and union
-        // them into _pendingRect.
+        // valid only for the duration of the call. We read each one and queue it
+        // as a discrete dirty rect (QueueRect keeps them separate for the blit).
         private void OnNativePaintRects(IntPtr user, IntPtr rects, uint count) {
             if (rects == IntPtr.Zero || count == 0) return;
             int sz = Marshal.SizeOf(typeof(SoftSledNative.Rect));
@@ -301,11 +317,13 @@ namespace SoftSled.Components.Communication {
             }
         }
 
-        // Worker-thread side of the coalescer. Unions the new rect into the
-        // pending one; if no dispatch is currently in flight, posts a single
+        // Worker-thread side of the coalescer. Appends the (clipped) rect to the
+        // pending list; if no dispatch is currently in flight, posts a single
         // BeginInvoke at Render priority. The dispatcher closure (FlushPendingPaint)
-        // drains and clears the pending rect, then the next worker frame is free
-        // to re-post.
+        // drains the list, then the next worker frame is free to re-post. Past
+        // _maxPendingRects the list is collapsed to a single bounding box so a
+        // pathological burst can't grow the list (or the per-rect blit loop)
+        // without bound.
         private void QueueRect(int x, int y, int w, int h) {
             if (w <= 0 || h <= 0) return;
             SoftSledNative.FramebufferInfo fb = _fbInfo;
@@ -321,17 +339,16 @@ namespace SoftSled.Components.Communication {
 
             bool needDispatch;
             lock (_paintLock) {
-                if (!_pendingRectValid) {
-                    _pendingRX = x; _pendingRY = y; _pendingRW = w; _pendingRH = h;
-                    _pendingRectValid = true;
+                if (_pendingCoalesced) {
+                    // Already collapsed — keep unioning into the single box (slot 0).
+                    UnionIntoPending(0, x, y, w, h);
+                } else if (_pendingRects.Count >= _maxPendingRects) {
+                    // Too many discrete rects — collapse the backlog to one box.
+                    CollapsePendingToBoundingBox();
+                    UnionIntoPending(0, x, y, w, h);
+                    _pendingCoalesced = true;
                 } else {
-                    // Union with existing pending rect.
-                    int x2 = Math.Max(_pendingRX + _pendingRW, x + w);
-                    int y2 = Math.Max(_pendingRY + _pendingRH, y + h);
-                    _pendingRX = Math.Min(_pendingRX, x);
-                    _pendingRY = Math.Min(_pendingRY, y);
-                    _pendingRW = x2 - _pendingRX;
-                    _pendingRH = y2 - _pendingRY;
+                    _pendingRects.Add(new DirtyRect(x, y, w, h));
                 }
                 needDispatch = !_paintDispatchPending;
                 if (needDispatch) _paintDispatchPending = true;
@@ -345,27 +362,68 @@ namespace SoftSled.Components.Communication {
                     /* dispatcher shutting down — clear pending so we don't spin */
                     lock (_paintLock) {
                         _paintDispatchPending = false;
-                        _pendingRectValid = false;
+                        _pendingRects.Clear();
+                        _pendingCoalesced = false;
                     }
                 }
             }
         }
 
-        // UI-thread drain. Snapshots the pending rect (under lock), clears it,
-        // then blits once. The cleared pending state means subsequent worker
-        // frames will re-post a fresh BeginInvoke and the union starts over.
+        // Union (x,y,w,h) into the pending rect at index i. Caller holds _paintLock.
+        private void UnionIntoPending(int i, int x, int y, int w, int h) {
+            DirtyRect r = _pendingRects[i];
+            int x2 = Math.Max(r.X + r.W, x + w);
+            int y2 = Math.Max(r.Y + r.H, y + h);
+            r.X = Math.Min(r.X, x);
+            r.Y = Math.Min(r.Y, y);
+            r.W = x2 - r.X;
+            r.H = y2 - r.Y;
+            _pendingRects[i] = r;
+        }
+
+        // Collapse every pending rect into a single bounding box at slot 0.
+        // Caller holds _paintLock. No-op when the list is empty.
+        private void CollapsePendingToBoundingBox() {
+            if (_pendingRects.Count == 0) return;
+            DirtyRect acc = _pendingRects[0];
+            for (int i = 1; i < _pendingRects.Count; i++) {
+                DirtyRect r = _pendingRects[i];
+                int x2 = Math.Max(acc.X + acc.W, r.X + r.W);
+                int y2 = Math.Max(acc.Y + acc.H, r.Y + r.H);
+                acc.X = Math.Min(acc.X, r.X);
+                acc.Y = Math.Min(acc.Y, r.Y);
+                acc.W = x2 - acc.X;
+                acc.H = y2 - acc.Y;
+            }
+            _pendingRects.Clear();
+            _pendingRects.Add(acc);
+        }
+
+        // UI-thread drain. Swaps the pending list out for an empty one (under
+        // lock) so the worker can keep accumulating the next frame without
+        // blocking on the blit, then blits every dirty rect inside a single
+        // Lock/Unlock. Each WritePixels copies only that rect's pixels and each
+        // AddDirtyRect marks only that region, so both the CPU copy and WPF's
+        // GPU upload stay proportional to what actually changed — not to the
+        // bounding box of scattered updates.
         private void FlushPendingPaint() {
-            int rx, ry, rw, rh;
+            System.Collections.Generic.List<DirtyRect> rects;
             lock (_paintLock) {
                 _paintDispatchPending = false;
-                if (!_pendingRectValid) return;
-                rx = _pendingRX; ry = _pendingRY; rw = _pendingRW; rh = _pendingRH;
-                _pendingRectValid = false;
+                if (_pendingRects.Count == 0) { _pendingCoalesced = false; return; }
+                // Swap: hand the accumulated list to this drain, give the worker
+                // the (already-empty) other list to fill.
+                var tmp = _drainRects;
+                _drainRects = _pendingRects;
+                _pendingRects = tmp;
+                _pendingRects.Clear();
+                _pendingCoalesced = false;
+                rects = _drainRects;
             }
 
             var b = _bitmap;
             var f = _fbInfo;
-            if (b == null || f.Pixels == IntPtr.Zero || rw <= 0 || rh <= 0) return;
+            if (b == null || f.Pixels == IntPtr.Zero) { rects.Clear(); return; }
 
             // sourceBufferSize must span the entire region addressed by
             // sourceRect within sourceBuffer. We pass the whole framebuffer
@@ -376,14 +434,25 @@ namespace SoftSled.Components.Communication {
             // enough to copy memory".
             int stride = (int)f.Stride;
             int bufSize = stride * (int)f.Height;
-            var rect = new Int32Rect(rx, ry, rw, rh);
+            int fbW = (int)f.Width, fbH = (int)f.Height;
             b.Lock();
             try {
-                b.WritePixels(rect, f.Pixels, bufSize, stride, rx, ry);
-                b.AddDirtyRect(rect);
+                for (int i = 0; i < rects.Count; i++) {
+                    DirtyRect r = rects[i];
+                    // Rects were clipped at queue time; re-validate against the
+                    // current framebuffer as cheap insurance and skip anything
+                    // degenerate (belt-and-braces — fb size is stable between
+                    // connect and disconnect).
+                    if (r.W <= 0 || r.H <= 0) continue;
+                    if (r.X < 0 || r.Y < 0 || r.X + r.W > fbW || r.Y + r.H > fbH) continue;
+                    var rect = new Int32Rect(r.X, r.Y, r.W, r.H);
+                    b.WritePixels(rect, f.Pixels, bufSize, stride, r.X, r.Y);
+                    b.AddDirtyRect(rect);
+                }
             } finally {
                 b.Unlock();
             }
+            rects.Clear();
         }
 
         private void OnNativeChannelData(IntPtr user, IntPtr namePtr, IntPtr dataPtr, UIntPtr length) {

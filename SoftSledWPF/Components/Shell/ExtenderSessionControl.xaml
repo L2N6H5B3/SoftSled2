@@ -47,9 +47,18 @@
                    Visibility="Collapsed"/>
         </Canvas>
 
+        <!-- BitmapScalingMode=LowQuality: rdpDisplay updates every RDP frame and
+             is almost always scaled (config session resolution → the current
+             client/monitor size, since the ShellWindow aspect-lock keeps the
+             window at the resolution's ratio, so this is a pure Uniform scale
+             with no letterbox). HighQuality (Fant, multi-tap) re-resamples the
+             whole surface on every dirty-rect update — a large recurring GPU
+             cost during WMC menu animation. LowQuality (GPU bilinear) is far
+             cheaper and, for the 10-foot GUI (large text, typically upscaled
+             from 720p), visually indistinguishable in motion. -->
         <Image x:Name="rdpDisplay"
                Stretch="Uniform"
-               RenderOptions.BitmapScalingMode="HighQuality"
+               RenderOptions.BitmapScalingMode="LowQuality"
                Visibility="Hidden"/>
 
         <splash:SplashRenderHost x:Name="splashHost"
