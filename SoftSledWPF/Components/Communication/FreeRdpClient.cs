@@ -305,14 +305,16 @@ namespace SoftSled.Components.Communication {
 
         // Multi-rect paint callback. <paramref name="rects"/> points at shim-owned
         // memory holding <paramref name="count"/> SoftSledNative.Rect structs;
-        // valid only for the duration of the call. We read each one and queue it
-        // as a discrete dirty rect (QueueRect keeps them separate for the blit).
-        private void OnNativePaintRects(IntPtr user, IntPtr rects, uint count) {
+        // valid only for the duration of the call. Rect is a blittable
+        // LayoutKind.Sequential struct (four ints), so we read it straight from
+        // native memory with a pointer walk — no per-rect Marshal.PtrToStructure
+        // (reflection + boxing) on the FreeRDP worker thread's hot path. Each
+        // rect is queued discretely; QueueRect keeps them separate for the blit.
+        private unsafe void OnNativePaintRects(IntPtr user, IntPtr rects, uint count) {
             if (rects == IntPtr.Zero || count == 0) return;
-            int sz = Marshal.SizeOf(typeof(SoftSledNative.Rect));
+            SoftSledNative.Rect* p = (SoftSledNative.Rect*)rects;
             for (uint i = 0; i < count; i++) {
-                var r = (SoftSledNative.Rect)Marshal.PtrToStructure(
-                    new IntPtr(rects.ToInt64() + i * sz), typeof(SoftSledNative.Rect));
+                SoftSledNative.Rect r = p[i];
                 QueueRect(r.X, r.Y, r.W, r.H);
             }
         }
