@@ -51,9 +51,25 @@ namespace SoftSled.Components.Splash {
         /// audio plays asynchronously. Concurrent calls are supported —
         /// each gets its own NAudio output device. Errors are logged
         /// and swallowed (never thrown back into the dispatcher).
+        ///
+        /// <para>The optional format triple comes from the wire
+        /// SoundHeader (spec §2.2.6.11) via XAudSoundDevice_-
+        /// CreateSoundBuffer. Plausible values override the historic
+        /// 44.1 kHz/16-bit/stereo assumption; zeros / implausible values
+        /// fall back to it. Raw PCM is still byte-swapped BE→LE for
+        /// 16-bit formats (the WMC wire ships BE samples); 8-bit data
+        /// has no byte order and is passed through.</para>
         /// </summary>
-        public void Play(uint soundHandle, byte[] bytes) {
+        public void Play(uint soundHandle, byte[] bytes,
+                         int sampleRate = 0, int bitsPerSample = 0, int channels = 0) {
             if (_disposed || bytes == null || bytes.Length == 0) return;
+
+            bool plausible = sampleRate >= 8000 && sampleRate <= 192000
+                             && (bitsPerSample == 8 || bitsPerSample == 16)
+                             && channels >= 1 && channels <= 8;
+            WaveFormat rawFormat = plausible
+                ? new WaveFormat(sampleRate, bitsPerSample, channels)
+                : FallbackPcmFormat;
 
             IWavePlayer output = null;
             IWaveProvider provider = null;
@@ -67,7 +83,7 @@ namespace SoftSled.Components.Splash {
                     var wav = new WaveFileReader(wavStream);
                     provider = wav;
                     readerDisposable = wav;
-                } else {
+                } else if (rawFormat.BitsPerSample == 16) {
                     // Raw BE PCM (fastpath format). Byte-swap each 16-bit
                     // sample so NAudio (LE-native) plays it correctly.
                     // Copy first — bytes might be a shared buffer owned by
@@ -80,7 +96,12 @@ namespace SoftSled.Components.Splash {
                         le[i + 1] = bytes[i];
                     }
                     var ms = new MemoryStream(le, writable: false);
-                    provider = new RawSourceWaveStream(ms, FallbackPcmFormat);
+                    provider = new RawSourceWaveStream(ms, rawFormat);
+                    readerDisposable = ms;
+                } else {
+                    // 8-bit PCM — no byte order to swap.
+                    var ms = new MemoryStream(bytes, writable: false);
+                    provider = new RawSourceWaveStream(ms, rawFormat);
                     readerDisposable = ms;
                 }
 

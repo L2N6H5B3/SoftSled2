@@ -86,6 +86,22 @@ namespace SoftSled.Components.Splash {
             }
         }
 
+        /// <summary>
+        /// Snapshot of every registered object handle. Used by
+        /// <c>Context_DestroyGroup</c> to walk the registry while the
+        /// destroy loop mutates it (removing objects mid-enumeration
+        /// would invalidate a live dictionary enumerator).
+        /// </summary>
+        public List<uint> SnapshotHandles() {
+            return new List<uint>(_objects.Keys);
+        }
+
+        /// <summary>True if the handle is registered as a CLASS id
+        /// (Broker_CreateClass). Class singletons double as objects in
+        /// the registry, and group-destroy must not reap them — losing a
+        /// class-singleton breaks dispatch of later class-level calls.</summary>
+        public bool IsClassHandle(uint handle) => _classes.ContainsKey(handle);
+
         public void RemoveObject(uint handle) {
             if (_objects.TryGetValue(handle, out var obj)) {
                 obj.OnDestroyed();

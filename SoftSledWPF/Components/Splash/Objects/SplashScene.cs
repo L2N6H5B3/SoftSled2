@@ -491,9 +491,32 @@ namespace SoftSled.Components.Splash.Objects {
         /// rendering around an explicit focus-window mask instead of
         /// a bit-pattern visibility heuristic.
         /// </summary>
+        /// <summary>
+        /// True when WMC cached this subtree off via ChangeDataBits with a
+        /// mask covering BOTH bits 0 and 2 (0x05) and a value clearing
+        /// them. Wire evidence (run 091349): page-instance containers get
+        /// `value=0x05 mask=0x05` on activation and exactly one
+        /// `value=0x00 mask=0x05` when the page is navigated away —
+        /// WITH NO SetVisible/SetAlpha — and the (atlas-era, page-caching)
+        /// WMC expects the renderer to stop showing the subtree. Only 26
+        /// such deactivations per session, each on a distinct page/instance
+        /// container; focus-only changes (mask=0x01) do NOT match, so the
+        /// old over-broad bit-pattern hide rules' false positives
+        /// (recorded-TV thumbnails etc.) are structurally excluded.
+        /// Cleared again if WMC reactivates the cached page
+        /// (value=0x05 mask=0x05).
+        /// </summary>
+        public bool DataBitsDeactivated { get; private set; }
+
         public double ComputeEffectiveOpacity() {
             if (!Visible) return 0.0;
-            return AlphaByte / 255.0;
+            // Page-cache hide rule — see DataBitsDeactivated. Opacity on
+            // the container hides the whole cached subtree in WPF.
+            if (DataBitsDeactivated) return 0.0;
+            // The tint colour's alpha channel (Visual_SetColor high byte)
+            // multiplies with the explicit SetAlpha byte. Default Color is
+            // opaque White so untinted visuals are unaffected.
+            return (AlphaByte / 255.0) * (Color.A / 255.0);
         }
 
         /// <summary>Update the user-data bits with a value/mask pair
@@ -501,6 +524,11 @@ namespace SoftSled.Components.Splash.Objects {
         /// effective opacity + the bounds clip (bit 5 controls the clip).</summary>
         public void ApplyDataBits(uint value, uint mask) {
             DataBits = (DataBits & ~mask) | (value & mask);
+            // Page-cache activation/deactivation: only a change whose mask
+            // covers BOTH bits 0 and 2 counts (see DataBitsDeactivated).
+            if ((mask & 0x05u) == 0x05u) {
+                DataBitsDeactivated = (DataBits & 0x05u) == 0;
+            }
             DrawingVisual.Opacity = ComputeEffectiveOpacity();
             // Bit 5 (0x20) governs whether the visual clips its children
             // to its own bounds. If the mask touched bit 5 — or if the
@@ -514,7 +542,9 @@ namespace SoftSled.Components.Splash.Objects {
         // when Size changes (e.g. via Animation[Size]) we can re-paint
         // the same content at the new size — important for stretch-to-
         // visual surface draws (Surface_Draw with dst=(0,0,-1,-1)).
-        private List<Action<DrawingContext, Size>> _cachedOps;
+        // The third op parameter is the visual's tint Color (spec
+        // §2.2.4.6.4 Visual_SetColor) — White = untinted fast path.
+        private List<Action<DrawingContext, Size, Color>> _cachedOps;
 
         public void SetContentFromRenderBuilder(SplashRenderBuilder rb,
                                                 System.Collections.Generic.IReadOnlyList<SplashGradient> pendingGradients = null) {
@@ -567,9 +597,16 @@ namespace SoftSled.Components.Splash.Objects {
         public void RepaintContent() {
             if (_cachedOps == null) return;
             var bounds = new Size(SizeX > 0 ? SizeX : 0, SizeY > 0 ? SizeY : 0);
+            // Tint (Visual_SetColor, spec §2.2.4.6.4): the RGB channels
+            // modulate the painted content (vector op colors multiply;
+            // images route through a cached multiplied bitmap). The ALPHA
+            // channel is NOT applied here — it folds into the visual's
+            // effective opacity (ComputeEffectiveOpacity) so it composes
+            // with SetAlpha the way a compositing renderer would.
+            var tint = Color.FromRgb(Color.R, Color.G, Color.B);
             using (var dc = DrawingVisual.RenderOpen()) {
                 for (int i = 0; i < _cachedOps.Count; i++) {
-                    _cachedOps[i](dc, bounds);
+                    _cachedOps[i](dc, bounds, tint);
                 }
             }
         }
@@ -621,7 +658,10 @@ namespace SoftSled.Components.Splash.Objects {
     /// </summary>
     internal sealed class SplashRenderBuilder : SplashGenericObject {
 
-        private readonly List<Action<DrawingContext, Size>> _ops = new List<Action<DrawingContext, Size>>();
+        // Op signature: (DrawingContext, visualBounds, tint). The tint is
+        // the consuming visual's Color RGB (spec §2.2.4.6.4) supplied at
+        // paint time by SplashVisual.RepaintContent — White = untinted.
+        private readonly List<Action<DrawingContext, Size, Color>> _ops = new List<Action<DrawingContext, Size, Color>>();
 
         /// <summary>
         /// Gradient handles queued via <c>Gradient_Draw / Gradient_Push rb=this</c>.
@@ -713,33 +753,85 @@ namespace SoftSled.Components.Splash.Objects {
             return fresh;
         }
 
+        // ---- Tint support (Visual_SetColor, spec §2.2.4.6.4) ----
+        // The tint RGB modulates painted content per-channel. White is the
+        // identity and short-circuits everywhere, so untinted visuals (the
+        // 100% case in current captures — zero SetColor traffic observed)
+        // pay only a three-byte comparison per op.
+
+        private static bool IsWhite(Color tint) => tint.R == 255 && tint.G == 255 && tint.B == 255;
+
+        /// <summary>Per-channel multiply of a draw colour by the visual tint.</summary>
+        private static Color Modulate(Color c, Color tint) {
+            if (IsWhite(tint)) return c;
+            return Color.FromArgb(c.A,
+                (byte)(c.R * tint.R / 255),
+                (byte)(c.G * tint.G / 255),
+                (byte)(c.B * tint.B / 255));
+        }
+
+        // Tinted-bitmap cache: keyed by source bitmap (weak — dies with the
+        // bitmap) then by tint RGB. Tint changes are rare (driven by
+        // SetColor / Color animations), so per-(bitmap,tint) one-off pixel
+        // passes are acceptable; steady-state repaints hit the cache.
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<BitmapSource, Dictionary<uint, BitmapSource>>
+            s_tintCache = new System.Runtime.CompilerServices.ConditionalWeakTable<BitmapSource, Dictionary<uint, BitmapSource>>();
+
+        /// <summary>Return <paramref name="src"/> multiplied by the tint RGB
+        /// (cached), or the source itself for a White tint.</summary>
+        private static BitmapSource TintedIfNeeded(BitmapSource src, Color tint) {
+            if (src == null || IsWhite(tint)) return src;
+            uint key = ((uint)tint.R << 16) | ((uint)tint.G << 8) | tint.B;
+            var perSrc = s_tintCache.GetOrCreateValue(src);
+            lock (perSrc) {
+                if (perSrc.TryGetValue(key, out var cached)) return cached;
+            }
+            try {
+                BitmapSource bgra = src.Format == PixelFormats.Bgra32
+                    ? src
+                    : new FormatConvertedBitmap(src, PixelFormats.Bgra32, null, 0);
+                int w = bgra.PixelWidth, h = bgra.PixelHeight;
+                int stride = w * 4;
+                byte[] px = new byte[h * stride];
+                bgra.CopyPixels(px, stride, 0);
+                for (int i = 0; i < px.Length; i += 4) {
+                    px[i]     = (byte)(px[i]     * tint.B / 255);
+                    px[i + 1] = (byte)(px[i + 1] * tint.G / 255);
+                    px[i + 2] = (byte)(px[i + 2] * tint.R / 255);
+                }
+                var tinted = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, px, stride);
+                tinted.Freeze();
+                lock (perSrc) { perSrc[key] = tinted; }
+                return tinted;
+            } catch {
+                return src; // any conversion hiccup → draw untinted rather than nothing
+            }
+        }
+
         public void AddSolid(Rect rect, Color color, bool stretchToVisual = false) {
-            var brush = GetBrush(color);
             if (stretchToVisual) {
-                _ops.Add((dc, b) => {
+                _ops.Add((dc, b, tint) => {
                     if (b.Width > 0 && b.Height > 0)
-                        dc.DrawRectangle(brush, null, new Rect(0, 0, b.Width, b.Height));
+                        dc.DrawRectangle(GetBrush(Modulate(color, tint)), null, new Rect(0, 0, b.Width, b.Height));
                 });
             } else {
-                _ops.Add((dc, _) => dc.DrawRectangle(brush, null, rect));
+                _ops.Add((dc, _, tint) => dc.DrawRectangle(GetBrush(Modulate(color, tint)), null, rect));
             }
         }
 
         public void AddOutline(Rect rect, Color color, double thickness, bool stretchToVisual = false) {
-            var pen = GetPen(color, thickness);
             if (stretchToVisual) {
-                _ops.Add((dc, b) => {
+                _ops.Add((dc, b, tint) => {
                     if (b.Width > 0 && b.Height > 0)
-                        dc.DrawRectangle(null, pen, new Rect(0, 0, b.Width, b.Height));
+                        dc.DrawRectangle(null, GetPen(Modulate(color, tint), thickness), new Rect(0, 0, b.Width, b.Height));
                 });
             } else {
-                _ops.Add((dc, _) => dc.DrawRectangle(null, pen, rect));
+                _ops.Add((dc, _, tint) => dc.DrawRectangle(null, GetPen(Modulate(color, tint), thickness), rect));
             }
         }
 
         public void AddLine(Point a, Point b, Color color, double thickness) {
-            var pen = GetPen(color, thickness);
-            _ops.Add((dc, _) => dc.DrawLine(pen, a, b));
+            _ops.Add((dc, _, tint) => dc.DrawLine(GetPen(Modulate(color, tint), thickness), a, b));
         }
 
         /// <summary>
@@ -770,11 +862,42 @@ namespace SoftSled.Components.Splash.Objects {
                     toDraw = src; // fall back to full bitmap on any CroppedBitmap error
                 }
             }
-            _ops.Add((dc, visualBounds) => {
+            _ops.Add((dc, visualBounds, tint) => {
                 Rect dst = stretchToVisual && visualBounds.Width > 0 && visualBounds.Height > 0
                     ? new Rect(0, 0, visualBounds.Width, visualBounds.Height)
                     : dstRect;
-                dc.DrawImage(toDraw, dst);
+                dc.DrawImage(TintedIfNeeded(toDraw, tint), dst);
+            });
+        }
+
+        /// <summary>
+        /// Append a pool-composition image op (SurfacePool_Draw,
+        /// spec §2.2.4.12.1). The surface's sub-image is placed at a
+        /// FRACTIONAL rectangle of the final destination — computed by the
+        /// controller from the surface's pool-placement rect relative to
+        /// the draw's pool-space source rect — so the op works whether the
+        /// destination is explicit or the (0,0,-1,-1) stretch-to-visual
+        /// sentinel resolved at paint time.
+        /// </summary>
+        public void AddImageMapped(BitmapSource src, Rect srcSubRect, Rect dstFraction,
+                                   Rect explicitDst, bool stretchToVisual) {
+            if (src == null) return;
+            BitmapSource cropped = TryCrop(src,
+                (int)srcSubRect.X, (int)srcSubRect.Y,
+                (int)srcSubRect.Width, (int)srcSubRect.Height);
+            if (cropped == null) return;
+            _ops.Add((dc, visualBounds, tint) => {
+                Rect d = stretchToVisual && visualBounds.Width > 0 && visualBounds.Height > 0
+                    ? new Rect(0, 0, visualBounds.Width, visualBounds.Height)
+                    : explicitDst;
+                if (d.Width <= 0 || d.Height <= 0) return;
+                var target = new Rect(
+                    d.X + dstFraction.X * d.Width,
+                    d.Y + dstFraction.Y * d.Height,
+                    dstFraction.Width  * d.Width,
+                    dstFraction.Height * d.Height);
+                if (target.Width <= 0 || target.Height <= 0) return;
+                dc.DrawImage(TintedIfNeeded(cropped, tint), target);
             });
         }
 
@@ -834,12 +957,18 @@ namespace SoftSled.Components.Splash.Objects {
             BitmapSource b  = TryCrop(src, x1,        srcH - y2,   centerW, y2);
             BitmapSource br = TryCrop(src, srcW - x2, srcH - y2,   x2,      y2);
 
-            _ops.Add((dc, visualBounds) => {
+            _ops.Add((dc, visualBounds, tint) => {
                 Rect dst = stretchToVisual && visualBounds.Width > 0 && visualBounds.Height > 0
                     ? new Rect(0, 0, visualBounds.Width, visualBounds.Height)
                     : dstRect;
                 double dw = dst.Width, dh = dst.Height;
                 if (dw <= 0 || dh <= 0) return;
+                // Tint each slice through the shared cache (no-op for White).
+                BitmapSource tl2 = TintedIfNeeded(tl, tint), t2 = TintedIfNeeded(t, tint),
+                             tr2 = TintedIfNeeded(tr, tint), l2 = TintedIfNeeded(l, tint),
+                             c2  = TintedIfNeeded(c, tint),  r2 = TintedIfNeeded(r, tint),
+                             bl2 = TintedIfNeeded(bl, tint), b2 = TintedIfNeeded(b, tint),
+                             br2 = TintedIfNeeded(br, tint);
 
                 // Corners stay at original pixel size, but if the dest
                 // is too small to fit both, shrink them proportionally
@@ -859,15 +988,15 @@ namespace SoftSled.Components.Splash.Objects {
                 double yM = dst.Y + topH;
                 double yB = dst.Y + topH + centerDH;
 
-                if (tl != null && leftW    > 0 && topH    > 0) dc.DrawImage(tl, new Rect(xL, yT, leftW,    topH));
-                if (t  != null && centerDW > 0 && topH    > 0) dc.DrawImage(t,  new Rect(xC, yT, centerDW, topH));
-                if (tr != null && rightW   > 0 && topH    > 0) dc.DrawImage(tr, new Rect(xR, yT, rightW,   topH));
-                if (l  != null && leftW    > 0 && centerDH> 0) dc.DrawImage(l,  new Rect(xL, yM, leftW,    centerDH));
-                if (c  != null && centerDW > 0 && centerDH> 0) dc.DrawImage(c,  new Rect(xC, yM, centerDW, centerDH));
-                if (r  != null && rightW   > 0 && centerDH> 0) dc.DrawImage(r,  new Rect(xR, yM, rightW,   centerDH));
-                if (bl != null && leftW    > 0 && bottomH > 0) dc.DrawImage(bl, new Rect(xL, yB, leftW,    bottomH));
-                if (b  != null && centerDW > 0 && bottomH > 0) dc.DrawImage(b,  new Rect(xC, yB, centerDW, bottomH));
-                if (br != null && rightW   > 0 && bottomH > 0) dc.DrawImage(br, new Rect(xR, yB, rightW,   bottomH));
+                if (tl2 != null && leftW    > 0 && topH    > 0) dc.DrawImage(tl2, new Rect(xL, yT, leftW,    topH));
+                if (t2  != null && centerDW > 0 && topH    > 0) dc.DrawImage(t2,  new Rect(xC, yT, centerDW, topH));
+                if (tr2 != null && rightW   > 0 && topH    > 0) dc.DrawImage(tr2, new Rect(xR, yT, rightW,   topH));
+                if (l2  != null && leftW    > 0 && centerDH> 0) dc.DrawImage(l2,  new Rect(xL, yM, leftW,    centerDH));
+                if (c2  != null && centerDW > 0 && centerDH> 0) dc.DrawImage(c2,  new Rect(xC, yM, centerDW, centerDH));
+                if (r2  != null && rightW   > 0 && centerDH> 0) dc.DrawImage(r2,  new Rect(xR, yM, rightW,   centerDH));
+                if (bl2 != null && leftW    > 0 && bottomH > 0) dc.DrawImage(bl2, new Rect(xL, yB, leftW,    bottomH));
+                if (b2  != null && centerDW > 0 && bottomH > 0) dc.DrawImage(b2,  new Rect(xC, yB, centerDW, bottomH));
+                if (br2 != null && rightW   > 0 && bottomH > 0) dc.DrawImage(br2, new Rect(xR, yB, rightW,   bottomH));
             });
         }
 
@@ -884,7 +1013,7 @@ namespace SoftSled.Components.Splash.Objects {
         }
 
         public void PaintInto(DrawingContext dc, Size visualBounds) {
-            foreach (var op in _ops) op(dc, visualBounds);
+            foreach (var op in _ops) op(dc, visualBounds, Colors.White);
         }
 
         /// <summary>
@@ -892,8 +1021,8 @@ namespace SoftSled.Components.Splash.Objects {
         /// SetContent time to cache the ops independently of the RB
         /// (which is about to be Clear()'d).
         /// </summary>
-        public List<Action<DrawingContext, Size>> SnapshotOps() {
-            return new List<Action<DrawingContext, Size>>(_ops);
+        public List<Action<DrawingContext, Size, Color>> SnapshotOps() {
+            return new List<Action<DrawingContext, Size, Color>>(_ops);
         }
     }
 
@@ -1078,6 +1207,16 @@ namespace SoftSled.Components.Splash.Objects {
     /// </summary>
     internal sealed class SplashDataBuffer : SplashGenericObject {
         public byte[] Bytes { get; }
+
+        /// <summary>Owner callback (objcb) + context (ctxcb) registered via
+        /// DataBuffer_RegisterOwner (spec §2.2.4.1.1). When the buffer's
+        /// usage completes, the controller sends
+        /// LocalDataBufferCallback_OnComplete (§2.2.5.9) addressed to this
+        /// pair so the server can reclaim its copy. Zero = no owner
+        /// registered (complete-and-release still drops our copy).</summary>
+        public uint OwnerObj { get; set; }
+        public uint OwnerCtx { get; set; }
+
         public SplashDataBuffer(uint handle, byte[] bytes)
             : base(handle, SplashClassKind.DataBuffer, "DataBuffer") {
             Bytes = bytes ?? new byte[0];
@@ -1111,6 +1250,23 @@ namespace SoftSled.Components.Splash.Objects {
         /// (set when <c>SoundBuffer_LoadSoundData</c> fires).
         /// 0 until the load completes.</summary>
         public uint DataBufferHandle { get; set; }
+
+        // ---- SoundHeader (spec §2.2.6.11), parsed from
+        // XAudSoundDevice_CreateSoundBuffer. Drives the playback format
+        // instead of the historic hardcoded 44.1 kHz/16-bit/stereo
+        // assumption. Zero = header absent/implausible → player falls
+        // back to its defaults.
+        public int FormatTag     { get; set; }
+        public int Channels      { get; set; }
+        public int SampleRate    { get; set; }
+        public int BitsPerSample { get; set; }
+
+        /// <summary>Owner callback (objcb/ctxcb) from CreateSoundBuffer.
+        /// After LoadSoundData succeeds the controller sends
+        /// LocalSoundBufferCallback_OnSoundBufferReady (§2.2.5.2) to this
+        /// pair. Zero = none registered.</summary>
+        public uint OwnerObj { get; set; }
+        public uint OwnerCtx { get; set; }
 
         /// <summary>The actual sound bytes — typically a complete WAV file
         /// (RIFF/WAVE header + PCM data) for splash UI sounds, but the
@@ -1183,6 +1339,25 @@ namespace SoftSled.Components.Splash.Objects {
         public int             Stride        { get; set; }
         public uint            Format        { get; set; }
         public bool            ContentValid  { get; set; }
+
+        // ---- Atlas placement (live since fAllowDynamicPool=1) ----
+        // Surface_RemapLocation (spec §2.2.4.11.4): this surface's
+        // rectangle INSIDE its pool's shared sheet, in pool pixels.
+        // Needed to resolve pool-space coordinates (SurfacePool_Draw
+        // source rects) back to member surfaces. NOTE: for rotated
+        // storage the rect's dims are the ROTATED (swapped) dims.
+        public int  PoolRectX { get; set; }
+        public int  PoolRectY { get; set; }
+        public int  PoolRectW { get; set; }
+        public int  PoolRectH { get; set; }
+        public bool HasPoolRect { get; set; }
+
+        // Surface_SetRotation (spec §2.2.4.11.7): content stored rotated
+        // 90° inside the pool for tighter packing. Our per-surface
+        // bitmaps keep the LOGICAL orientation (the Rasterizer upload
+        // arrives unrotated), so this flag only matters when resolving
+        // pool-space coordinates.
+        public bool StoredRotated { get; set; }
 
         public SplashSurface(uint handle, string className)
             : base(handle, SplashClassKind.Surface, className) { }

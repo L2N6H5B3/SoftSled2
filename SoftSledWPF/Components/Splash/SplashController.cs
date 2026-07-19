@@ -83,6 +83,32 @@ namespace SoftSled.Components.Splash {
         private uint _idContextApp;
         private uint _idContextRender;
 
+        // Handle bit-partitioning from the RemoteServerInformation
+        // handshake (spec §2.2.1.2): every object handle is split into
+        // (group, index) bit fields — cItemsPerGroupBits low bits for
+        // the object index within its group, cGroupBits bits above them
+        // for the group id. This is what Context_DestroyGroup
+        // (spec §2.2.4.4.2) keys on: destroy every object whose handle's
+        // group field equals idxGroup. It's also the real mechanism
+        // behind the empirical "handle high-byte namespaces" (0x01..0x0A)
+        // that the video-family tracker observes — with the WMC values
+        // (24 items-bits, 8 group-bits) the group IS the high byte.
+        // Defaults 24/8 cover the case where a message arrives before
+        // the handshake was parsed (shouldn't happen, but cheap).
+        private int _cItemsPerGroupBits = 24;
+        private int _cGroupBits         = 8;
+
+        // Device callback registration from XeDevice_Create (spec
+        // §2.2.4.22.1, msgid 0x0E): the server registers an (objcb, ctxcb)
+        // pair and expects LocalDeviceCallback_* notifications addressed
+        // to it — OnCreated (§2.2.5.12) as the create ack, and
+        // OnSurfacePoolAllocation (§2.2.5.10) after every
+        // SurfacePool_Allocate. Zero until the Create arrives; the send
+        // helpers no-op while unregistered.
+        private uint _deviceCallbackObj;
+        private uint _deviceCallbackCtx;
+        private uint _deviceHandle;
+
         public SplashRenderHost RenderHost => _host;
 
         // ============================================================
@@ -255,6 +281,38 @@ namespace SoftSled.Components.Splash {
         // the video follows the box through animations and layout shifts.
         private bool _videoRectPollHooked;
         private EventHandler _videoRectPollHandler;
+
+        // ---- PiP staleness detection (2026-07-19) ----
+        // Run 085802 exposed a WMC behaviour change (likely enabled by
+        // atlas-mode page caching): the browse page that hosts the PiP
+        // corner box is no longer DESTROYED on navigation — it stays
+        // alive, rooted and visible while new pages are simply built on
+        // top. Our unbind previously keyed exclusively on the bound
+        // visual's destroy, so the video stayed pinned to the (covered)
+        // box forever and a later fresh corner box couldn't take over.
+        // Three complementary guards:
+        //  * newest-wins rebinding (corner-bind may REPLACE a binding),
+        //  * unrooted detection (bound visual unresolvable ~1s → unbind),
+        //  * occlusion detection (hit-test at the box centre; if the
+        //    topmost content's shared-ancestor depth with the bound box
+        //    drops well below the bind-time baseline, another page branch
+        //    is covering the box → route full canvas, WITHOUT dropping
+        //    the binding so an uncover routes back).
+        private int  _pipUnresolvableStreak;
+        private bool _pipBaselineNeedsCapture;
+        private int  _pipBaselineLcaDepth = -1;
+        private int  _pipOcclusionCountdown;
+        private int  _pipOcclusionStreak;
+        private bool _pipOccludedRouted;
+
+        private void ResetPipStalenessState() {
+            _pipUnresolvableStreak   = 0;
+            _pipBaselineNeedsCapture = true;
+            _pipBaselineLcaDepth     = -1;
+            _pipOcclusionCountdown   = 0;
+            _pipOcclusionStreak      = 0;
+            _pipOccludedRouted       = false;
+        }
 
         // ============================================================
         //  PiP-candidate lifespan tracking
@@ -452,6 +510,7 @@ namespace SoftSled.Components.Splash {
             _videoBoundPoolHandle   = poolHandle;
             _videoBoundUid          = uid;
             _videoBoundLastRect     = Rect.Empty;  // force a change on first refresh
+            ResetPipStalenessState();  // fresh baseline for the new box
             RefreshVideoRectIfRelevant(v, "[PIP-BINDING new]");
             StartVideoRectPolling();   // follow animated moves/resizes of the box
         }
@@ -469,6 +528,7 @@ namespace SoftSled.Components.Splash {
             _videoBoundPoolHandle   = 0;
             _videoBoundUid          = 0;
             _videoBoundLastRect     = Rect.Empty;
+            ResetPipStalenessState();
             // Route an empty rect so SurfaceRouter reverts to the full
             // canvas / host bounds.
             RaiseVideoPipCandidateChanged(0, Rect.Empty);
@@ -502,11 +562,79 @@ namespace SoftSled.Components.Splash {
         // Re-resolves the bound visual's rendered rect — which reflects the
         // CURRENT animated transform — and re-routes when it changes, so the
         // video tracks the PiP box smoothly through WMC's move/resize
-        // animations that send no discrete SetPosition/SetSize.
+        // animations that send no discrete SetPosition/SetSize. Also hosts
+        // the staleness guards (unrooted + occlusion) — see the field-block
+        // comment at _pipUnresolvableStreak.
         private void PollVideoRectTick() {
             if (_videoBoundVisualHandle == 0) return;
             if (!_registry.TryGetObject(_videoBoundVisualHandle, out var obj) || !(obj is SplashVisual bound)) return;
-            if (!TryComputeVisualRenderedRect(bound, out var r)) return;
+            if (!TryComputeVisualRenderedRect(bound, out var r)) {
+                // Bound box no longer resolvable (detached / reparented out
+                // of the displayed tree). Transient failures happen right
+                // after binding; a persistent one (~1 s at 60 Hz) means the
+                // box's branch is gone for good — unbind rather than pin
+                // the video to a stale rect forever.
+                if (++_pipUnresolvableStreak >= 60) {
+                    _logger?.LogInfo($"[splash] PIP bound vis=0x{_videoBoundVisualHandle:X8} unresolvable for ~1s — unbinding");
+                    ClearVideoBoundVisual("bound visual unrooted");
+                }
+                return;
+            }
+            _pipUnresolvableStreak = 0;
+
+            // Bind-time baseline for the occlusion check: how deep in the
+            // bound box's ancestor chain the topmost content at the box
+            // centre sits. Captured on the first successful resolve.
+            if (_pipBaselineNeedsCapture) {
+                _pipBaselineNeedsCapture = false;
+                _pipBaselineLcaDepth = ComputeSharedAncestorDepthAtPoint(bound, r);
+                _dumper?.OnEvent($"    [PIP-OCCL-BASELINE] vis=0x{bound.Handle:X8} lcaDepth={_pipBaselineLcaDepth}");
+            }
+
+            // Deterministic page-cache signal (checked every tick — cheap
+            // parent-chain walk): if any ancestor was deactivated via the
+            // mask-0x05 ChangeDataBits, the box's page has been cached off
+            // and the subtree is hidden — the video must leave the box NOW.
+            bool chainDeactivated = false;
+            int walkGuard = 0;
+            for (var n = bound; n != null && walkGuard++ < 64; n = n.Parent) {
+                if (n.DataBitsDeactivated) { chainDeactivated = true; break; }
+            }
+
+            // Secondary heuristic — occlusion check every ~15 frames
+            // (~250 ms): if the topmost hit at the box centre shares
+            // ancestry with the bound box only near the scene root (well
+            // shallower than at bind time), another page branch has been
+            // drawn over the box without a deactivation signal.
+            if (_pipBaselineLcaDepth >= 3 && --_pipOcclusionCountdown <= 0) {
+                _pipOcclusionCountdown = 15;
+                int cur = ComputeSharedAncestorDepthAtPoint(bound, r);
+                bool occluded = cur >= 0 && cur <= _pipBaselineLcaDepth - 3;
+                _pipOcclusionStreak = occluded ? _pipOcclusionStreak + 1 : 0;
+            }
+
+            // Route full canvas while covered/deactivated; keep the binding
+            // so a reactivation/uncover (or a fresh corner-bind, which
+            // replaces us) restores PiP.
+            bool suppress = chainDeactivated || _pipOcclusionStreak >= 3;
+            if (suppress != _pipOccludedRouted) {
+                _pipOccludedRouted = suppress;
+                string why = chainDeactivated ? "page deactivated (mask-0x05)" : "occluded by another page branch";
+                if (suppress) {
+                    _dumper?.OnEvent($"    [PIP-SUPPRESSED] vis=0x{bound.Handle:X8} {why} — routing video to full canvas (binding kept)");
+                    _logger?.LogInfo($"[splash] PIP box 0x{bound.Handle:X8} {why} — video to full canvas");
+                    RaiseVideoPipCandidateChanged(0, Rect.Empty);
+                } else {
+                    _dumper?.OnEvent($"    [PIP-RESTORED] vis=0x{bound.Handle:X8} — routing video back to box");
+                    _logger?.LogInfo($"[splash] PIP box 0x{bound.Handle:X8} active again — video back to PiP rect");
+                    _videoBoundLastRect     = r;
+                    _currentPipVisualHandle = _videoBoundVisualHandle;
+                    _currentPipRect         = r;
+                    RaiseVideoPipCandidateChanged(_videoBoundVisualHandle, r);
+                }
+            }
+            if (_pipOccludedRouted) return;   // full-canvas routing holds while covered
+
             const double EPS = 1.0;
             if (Math.Abs(r.X - _videoBoundLastRect.X) < EPS
                 && Math.Abs(r.Y - _videoBoundLastRect.Y) < EPS
@@ -516,6 +644,42 @@ namespace SoftSled.Components.Splash {
             _currentPipVisualHandle = _videoBoundVisualHandle;
             _currentPipRect         = r;
             RaiseVideoPipCandidateChanged(_videoBoundVisualHandle, r);
+        }
+
+        /// <summary>
+        /// Hit-test the splash host at the centre of <paramref name="rendered"/>
+        /// and return how deep in <paramref name="bound"/>'s ancestor chain
+        /// the topmost hit's lineage merges (0 = scene root … N = the bound
+        /// visual itself). A deep value means the content on top at that
+        /// point belongs to the box's own page neighbourhood; a near-root
+        /// value means a DIFFERENT page branch is covering the box. −1 =
+        /// nothing hit / not classifiable (callers treat as "no signal").
+        /// The box itself is often gradient-only (draws nothing), so the
+        /// baseline is typically the page background BEHIND it — which is
+        /// exactly the lineage that goes away when another page covers it.
+        /// </summary>
+        private int ComputeSharedAncestorDepthAtPoint(SplashVisual bound, Rect rendered) {
+            if (_host == null || rendered.Width <= 0 || rendered.Height <= 0) return -1;
+            // Depth-indexed map of the bound visual's ancestor chain:
+            // scene root (top) = 0 … bound itself = chain.Count-1.
+            var chain = new System.Collections.Generic.List<SplashVisual>();
+            int guard = 0;
+            for (var n = bound; n != null && guard++ < 64; n = n.Parent) chain.Add(n);
+            var depthOf = new System.Collections.Generic.Dictionary<System.Windows.Media.Visual, int>(chain.Count);
+            for (int i = 0; i < chain.Count; i++) {
+                depthOf[chain[i].DrawingVisual] = chain.Count - 1 - i;
+            }
+            var pt = new Point(rendered.X + rendered.Width / 2.0, rendered.Y + rendered.Height / 2.0);
+            System.Windows.Media.HitTestResult hit = null;
+            try { hit = System.Windows.Media.VisualTreeHelper.HitTest(_host, pt); } catch { }
+            if (hit == null || hit.VisualHit == null) return -1;
+            System.Windows.DependencyObject v = hit.VisualHit;
+            guard = 0;
+            while (v != null && guard++ < 256) {
+                if (v is System.Windows.Media.Visual vis && depthOf.TryGetValue(vis, out int depth)) return depth;
+                v = System.Windows.Media.VisualTreeHelper.GetParent(v);
+            }
+            return -1;
         }
 
         private void RaiseVideoPipCandidateChanged(uint visualHandle, Rect rect) {
@@ -764,6 +928,16 @@ namespace SoftSled.Components.Splash {
                 _sceneRootHandle = 0;
                 _idContextApp    = 0;
                 _idContextRender = 0;
+                // Back to the default handle bit-split until the next
+                // session's RemoteServerInformation declares its own.
+                _cItemsPerGroupBits = 24;
+                _cGroupBits         = 8;
+                // Drop the device-callback registration — the next session's
+                // XeDevice_Create re-registers it.
+                _deviceCallbackObj = 0;
+                _deviceCallbackCtx = 0;
+                _deviceHandle      = 0;
+                _releasedDataBuffers.Clear();
                 // Drop the dynamic-surface uid mapping — a fresh session
                 // re-issues DynamicSurfaceFactory_CreateXxxInstance for any
                 // surfaces it cares about. Leaving stale uids would cause
@@ -782,6 +956,7 @@ namespace SoftSled.Components.Splash {
                 _videoBoundPoolHandle   = 0;
                 _videoBoundUid          = 0;
                 _videoBoundLastRect     = Rect.Empty;
+                ResetPipStalenessState();
                 // PiP-candidate birth registry: drop everything so the
                 // next session starts with a clean lifespan record.
                 _pipCandidateBirths.Clear();
@@ -814,6 +989,14 @@ namespace SoftSled.Components.Splash {
             uint brokerHandle = a.IdObjectBrokerCls;
             _idContextApp     = a.IdContextApp;
             _idContextRender  = a.IdContextRender;
+            // Handle (group, index) bit split — used by Context_DestroyGroup.
+            // Sanity-gate: the pair must fit a 32-bit handle and both
+            // fields must be non-degenerate, else keep the 24/8 default.
+            if (a.CItemsPerGroupBits > 0 && a.CGroupBits > 0
+                && a.CItemsPerGroupBits + a.CGroupBits <= 32) {
+                _cItemsPerGroupBits = a.CItemsPerGroupBits;
+                _cGroupBits         = a.CGroupBits;
+            }
             _uiDispatcher.BeginInvoke(new Action(() => {
                 _registry.RegisterClass(brokerHandle, "Broker");
                 _registry.RegisterObject(brokerHandle,
@@ -879,6 +1062,16 @@ namespace SoftSled.Components.Splash {
         private readonly System.Collections.Generic.HashSet<uint> _predicateInFlight
             = new System.Collections.Generic.HashSet<uint>();
 
+        // DataBuffer handles we've completed-and-released this session.
+        // Guards the unknown-subject auto-promotion path: a late message
+        // for a released buffer (e.g. a stray DataBuffer_RegisterOwner,
+        // msgid=0 body=8) would otherwise pattern-match the
+        // Visual_ChangeDataBits shape and promote the dead handle to a
+        // Visual. Bounded (~1 entry per buffer per session), cleared on
+        // Reset.
+        private readonly System.Collections.Generic.HashSet<uint> _releasedDataBuffers
+            = new System.Collections.Generic.HashSet<uint>();
+
         private void DispatchBatch(byte[] payload) {
             if (payload.Length < 8) {
                 _dumper?.OnEvent("Batch too short (no header)");
@@ -936,6 +1129,12 @@ namespace SoftSled.Components.Splash {
                             _dumper?.OnEvent($"  -> processing predicate buffer 0x{idPredicateBuffer:X8} ({pdb.Bytes.Length} B) as batch first");
                             DispatchBatch(pdb.Bytes);
                             _dumper?.OnEvent($"  <- finished predicate buffer 0x{idPredicateBuffer:X8}, resuming outer batch");
+                            // The predicate's messages have all been
+                            // dispatched — its usage is complete. Notify
+                            // the owner (RegisterOwner arrives inside the
+                            // predicate content itself, so by now the
+                            // objcb/ctxcb pair is recorded) and free it.
+                            CompleteAndReleaseDataBuffer(idPredicateBuffer, "predicate batch processed");
                         } else {
                             _dumper?.OnEvent($"  (predicate buffer 0x{idPredicateBuffer:X8} not registered or empty — skipping)");
                         }
@@ -1014,7 +1213,18 @@ namespace SoftSled.Components.Splash {
                 // priv_ctxcb) for nearly every class. We don't need to
                 // do anything with it but acknowledge instead of logging
                 // "unhandled" 90+ times per session.
-                if (msgid == 11 && (int)size - 12 == 8) {
+                //
+                // EXEMPTION — Surface: spec §2.2.4.11.8 defines
+                // Surface_SetStorageSize as msgid 0x0B (11) with an
+                // 8-byte body (sizeStoragePxl), the exact shape this
+                // ack filter matches. Swallowing it here silently
+                // dropped every real SetStorageSize — including the
+                // dynamic-surface ones DispatchSurface specifically
+                // instruments as a possible PiP-position signal. Let
+                // Surface messages fall through; DispatchSurface case 11
+                // disambiguates ack-vs-storage-size by value plausibility.
+                if (msgid == 11 && (int)size - 12 == 8
+                    && obj.Kind != SplashClassKind.Surface) {
                     _dumper?.OnEvent($"  {obj.Kind}_Create (post-init, ack)");
                     return;
                 }
@@ -1031,7 +1241,7 @@ namespace SoftSled.Components.Splash {
                     case SplashClassKind.Device:
                     case SplashClassKind.Dx9Device:
                     case SplashClassKind.XeDevice:
-                    case SplashClassKind.NullDevice:    DispatchDevice(rdr, msgid); break;
+                    case SplashClassKind.NullDevice:    DispatchDevice(obj, rdr, msgid); break;
                     case SplashClassKind.Context:       DispatchContext(rdr, msgid); break;
                     case SplashClassKind.SurfacePool:   DispatchSurfacePool((Objects.SplashSurfacePool)obj, rdr, msgid); break;
                     case SplashClassKind.Surface:       DispatchSurface((Objects.SplashSurface)obj, rdr, msgid); break;
@@ -1073,6 +1283,15 @@ namespace SoftSled.Components.Splash {
                 // rdr.Remaining can be larger than the spec'd body.
                 int bodyLen = (int)size - 12;
                 if (bodyLen < 0) bodyLen = 0;
+                // Late message for a DataBuffer we already completed-and-
+                // released (e.g. a straggling RegisterOwner, msgid=0
+                // body=8 — the exact Visual_ChangeDataBits shape). Must
+                // NOT reach the auto-promoter, which would resurrect the
+                // dead handle as a Visual.
+                if (_releasedDataBuffers.Contains(subj)) {
+                    _dumper?.OnEvent($"  (msg msgid={msgid} for RELEASED DataBuffer 0x{subj:X8} — ignored)");
+                    return;
+                }
                 if (TryPromoteUnknownSubject(subj, msgid, bodyLen, rdr)) return;
                 _dumper?.OnEvent($"  (subject 0x{subj:X8} unknown, msgid={msgid}, body={bodyLen}, frameRem={rdr.Remaining})");
             }
@@ -1202,49 +1421,7 @@ namespace SoftSled.Components.Splash {
                     {
                         uint idObject = rdr.ReadU32();
                         _dumper?.OnEvent($"  Broker_DestroyObject(0x{idObject:X8})");
-                        // Belt-and-braces leak guard: SplashAnimation.OnDestroyed
-                        // only flips Playing=false and nulls Keyframes — it can't
-                        // reach back into the controller's _playingAnimations
-                        // HashSet. Without this Remove(), destroyed animations
-                        // linger in the set forever; the per-tick scratch copy
-                        // grows unbounded across a long session.
-                        if (_registry.TryGetObject(idObject, out var destroyed)
-                            && destroyed is Objects.SplashAnimation destroyedAnim) {
-                            _playingAnimations.Remove(destroyedAnim);
-                        }
-                        // Drop any video-pool-draw binding tracked on
-                        // this handle — RBs are short-lived (one per
-                        // frame on the busy WMC shell) so leaving stale
-                        // entries would falsely tag the next reused
-                        // handle as a video target.
-                        _videoDrawByRb.Remove(idObject);
-                        // PiP-candidate lifespan trace: if this destroyed
-                        // handle was previously fingerprinted as a PiP
-                        // candidate, report its lifespan. Short lifespans
-                        // (≤3s) flag selector-ring behaviour; long
-                        // lifespans (≥10s) flag genuine placeholder
-                        // behaviour. This is the highest-value signal for
-                        // separating the two.
-                        ReportPipCandidateDeath(idObject);
-                        // If the destroyed object is the Visual we
-                        // currently lock the video element onto, reset
-                        // the PiP state and broadcast an empty rect so
-                        // the SurfaceRouter can revert to full canvas.
-                        if (_currentPipVisualHandle != 0 && idObject == _currentPipVisualHandle) {
-                            _dumper?.OnEvent($"    [PIP-UNLOCK] vis=0x{idObject:X8} destroyed — reverting routing");
-                            _logger?.LogInfo($"[splash] PIP-UNLOCK vis=0x{idObject:X8} destroyed — reverting video to full canvas");
-                            _currentPipVisualHandle = 0;
-                            _currentPipFit          = 0;
-                            _currentPipRect         = Rect.Empty;
-                            RaiseVideoPipCandidateChanged(0, Rect.Empty);
-                        }
-                        // Same for the binding-driven tracker: if the
-                        // destroyed object is the video-bound Visual, clear
-                        // it so the next [PIP-BINDING] captures fresh.
-                        if (_videoBoundVisualHandle != 0 && idObject == _videoBoundVisualHandle) {
-                            ClearVideoBoundVisual("Visual destroyed");
-                        }
-                        _registry.RemoveObject(idObject);
+                        DestroyObjectAndCleanup(idObject);
                     }
                     break;
                 case 1: // Broker_CreateObject — section 2.2.4.3.2
@@ -1344,6 +1521,99 @@ namespace SoftSled.Components.Splash {
             }
             _registry.RegisterObject(idNew, instance);
             _dumper?.OnEvent($"  Broker_CreateObject(class=\"{clsName}\" [{kind}], handle=0x{idNew:X8})");
+        }
+
+        /// <summary>
+        /// Full teardown of a single object handle — the shared path for
+        /// <c>Broker_DestroyObject</c> (spec §2.2.4.3.1) and
+        /// <c>Context_DestroyGroup</c> (spec §2.2.4.4.2). Covers every
+        /// controller-side side table in addition to the registry entry:
+        /// <list type="bullet">
+        ///   <item>Belt-and-braces leak guard: SplashAnimation.OnDestroyed
+        ///   only flips Playing=false and nulls Keyframes — it can't reach
+        ///   back into the controller's _playingAnimations HashSet. Without
+        ///   the Remove(), destroyed animations linger in the set forever
+        ///   and the per-tick scratch copy grows unbounded.</item>
+        ///   <item>Video-pool-draw binding on this handle — RBs are
+        ///   short-lived so a stale entry would falsely tag the next
+        ///   reused handle as a video target.</item>
+        ///   <item>PiP-candidate lifespan trace (short = selector ring,
+        ///   long = genuine placeholder).</item>
+        ///   <item>PiP lock / video-bound Visual reversion so the
+        ///   SurfaceRouter falls back to full canvas.</item>
+        /// </list>
+        /// </summary>
+        private void DestroyObjectAndCleanup(uint idObject) {
+            if (_registry.TryGetObject(idObject, out var destroyed)
+                && destroyed is Objects.SplashAnimation destroyedAnim) {
+                _playingAnimations.Remove(destroyedAnim);
+            }
+            _videoDrawByRb.Remove(idObject);
+            ReportPipCandidateDeath(idObject);
+            // If the destroyed object is the Visual we currently lock the
+            // video element onto, reset the PiP state and broadcast an
+            // empty rect so the SurfaceRouter can revert to full canvas.
+            if (_currentPipVisualHandle != 0 && idObject == _currentPipVisualHandle) {
+                _dumper?.OnEvent($"    [PIP-UNLOCK] vis=0x{idObject:X8} destroyed — reverting routing");
+                _logger?.LogInfo($"[splash] PIP-UNLOCK vis=0x{idObject:X8} destroyed — reverting video to full canvas");
+                _currentPipVisualHandle = 0;
+                _currentPipFit          = 0;
+                _currentPipRect         = Rect.Empty;
+                RaiseVideoPipCandidateChanged(0, Rect.Empty);
+            }
+            // Same for the binding-driven tracker: if the destroyed object
+            // is the video-bound Visual, clear it so the next
+            // [PIP-BINDING] captures fresh.
+            if (_videoBoundVisualHandle != 0 && idObject == _videoBoundVisualHandle) {
+                ClearVideoBoundVisual("Visual destroyed");
+            }
+            _registry.RemoveObject(idObject);
+        }
+
+        /// <summary>
+        /// Extract the group field from an object handle using the bit
+        /// split declared in the RemoteServerInformation handshake:
+        /// index occupies the low <see cref="_cItemsPerGroupBits"/> bits,
+        /// the group id sits in the <see cref="_cGroupBits"/> bits above.
+        /// </summary>
+        private uint GroupOfHandle(uint handle) {
+            int shift = _cItemsPerGroupBits;
+            uint mask = _cGroupBits >= 32 ? uint.MaxValue : ((1u << _cGroupBits) - 1u);
+            return (handle >> shift) & mask;
+        }
+
+        /// <summary>
+        /// Context_DestroyGroup (spec §2.2.4.4.2): "destroys a collection
+        /// of objects, including the objects themselves, in the given
+        /// context." The collection membership is encoded in the handles —
+        /// every object whose handle's group field equals
+        /// <paramref name="idxGroup"/> belongs to the group. WMC uses this
+        /// for bulk per-page teardown; before this was implemented those
+        /// objects (visuals, animations, surfaces, buffers) leaked in the
+        /// registry for the rest of the session.
+        ///
+        /// <para>Class-singleton handles (registered via
+        /// Broker_CreateClass) and the broker itself are exempt: they are
+        /// registry-side dispatch plumbing, and reaping them would break
+        /// class-level message routing even though their handles carry a
+        /// group field like any other.</para>
+        /// </summary>
+        private void DestroyGroup(int idxGroup) {
+            uint group = unchecked((uint)idxGroup);
+            var handles = _registry.SnapshotHandles();
+            int destroyedCount = 0, skippedClasses = 0;
+            foreach (uint h in handles) {
+                if (GroupOfHandle(h) != group) continue;
+                if (_registry.IsClassHandle(h)) { skippedClasses++; continue; }
+                DestroyObjectAndCleanup(h);
+                destroyedCount++;
+            }
+            _dumper?.OnEvent($"  Context_DestroyGroup idxGroup={idxGroup} " +
+                             $"(bits: items={_cItemsPerGroupBits} group={_cGroupBits}) " +
+                             $"-> destroyed {destroyedCount} object(s), kept {skippedClasses} class handle(s), " +
+                             $"{_registry.ObjectCount} remain");
+            _logger?.LogInfo($"[splash] Context_DestroyGroup idxGroup={idxGroup} destroyed {destroyedCount} " +
+                             $"object(s) ({_registry.ObjectCount} remain in registry)");
         }
 
         // msgid table for Window (spec section 2.2.4.10):
@@ -1505,8 +1775,18 @@ namespace SoftSled.Components.Splash {
                     if (rdr.Remaining >= 8) {
                         uint nValue = rdr.ReadU32();
                         uint nMask  = rdr.ReadU32();
+                        bool wasDeactivated = v.DataBitsDeactivated;
                         v.ApplyDataBits(nValue, nMask);
                         _dumper?.OnEvent($"  Visual_ChangeDataBits value=0x{nValue:X8} mask=0x{nMask:X8} -> bits=0x{v.DataBits:X8}");
+                        // Page-cache lifecycle flips are rare (~26/session)
+                        // and high-signal — surface them loudly.
+                        if (v.DataBitsDeactivated != wasDeactivated) {
+                            string state = v.DataBitsDeactivated
+                                ? "DEACTIVATED (cached page — subtree hidden)"
+                                : "REACTIVATED (subtree shown)";
+                            _dumper?.OnEvent($"    [PAGE-CACHE] vis=0x{v.Handle:X8} {state}");
+                            _logger?.LogInfo($"[splash] PAGE-CACHE vis=0x{v.Handle:X8} {state}");
+                        }
                         // During active video, emit DataBits changes that
                         // touch bits OUTSIDE the well-known WMC envelope
                         // (row-container/active-flag at 0x00700077, plus
@@ -1588,10 +1868,24 @@ namespace SoftSled.Components.Splash {
                         RefreshVideoRectIfRelevant(v, "ChangeParent(short)");
                     }
                     break;
-                case 4: // Visual_SetColor (ARGB u32)
+                case 4: // Visual_SetColor (ARGB u32) — tints the visual's
+                        // content (RGB multiplies painted ops, A folds into
+                        // effective opacity). Zero traffic in current
+                        // captures, so this path is exercised only if WMC
+                        // starts sending colors.
                     if (rdr.Remaining >= 4) {
                         uint argb = rdr.ReadU32();
+                        // Defensive: a colour with A=0 but non-zero RGB is
+                        // far more likely an RGB-only value (alpha never
+                        // set) than "tint fully transparent" — treat as
+                        // opaque and log so a capture can settle it.
+                        if ((argb >> 24) == 0 && (argb & 0x00FFFFFF) != 0) {
+                            _dumper?.OnEvent($"    (SetColor alpha=0 with RGB set — treating as opaque)");
+                            argb |= 0xFF000000u;
+                        }
                         v.Color = ArgbU32ToColor(argb);
+                        v.ApplyAlpha();       // Color.A participates in opacity
+                        v.RepaintContent();   // re-bake ops with the new tint
                         _dumper?.OnEvent($"  Visual_SetColor argb=0x{argb:X8}");
                     }
                     break;
@@ -1997,10 +2291,17 @@ namespace SoftSled.Components.Splash {
                                     // the video plane to its rendered rect
                                     // (SetVideoBoundVisual -> RefreshVideoRectIfRelevant
                                     // -> VideoPipCandidateChanged -> SurfaceRouter).
-                                    // Binds only when nothing is bound yet; the bound
-                                    // visual's destroy (Broker_DestroyObject) reverts
-                                    // to fullscreen. Always active (no config gate).
-                                    if (_videoBoundVisualHandle == 0
+                                    // NEWEST WINS (2026-07-19): a fresh strict corner
+                                    // match REPLACES an existing binding. WMC's
+                                    // atlas-era page caching keeps old pages (and
+                                    // their boxes) alive instead of destroying them,
+                                    // so a "bind only when unbound" gate left a stale
+                                    // covered box holding the binding while the newly
+                                    // rebuilt browse page's box (same rect, new
+                                    // handle) was ignored — run 085802. Same-handle
+                                    // re-matches remain the idempotent rebind path in
+                                    // SetVideoBoundVisual. Always active (no config gate).
+                                    if (_videoBoundVisualHandle != v.Handle
                                         && v.AlphaByte > 0
                                         && aspect >= 1.2 && aspect <= 1.95
                                         && gotRen && inCorner
@@ -2107,12 +2408,13 @@ namespace SoftSled.Components.Splash {
         //   3 = DrawOutline       (rb, clrOutline, flThickness, rcfOutline)
         //   4 = DrawSolid         (rb, clrFill, rcfFill)
         //   5 = CreateSurfacePool
+        //  14 = XeDevice_Create   (objcb, ctxcb, sizeScreenPxl) — §2.2.4.22.1 (0x0E)
         //
         // CRITICAL: each Draw message embeds its *own* RenderBuilder
         // handle (the `rb` field) — no "current RB" state needed. Slice 1
         // mishandled this by reading rect first; we now read rb,
         // colour, then geometry in spec order.
-        private void DispatchDevice(SplashPayloadReader rdr, int msgid) {
+        private void DispatchDevice(ISplashObject dev, SplashPayloadReader rdr, int msgid) {
             switch (msgid) {
                 case 0: // Device_Stop
                     _dumper?.OnEvent($"  Device_Stop");
@@ -2237,8 +2539,35 @@ namespace SoftSled.Components.Splash {
                 case 13: // XeDevice_Enter3DMode (rb u32)
                     _dumper?.OnEvent($"  XeDevice_Enter3DMode");
                     break;
-                case 26: // XeDevice_Create — post-init ping
-                    _dumper?.OnEvent($"  XeDevice_Create (post-init)");
+                case 14: // XeDevice_Create — spec §2.2.4.22.1 (msgid 0x0E).
+                         // Body: _priv_objcb u32 + _priv_ctxcb u32 +
+                         // sizeScreenPxl (Size 8 B — ints on the WMC wire
+                         // like every other Size field). Registers the
+                         // server's device callback; per §2.2.5.12 the
+                         // client acks with LocalDeviceCallback_OnCreated.
+                         // Previously this message fell to the unhandled
+                         // default and the whole registration was dropped,
+                         // so WMC never received its device-created ack
+                         // (observed: exactly one of these per session, in
+                         // the boot batch).
+                    if (rdr.Remaining >= 16) {
+                        _deviceCallbackObj = rdr.ReadU32();
+                        _deviceCallbackCtx = rdr.ReadU32();
+                        int scrW = rdr.ReadI32();
+                        int scrH = rdr.ReadI32();
+                        _deviceHandle = dev.Handle;
+                        _dumper?.OnEvent($"  XeDevice_Create dev=0x{dev.Handle:X8} objcb=0x{_deviceCallbackObj:X8} " +
+                                         $"ctxcb=0x{_deviceCallbackCtx:X8} screen=({scrW}×{scrH})");
+                        _logger?.LogInfo($"[splash] XeDevice_Create dev=0x{dev.Handle:X8} screen=({scrW}×{scrH}) " +
+                                         $"— device callback registered, sending OnCreated");
+                        SendDeviceOnCreated();
+                    }
+                    break;
+                case 26: // Post-init ping observed on device handles. NOT
+                         // the spec XeDevice_Create (that's msgid 0x0E=14,
+                         // handled above) — 26 mirrors the Visual_Create
+                         // second-stage numbering.
+                    _dumper?.OnEvent($"  Device post-init ping (msgid=26)");
                     break;
                 default:
                     // Device/XeDevice/Dx9Device default — always include
@@ -2334,6 +2663,17 @@ namespace SoftSled.Components.Splash {
                                 DstX = dx, DstY = dy, DstW = dw, DstH = dh,
                             };
                         }
+                        // ---- Pool composition (spec §2.2.4.12.1) ----
+                        // Live possibility since fAllowDynamicPool=1 put
+                        // WMC into atlas mode: a pool-level draw copies a
+                        // pool-space region to the destination. We keep
+                        // per-surface bitmaps, so compose by intersecting
+                        // each member surface's pool-placement rect
+                        // (Surface_RemapLocation) with the source region
+                        // and mapping the overlap to a fractional slot of
+                        // the final destination (which may be the
+                        // stretch-to-visual sentinel, resolved at paint).
+                        ComposePoolDraw(pool, rbH, sx, sy, sw, sh, dx, dy, dw, dh);
                     }
                     break;
                 // VideoPool-only msgids (3.1.5.14.7/.8). These live on the
@@ -2404,12 +2744,98 @@ namespace SoftSled.Components.Splash {
                         pool.AllocatedHeight = h;
                         pool.Format          = format;
                         _dumper?.OnEvent($"  SurfacePool_Allocate pool=0x{pool.Handle:X8} size=({w}×{h}) format=0x{format:X8}");
+                        // Ack the allocation to the server's device callback
+                        // (spec §3.1.5.10 / §2.2.5.10). No-op until
+                        // XeDevice_Create has registered the callback.
+                        SendSurfacePoolAllocationResult(pool.Handle);
                     }
                     break;
                 default:
                     _dumper?.OnEvent($"  SurfacePool msgid={msgid} (unhandled, rem={rdr.Remaining})");
                     MaybeDumpVfamHex(pool.Handle, "  SurfacePool", rdr);
                     break;
+            }
+        }
+
+        /// <summary>
+        /// Compose a SurfacePool_Draw into the RenderBuilder by mapping
+        /// each member surface's pool-placement rect through the draw's
+        /// pool-space source rect into a fractional slot of the final
+        /// destination. Rotated-storage surfaces are skipped with a loud
+        /// log — their pool coords are 90°-swapped relative to our
+        /// logical-orientation bitmaps and un-rotating is deferred until
+        /// a capture shows the flow actually happening.
+        /// </summary>
+        private void ComposePoolDraw(Objects.SplashSurfacePool pool, uint rbH,
+                                     float sx, float sy, float sw, float sh,
+                                     float dx, float dy, float dw, float dh) {
+            if (pool.SurfaceHandles.Count == 0) return;
+            if (!TryResolveRb(rbH, out var rb)) return;
+
+            // Source region in pool space. The (-1,-1) sentinel means the
+            // whole pool; fall back to the declared allocation, else to
+            // the union of member placements.
+            double srcX = sx, srcY = sy, srcW = sw, srcH = sh;
+            if (srcW <= 0 || srcH <= 0) {
+                if (pool.AllocatedWidth > 0 && pool.AllocatedHeight > 0) {
+                    srcX = 0; srcY = 0;
+                    srcW = pool.AllocatedWidth;
+                    srcH = pool.AllocatedHeight;
+                } else {
+                    double maxR = 0, maxB = 0;
+                    foreach (uint sh2 in pool.SurfaceHandles) {
+                        if (_registry.TryGetObject(sh2, out var o) && o is Objects.SplashSurface s2 && s2.HasPoolRect) {
+                            maxR = Math.Max(maxR, s2.PoolRectX + s2.PoolRectW);
+                            maxB = Math.Max(maxB, s2.PoolRectY + s2.PoolRectH);
+                        }
+                    }
+                    if (maxR <= 0 || maxB <= 0) return;
+                    srcX = 0; srcY = 0; srcW = maxR; srcH = maxB;
+                }
+            }
+
+            bool stretch = (dw <= 0 || dh <= 0);
+            Rect explicitDst = stretch ? Rect.Empty : new Rect(dx, dy, dw, dh);
+
+            int composed = 0, skippedRotated = 0, skippedNoContent = 0;
+            foreach (uint surfH in pool.SurfaceHandles) {
+                if (!_registry.TryGetObject(surfH, out var sObj)
+                    || !(sObj is Objects.SplashSurface s)
+                    || !s.HasPoolRect) continue;
+                if (s.Bitmap == null || !s.ContentValid) { skippedNoContent++; continue; }
+
+                // Overlap of the surface's pool placement with the source region.
+                double ix = Math.Max(srcX, s.PoolRectX);
+                double iy = Math.Max(srcY, s.PoolRectY);
+                double ir = Math.Min(srcX + srcW, s.PoolRectX + s.PoolRectW);
+                double ib = Math.Min(srcY + srcH, s.PoolRectY + s.PoolRectH);
+                if (ir <= ix || ib <= iy) continue;
+
+                if (s.StoredRotated) {
+                    // Pool coords are the ROTATED storage; our bitmap is
+                    // logical. Un-rotating the sub-rect mapping is untested
+                    // territory — skip loudly rather than draw sideways.
+                    skippedRotated++;
+                    continue;
+                }
+
+                // Sub-rect of the surface's own bitmap (pool coords − placement origin).
+                var srcSub = new Rect(ix - s.PoolRectX, iy - s.PoolRectY, ir - ix, ib - iy);
+                // Fractional slot within the destination.
+                var frac = new Rect((ix - srcX) / srcW, (iy - srcY) / srcH,
+                                    (ir - ix) / srcW, (ib - iy) / srcH);
+                rb.AddImageMapped(s.Bitmap, srcSub, frac, explicitDst, stretch);
+                composed++;
+            }
+            if (composed > 0 || skippedRotated > 0) {
+                _dumper?.OnEvent($"    [POOL-COMPOSE] pool=0x{pool.Handle:X8} rb=0x{rbH:X8} " +
+                                 $"src=({srcX:F0},{srcY:F0} {srcW:F0}x{srcH:F0}) composed={composed} " +
+                                 $"skipped(rotated)={skippedRotated} skipped(empty)={skippedNoContent}");
+                if (skippedRotated > 0) {
+                    _logger?.LogInfo($"[splash] SurfacePool_Draw composed {composed} surface(s) but SKIPPED " +
+                                     $"{skippedRotated} rotated-storage surface(s) on pool 0x{pool.Handle:X8} — " +
+                                     $"un-rotation mapping not implemented (capture wanted)");
+                }
             }
         }
 
@@ -2447,8 +2873,19 @@ namespace SoftSled.Components.Splash {
         //   3 = RemapLocation     (rcContentPxl)
         //   4 = MarkContentValid
         //   5 = Clear             (rcContentPxl, clrFill)
-        //   6 = SetRotation
-        //   7 = SetStorageSize
+        //   8 = SetRotation       (fRotated u32)        — spec §2.2.4.11.7
+        //  11 = SetStorageSize    (sizeStoragePxl 8 B)  — spec §2.2.4.11.8 (0x0B)
+        //
+        // NOTE: earlier revisions of this dispatcher had SetRotation/
+        // SetStorageSize on msgids 6/7 — those are GAP slots in every
+        // published spec revision (Clear=5 jumps to SetRotation=8).
+        // Worse, real SetStorageSize traffic (msgid=11, body=8) was
+        // being swallowed by the generic "msgid=11 → Create ack" filter
+        // in DispatchMessage before reaching this switch — so the
+        // dynamic-surface SetStorageSize trace (a candidate PiP-position
+        // signal) could never fire. The 6/7 cases are KEPT as aliases in
+        // case the WMC wire genuinely used them (no capture evidence
+        // either way — they'd previously have been indistinguishable).
         private void DispatchSurface(Objects.SplashSurface surf, SplashPayloadReader rdr, int msgid) {
             switch (msgid) {
                 case 0: // Surface_DrawGrid
@@ -2583,9 +3020,21 @@ namespace SoftSled.Components.Splash {
                         int ry = rdr.ReadI32();
                         int rw = rdr.ReadI32();
                         int rh = rdr.ReadI32();
+                        // Atlas placement (live since fAllowDynamicPool=1,
+                        // ~443/session): remember where this surface sits
+                        // inside its pool's sheet so SurfacePool_Draw can
+                        // resolve pool-space coordinates back to member
+                        // surfaces. Rotated storage keeps swapped dims
+                        // here — see SplashSurface.StoredRotated.
+                        surf.PoolRectX = rx;
+                        surf.PoolRectY = ry;
+                        surf.PoolRectW = rw;
+                        surf.PoolRectH = rh;
+                        surf.HasPoolRect = true;
                         bool isDyn = IsDynamicSurface(surf.Handle);
-                        string tag = isDyn ? " [DYNAMIC-SURFACE]" : "";
-                        _logger?.LogInfo($"[splash] Surface_RemapLocation surf=0x{surf.Handle:X8}{tag} -> rect=({rx},{ry},{rw},{rh})");
+                        if (isDyn) {
+                            _logger?.LogInfo($"[splash] Surface_RemapLocation surf=0x{surf.Handle:X8} [DYNAMIC-SURFACE] -> rect=({rx},{ry},{rw},{rh})");
+                        }
                         _dumper?.OnEvent($"  Surface_RemapLocation surf=0x{surf.Handle:X8} rect=({rx},{ry},{rw},{rh})");
                         // If this is the dynamic video surface, notify
                         // SurfaceRouter via the screen-rect change event
@@ -2610,22 +3059,53 @@ namespace SoftSled.Components.Splash {
                         _dumper?.OnEvent($"  Surface_Clear surf=0x{surf.Handle:X8} rect=({rx},{ry},{rw},{rh}) argb=0x{argb:X8}");
                     }
                     break;
-                case 6: // Surface_SetRotation — spec §2.2.4.11.7
-                        // Body: dwRotation (u32)
+                case 6: // legacy alias — see msgid-table note above
+                case 8: // Surface_SetRotation — spec §2.2.4.11.7
+                        // Body: fRotated (u32; wire ships 0xFFFFFFFF for
+                        // TRUE). Marks the surface's POOL storage as
+                        // rotated 90° for packing. Our per-surface bitmaps
+                        // stay logical-orientation (uploads arrive
+                        // unrotated), so the flag only matters when
+                        // resolving pool-space coords in SurfacePool_Draw.
                     if (rdr.Remaining >= 4) {
                         uint rot = rdr.ReadU32();
-                        _dumper?.OnEvent($"  Surface_SetRotation surf=0x{surf.Handle:X8} rotation={rot}");
+                        surf.StoredRotated = rot != 0;
+                        _dumper?.OnEvent($"  Surface_SetRotation surf=0x{surf.Handle:X8} rotation={rot} (msgid={msgid})");
                     }
                     break;
-                case 7: // Surface_SetStorageSize — spec §2.2.4.11.8
-                        // Body: sizeStoragePxl (Size 8 B)
+                case 7:  // legacy alias — see msgid-table note above
+                case 11: // Surface_SetStorageSize — spec §2.2.4.11.8 (0x0B)
+                         // Body: sizeStoragePxl (Size 8 B — ints on the WMC
+                         // wire, same as every other Size field).
                     if (rdr.Remaining >= 8) {
                         int sw = rdr.ReadI32();
                         int sh = rdr.ReadI32();
+                        // Ambiguity guard: msgid=11 with an 8-byte body is
+                        // ALSO the shape of the class-bootstrap "Create"
+                        // finalisation (priv_objcb + priv_ctxcb) that
+                        // DispatchMessage acks for every other class. If
+                        // WMC ever sends that for a Surface, the two u32s
+                        // would be callback HANDLES (large values with the
+                        // group field in the high bits), not pixel sizes.
+                        // Disambiguate by plausibility: real storage sizes
+                        // are small positive pixel dimensions.
+                        bool plausibleSize = sw > 0 && sw <= 16384 && sh > 0 && sh <= 16384;
+                        if (msgid == 11 && !plausibleSize) {
+                            _dumper?.OnEvent($"  Surface msgid=11 surf=0x{surf.Handle:X8} body=(0x{sw:X8},0x{sh:X8}) — implausible as storage size, treating as Create (post-init, ack)");
+                            break;
+                        }
                         bool isDyn = IsDynamicSurface(surf.Handle);
-                        string tag = isDyn ? " [DYNAMIC-SURFACE]" : "";
-                        _logger?.LogInfo($"[splash] Surface_SetStorageSize surf=0x{surf.Handle:X8}{tag} -> {sw}x{sh}");
-                        _dumper?.OnEvent($"  Surface_SetStorageSize surf=0x{surf.Handle:X8} size=({sw}×{sh})");
+                        // Post-fix reality check (2026-07-18 run): ~923 of
+                        // these per session — one per rasterised surface,
+                        // always immediately before the matching
+                        // Rasterizer_LoadRawImage. Far too chatty for the
+                        // app log; INFO is reserved for dynamic (video)
+                        // surfaces where a size/position change is the
+                        // signal we're actually hunting.
+                        if (isDyn) {
+                            _logger?.LogInfo($"[splash] Surface_SetStorageSize surf=0x{surf.Handle:X8} [DYNAMIC-SURFACE] -> {sw}x{sh} (msgid={msgid})");
+                        }
+                        _dumper?.OnEvent($"  Surface_SetStorageSize surf=0x{surf.Handle:X8} size=({sw}×{sh}) (msgid={msgid})");
                     }
                     break;
                 default:
@@ -2751,6 +3231,11 @@ namespace SoftSled.Components.Splash {
                         int pxW = actW, pxH = actH;
                         LoadRawImageInto(surf, db, pxW, pxH, stride, (uint)format, offX, offY);
                         _dumper?.OnEvent($"  Rasterizer_LoadRawImage surf=0x{surContent:X8} buf=0x{bufferH:X8} {pxW}×{pxH} stride={stride} fmt=0x{format:X8} off=({offX},{offY}) bytes={db.Bytes.Length}");
+                        // The pixels are decoded into the surface bitmap —
+                        // the raw buffer is spent. Ack + free (observed
+                        // 1:1 buffer-to-load; a re-referencing load would
+                        // log "buffer not found" and flag the assumption).
+                        CompleteAndReleaseDataBuffer(bufferH, "raster decoded");
                     }
                     break;
                 default:
@@ -2999,13 +3484,24 @@ namespace SoftSled.Components.Splash {
                     }
                     break;
                 case 15: // SetARGBColor: idxKeyframe + ARGB u32
-                case 16: // SetRGBColor: idxKeyframe + RGB u32 (we treat as ARGB)
+                case 16: // SetRGBColor:  idxKeyframe + RGB u32
                     if (rdr.Remaining >= 8) {
                         int  idx  = rdr.ReadI32();
                         uint argb = rdr.ReadU32();
                         var kfs = anim.EnsureKeyframeAt(idx);
                         if (kfs != null && idx >= 0 && idx < kfs.Length) {
-                            kfs[idx].ArgbValue = argb;
+                            if (msgid == 16) {
+                                // RGB-only per spec §17.17 — must NOT animate
+                                // alpha from the wire's (undefined) high byte.
+                                // Preserve the keyframe's existing alpha if one
+                                // was set, else default opaque.
+                                uint a = (kfs[idx].ArgbValue & 0xFF000000u) != 0
+                                    ? (kfs[idx].ArgbValue & 0xFF000000u)
+                                    : 0xFF000000u;
+                                kfs[idx].ArgbValue = a | (argb & 0x00FFFFFFu);
+                            } else {
+                                kfs[idx].ArgbValue = argb;
+                            }
                         }
                     }
                     break;
@@ -3456,6 +3952,79 @@ namespace SoftSled.Components.Splash {
             SendIndividualMessageToServer(anim.CallbackCtx, payload);
         }
 
+        /// <summary>
+        /// Send LocalDeviceCallback_OnCreated (spec §2.2.5.12) — the ack
+        /// for XeDevice_Create. Payload layout (12-byte header + 8-byte
+        /// body = 20 B, payload byte order):
+        ///   _size            (u32) = 20
+        ///   _msgid           (i32) = 3      (OnCreated)
+        ///   _idObjectSubject (u32) = device callback object (objcb)
+        ///   target           (u32) = the device handle
+        ///   fAllowDynamicPool(u32) = 0
+        ///
+        /// fAllowDynamicPool: 0 = "one surface per pool" (matches the
+        /// renderer's per-surface WriteableBitmap storage and the wire
+        /// behaviour WMC exhibits with no ack at all — 1:1 pools to
+        /// surfaces in every capture). 1 = "multiple surfaces allowed
+        /// within pools" — EXPERIMENT (2026-07-18, user-requested):
+        /// declaring 1 to see whether WMC changes its surface strategy
+        /// (pool consolidation / atlas packing / different draw flow —
+        /// SurfacePool_Draw, Surface_RemapLocation, RemapContainer may
+        /// start appearing). The renderer keeps per-surface bitmaps
+        /// regardless (Rasterizer_LoadRawImage still targets individual
+        /// surfaces), so per-surface draws keep working; watch captures
+        /// for pool-level draws we only stub. Revert to 0 if rendering
+        /// degrades.
+        /// </summary>
+        private void SendDeviceOnCreated() {
+            if (_deviceCallbackObj == 0 || _deviceCallbackCtx == 0) return;
+            const uint fAllowDynamicPool = 1;
+            byte[] payload = new byte[20];
+            int p = 0;
+            WriteU32Payload(payload, ref p, 20);                   // _size
+            WriteU32Payload(payload, ref p, 3);                    // _msgid = 3 (OnCreated)
+            WriteU32Payload(payload, ref p, _deviceCallbackObj);   // _idObjectSubject = objcb
+            WriteU32Payload(payload, ref p, _deviceHandle);        // target = device
+            WriteU32Payload(payload, ref p, fAllowDynamicPool);
+            _dumper?.OnEvent($"  -> LocalDeviceCallback_OnCreated dev=0x{_deviceHandle:X8} -> objcb=0x{_deviceCallbackObj:X8} ctxcb=0x{_deviceCallbackCtx:X8} allowDynamicPool={fAllowDynamicPool}");
+            _logger?.LogInfo($"[splash] LocalDeviceCallback_OnCreated sent (dev=0x{_deviceHandle:X8}, allowDynamicPool={fAllowDynamicPool})");
+            SendIndividualMessageToServer(_deviceCallbackCtx, payload);
+        }
+
+        /// <summary>
+        /// Send LocalDeviceCallback_OnSurfacePoolAllocation (spec
+        /// §2.2.5.10) — the per-pool storage-allocation result, sent
+        /// after every SurfacePool_Allocate. Payload layout (12-byte
+        /// header + 12-byte body = 24 B, payload byte order):
+        ///   _size            (u32) = 24
+        ///   _msgid           (i32) = 0      (OnSurfacePoolAllocation)
+        ///   _idObjectSubject (u32) = device callback object (objcb)
+        ///   target           (u32) = the device handle
+        ///   idSurfacePool    (u32) = the pool that allocated
+        ///   nResult          (i32) = 1      ("the storage has been requested")
+        ///
+        /// nResult is always 1: the WriteableBitmap backing is created
+        /// lazily at the first Rasterizer_LoadRawImage and effectively
+        /// cannot fail, so every Allocate is acked as satisfied. No-op
+        /// until XeDevice_Create registers the device callback (WMC's
+        /// boot batch sends Create before the first Allocate). Dumper-
+        /// only logging — this fires ~500×/session and would drown the
+        /// app log.
+        /// </summary>
+        private void SendSurfacePoolAllocationResult(uint poolHandle) {
+            if (_deviceCallbackObj == 0 || _deviceCallbackCtx == 0) return;
+            byte[] payload = new byte[24];
+            int p = 0;
+            WriteU32Payload(payload, ref p, 24);                   // _size
+            WriteU32Payload(payload, ref p, 0);                    // _msgid = 0 (OnSurfacePoolAllocation)
+            WriteU32Payload(payload, ref p, _deviceCallbackObj);   // _idObjectSubject = objcb
+            WriteU32Payload(payload, ref p, _deviceHandle);        // target = device
+            WriteU32Payload(payload, ref p, poolHandle);           // idSurfacePool
+            WriteU32Payload(payload, ref p, 1);                    // nResult = 1 (storage requested)
+            _dumper?.OnEvent($"  -> LocalDeviceCallback_OnSurfacePoolAllocation pool=0x{poolHandle:X8} result=1");
+            SendIndividualMessageToServer(_deviceCallbackCtx, payload);
+        }
+
         /// <summary>Endian-aware u32 writer matching the payload byte order.</summary>
         private void WriteU32Payload(byte[] buf, ref int p, uint v) {
             if (_payloadBigEndian) {
@@ -3744,8 +4313,10 @@ namespace SoftSled.Components.Splash {
                     break;
                 case Objects.AnimationKind.Color:
                     v.Color = ArgbU32ToColor(kf.ArgbValue);
-                    // We don't yet apply v.Color to rendering (no tint
-                    // pipeline). Logged for visibility.
+                    // Tint pipeline: alpha folds into opacity, RGB re-bakes
+                    // the cached ops through the tinted-brush/bitmap path.
+                    v.ApplyAlpha();
+                    v.RepaintContent();
                     break;
                 // GradientColorMask / GradientOffset are handled at the
                 // top of this method (they target a Gradient, not a
@@ -4191,14 +4762,19 @@ namespace SoftSled.Components.Splash {
 
         // -------- DataBuffer (spec §2.2.4.1) --------
         //   0 = RegisterOwner       (_objcb u32, _ctxcb u32) — body=8
-        // The owner callback isn't something we model — we just hold the
-        // bytes for predicate-batch processing and Rasterizer_LoadRawImage.
+        // The owner pair is stored so CompleteAndReleaseDataBuffer can
+        // send LocalDataBufferCallback_OnComplete (§2.2.5.9) once the
+        // buffer's bytes have been consumed.
         private void DispatchDataBuffer(ISplashObject db, SplashPayloadReader rdr, int msgid) {
             switch (msgid) {
                 case 0: // RegisterOwner
                     if (rdr.Remaining >= 8) {
                         uint objcb = rdr.ReadU32();
                         uint ctxcb = rdr.ReadU32();
+                        if (db is Objects.SplashDataBuffer sdb) {
+                            sdb.OwnerObj = objcb;
+                            sdb.OwnerCtx = ctxcb;
+                        }
                         _dumper?.OnEvent($"  DataBuffer_RegisterOwner db=0x{db.Handle:X8} objcb=0x{objcb:X8} ctxcb=0x{ctxcb:X8}");
                     }
                     break;
@@ -4206,6 +4782,44 @@ namespace SoftSled.Components.Splash {
                     _dumper?.OnEvent($"  DataBuffer msgid={msgid} (unhandled, rem={rdr.Remaining})");
                     break;
             }
+        }
+
+        /// <summary>
+        /// A DataBuffer's bytes have been fully consumed (predicate batch
+        /// processed, raster image decoded, or sound data claimed). Per
+        /// spec §2.2.4.1.1 / §2.2.5.9, notify the registered owner with
+        /// LocalDataBufferCallback_OnComplete so the server can reclaim
+        /// its copy, and drop OUR copy from the registry — previously
+        /// buffers were retained for the whole session (multi-MB of raster
+        /// payloads by the end of a long one).
+        ///
+        /// Payload (12-byte header + 4-byte body = 16 B, payload order):
+        ///   _size            (u32) = 16
+        ///   _msgid           (i32) = 0     (OnComplete)
+        ///   _idObjectSubject (u32) = owner callback object (objcb)
+        ///   target           (u32) = the DataBuffer handle
+        ///
+        /// No-ops for unknown/non-DataBuffer handles. Consumers that keep
+        /// the byte[] (SoundBuffer.Bytes) are unaffected — releasing the
+        /// registry entry doesn't invalidate the managed array.
+        /// </summary>
+        private void CompleteAndReleaseDataBuffer(uint bufferId, string reason) {
+            if (!_registry.TryGetObject(bufferId, out var obj)
+                || !(obj is Objects.SplashDataBuffer sdb)) return;
+            if (sdb.OwnerObj != 0 && sdb.OwnerCtx != 0) {
+                byte[] payload = new byte[16];
+                int p = 0;
+                WriteU32Payload(payload, ref p, 16);           // _size
+                WriteU32Payload(payload, ref p, 0);            // _msgid = 0 (OnComplete)
+                WriteU32Payload(payload, ref p, sdb.OwnerObj); // _idObjectSubject = objcb
+                WriteU32Payload(payload, ref p, bufferId);     // target = buffer handle
+                _dumper?.OnEvent($"  -> LocalDataBufferCallback_OnComplete db=0x{bufferId:X8} ({sdb.Bytes.Length} B, {reason}) -> objcb=0x{sdb.OwnerObj:X8}");
+                SendIndividualMessageToServer(sdb.OwnerCtx, payload);
+            } else {
+                _dumper?.OnEvent($"  (DataBuffer 0x{bufferId:X8} released, {sdb.Bytes.Length} B, {reason} — no owner registered, no OnComplete)");
+            }
+            _registry.RemoveObject(bufferId);
+            _releasedDataBuffers.Add(bufferId);
         }
 
         // -------- XAudSoundDevice (spec §2.2.4.24) --------
@@ -4229,13 +4843,39 @@ namespace SoftSled.Components.Splash {
                         _dumper?.OnEvent($"  XAudSoundDevice_CreateSound -> sound=0x{idNewSound:X8} buf=0x{sndBuf:X8}");
                     }
                     break;
-                case 1: // CreateSoundBuffer — empty buffer awaiting
-                        // SoundBuffer_LoadSoundData to populate its bytes.
+                case 1: // CreateSoundBuffer — spec §2.2.4.24.3: idNewBuffer
+                        // (i32) + SoundHeader (22 B, §2.2.6.11) + _priv_objcb
+                        // + _priv_ctxcb = 34-byte body. The header supplies
+                        // the playback format (previously skipped — the
+                        // player hardcoded 44.1 kHz/16-bit/stereo); the
+                        // owner pair anchors OnSoundBufferReady (§2.2.5.2),
+                        // sent once LoadSoundData populates the bytes.
                     if (rdr.Remaining >= 4) {
                         int idNewBuf = rdr.ReadI32();
-                        _registry.RegisterObject((uint)idNewBuf,
-                            new Objects.SplashSoundBuffer((uint)idNewBuf, "SoundBuffer"));
-                        _dumper?.OnEvent($"  XAudSoundDevice_CreateSoundBuffer -> buf=0x{idNewBuf:X8}");
+                        var sb = new Objects.SplashSoundBuffer((uint)idNewBuf, "SoundBuffer");
+                        if (rdr.Remaining >= 30) { // SoundHeader 22 + objcb 4 + ctxcb 4
+                            int wFormatTag      = rdr.ReadU16();
+                            int nChannels       = rdr.ReadU16();
+                            int nSamplesPerSec  = (int)rdr.ReadU32();
+                            int nAvgBytesPerSec = (int)rdr.ReadU32();
+                            int nBlockAlign     = rdr.ReadU16();
+                            int wBitsPerSample  = rdr.ReadU16();
+                            int cbExtraData     = rdr.ReadU16();
+                            uint cbDataSize     = rdr.ReadU32();
+                            sb.FormatTag     = wFormatTag;
+                            sb.Channels      = nChannels;
+                            sb.SampleRate    = nSamplesPerSec;
+                            sb.BitsPerSample = wBitsPerSample;
+                            sb.OwnerObj      = rdr.ReadU32();
+                            sb.OwnerCtx      = rdr.ReadU32();
+                            _dumper?.OnEvent($"  XAudSoundDevice_CreateSoundBuffer -> buf=0x{idNewBuf:X8} " +
+                                             $"fmt={wFormatTag} ch={nChannels} rate={nSamplesPerSec} bits={wBitsPerSample} " +
+                                             $"align={nBlockAlign} avg={nAvgBytesPerSec} extra={cbExtraData} dataSize={cbDataSize} " +
+                                             $"objcb=0x{sb.OwnerObj:X8} ctxcb=0x{sb.OwnerCtx:X8}");
+                        } else {
+                            _dumper?.OnEvent($"  XAudSoundDevice_CreateSoundBuffer -> buf=0x{idNewBuf:X8} (short body, no header)");
+                        }
+                        _registry.RegisterObject((uint)idNewBuf, sb);
                     }
                     break;
                 case 6: // Create (post-init)
@@ -4267,6 +4907,13 @@ namespace SoftSled.Components.Splash {
                             && dbObj is Objects.SplashDataBuffer db) {
                             sb.Bytes = db.Bytes;
                             _dumper?.OnEvent($"  SoundBuffer_LoadSoundData buf=0x{sb.Handle:X8} data=0x{dataBufferH:X8} bytes={db.Bytes.Length}");
+                            // The sound bytes are claimed (sb.Bytes keeps
+                            // the managed array alive) — release the
+                            // DataBuffer and tell the owner (§2.2.5.9),
+                            // then report the buffer READY (§2.2.5.2) to
+                            // whoever CreateSoundBuffer registered.
+                            CompleteAndReleaseDataBuffer(dataBufferH, "sound data claimed");
+                            SendSoundBufferReady(sb);
                         } else {
                             _dumper?.OnEvent($"  SoundBuffer_LoadSoundData buf=0x{sb.Handle:X8} data=0x{dataBufferH:X8} (DataBuffer not found — sound will be silent)");
                         }
@@ -4299,10 +4946,17 @@ namespace SoftSled.Components.Splash {
                             // that never trigger splash audio.
                             _soundPlayer = new SplashSoundPlayer(_logger);
                         }
-                        byte[] bytes = ResolveSoundBytes(snd);
+                        var sndBuf = ResolveSoundBuffer(snd);
+                        byte[] bytes = sndBuf?.Bytes;
                         if (bytes != null && bytes.Length > 0) {
-                            _soundPlayer.Play(snd.Handle, bytes);
-                            _dumper?.OnEvent($"  Sound_Play sound=0x{snd.Handle:X8} buf=0x{snd.SoundBufferHandle:X8} bytes={bytes.Length}");
+                            // Pass the SoundHeader format through — the
+                            // player validates and falls back to its
+                            // 44.1 kHz/16-bit/stereo default if absent
+                            // or implausible.
+                            _soundPlayer.Play(snd.Handle, bytes,
+                                sndBuf.SampleRate, sndBuf.BitsPerSample, sndBuf.Channels);
+                            _dumper?.OnEvent($"  Sound_Play sound=0x{snd.Handle:X8} buf=0x{snd.SoundBufferHandle:X8} bytes={bytes.Length} " +
+                                             $"fmt=({sndBuf.SampleRate}Hz/{sndBuf.BitsPerSample}bit/{sndBuf.Channels}ch)");
                         } else {
                             _dumper?.OnEvent($"  Sound_Play sound=0x{snd.Handle:X8} buf=0x{snd.SoundBufferHandle:X8} (no bytes — skipped)");
                         }
@@ -4317,16 +4971,38 @@ namespace SoftSled.Components.Splash {
         }
 
         /// <summary>
-        /// Resolve a Sound's playable bytes by walking
-        /// Sound.SoundBufferHandle → SoundBuffer.Bytes. Returns null if
-        /// any link is missing (the SoundBuffer was destroyed, never had
-        /// LoadSoundData called, etc.).
+        /// Resolve a Sound's backing SoundBuffer by walking
+        /// Sound.SoundBufferHandle. Returns null if the link is missing
+        /// (the SoundBuffer was destroyed, never had LoadSoundData
+        /// called, etc.).
         /// </summary>
-        private byte[] ResolveSoundBytes(Objects.SplashSound snd) {
+        private Objects.SplashSoundBuffer ResolveSoundBuffer(Objects.SplashSound snd) {
             if (snd.SoundBufferHandle == 0) return null;
             if (!_registry.TryGetObject(snd.SoundBufferHandle, out var sbObj)
                 || !(sbObj is Objects.SplashSoundBuffer sb)) return null;
-            return sb.Bytes;
+            return sb;
+        }
+
+        /// <summary>
+        /// Send LocalSoundBufferCallback_OnSoundBufferReady (spec §2.2.5.2)
+        /// to the owner registered by XAudSoundDevice_CreateSoundBuffer.
+        /// Payload (12-byte header + 4-byte body = 16 B, payload order):
+        ///   _size            (u32) = 16
+        ///   _msgid           (i32) = 0     (OnSoundBufferReady; Lost = 1)
+        ///   _idObjectSubject (u32) = owner callback object (objcb)
+        ///   idTarget         (u32) = the SoundBuffer handle
+        /// No-op when CreateSoundBuffer carried no owner pair.
+        /// </summary>
+        private void SendSoundBufferReady(Objects.SplashSoundBuffer sb) {
+            if (sb == null || sb.OwnerObj == 0 || sb.OwnerCtx == 0) return;
+            byte[] payload = new byte[16];
+            int p = 0;
+            WriteU32Payload(payload, ref p, 16);          // _size
+            WriteU32Payload(payload, ref p, 0);           // _msgid = 0 (OnSoundBufferReady)
+            WriteU32Payload(payload, ref p, sb.OwnerObj); // _idObjectSubject = objcb
+            WriteU32Payload(payload, ref p, sb.Handle);   // idTarget = sound buffer
+            _dumper?.OnEvent($"  -> LocalSoundBufferCallback_OnSoundBufferReady buf=0x{sb.Handle:X8} -> objcb=0x{sb.OwnerObj:X8}");
+            SendIndividualMessageToServer(sb.OwnerCtx, payload);
         }
 
         // -------- WaitCursor (spec §2.2.4.8) --------
@@ -4443,6 +5119,27 @@ namespace SoftSled.Components.Splash {
                         // Individual Message Buffer addressed to the
                         // context the server requested.
                         SendIndividualMessageToServer(idContextDest, callbackMsg);
+                    }
+                    break;
+                case 3: // Context_DestroyGroup — section 2.2.4.4.2
+                        // Body: idxGroup (i32). Destroys every object whose
+                        // handle's group bit-field equals idxGroup — see
+                        // DestroyGroup for the handle decomposition.
+                    if (rdr.Remaining >= 4) {
+                        int idxGroup = rdr.ReadI32();
+                        DestroyGroup(idxGroup);
+                    }
+                    break;
+                case 4: // Context_CreateGroup — section 2.2.4.4.3
+                        // Body: idxGroup (i32) + idContextOwner (u32).
+                        // Nothing to allocate on our side — membership is
+                        // implicit in the handles the server later assigns
+                        // within this group. Logged so the group lifecycle
+                        // is visible next to the DestroyGroup teardowns.
+                    if (rdr.Remaining >= 8) {
+                        int  idxGroup     = rdr.ReadI32();
+                        uint idCtxOwner   = rdr.ReadU32();
+                        _dumper?.OnEvent($"  Context_CreateGroup idxGroup={idxGroup} owner=0x{idCtxOwner:X8} (membership implicit in handles)");
                     }
                     break;
                 default:
