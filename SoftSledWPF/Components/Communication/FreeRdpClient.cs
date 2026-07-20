@@ -17,6 +17,20 @@ namespace SoftSled.Components.Communication {
         public StateChangedEventArgs(SoftSledNative.State s, int d) { State = s; Detail = d; }
     }
 
+    /// <summary>Per-second frame-rate sample. <see cref="IncomingFps"/> is what
+    /// WMC pushed over RDP — one native end_paint per frame, counted before the
+    /// paint coalescer merges anything. <see cref="RenderedFps"/> is what we
+    /// actually blit to the WriteableBitmap after coalescing collapses bursts.
+    /// A large gap (incoming ≫ rendered) means the UI thread can't keep up and
+    /// frames are being merged.</summary>
+    public class FrameStatsEventArgs : EventArgs {
+        public double IncomingFps { get; }
+        public double RenderedFps { get; }
+        public FrameStatsEventArgs(double incoming, double rendered) {
+            IncomingFps = incoming; RenderedFps = rendered;
+        }
+    }
+
     /// <summary>
     /// In-process replacement for <c>RDPVCInterface</c> — fronts FreeRDP via the
     /// softsled-rdp.dll shim. Same <see cref="DataReceived"/> event signature
@@ -74,6 +88,19 @@ namespace SoftSled.Components.Communication {
             new System.Collections.Generic.List<DirtyRect>(_maxPendingRects);
         private readonly Action _flushAction;
 
+        // Frame-rate meter. Counts frames arriving from WMC (one native
+        // end_paint = one paint callback, counted before the coalescer) vs
+        // frames actually blitted (after coalescing). Reported ~once/second via
+        // FrameStats. _fpsClock / _fpsWindowStartMs / _fpsIncoming are touched
+        // only on the FreeRDP worker thread (paint callbacks are serialised
+        // there); _fpsRendered is bumped on the UI thread in FlushPendingPaint,
+        // hence Interlocked. All stat work is skipped when nobody is subscribed.
+        private readonly System.Diagnostics.Stopwatch _fpsClock =
+            System.Diagnostics.Stopwatch.StartNew();
+        private long _fpsWindowStartMs = -1;
+        private int _fpsIncoming;
+        private int _fpsRendered;
+
         public event EventHandler<DataReceived> DataReceived;
         public event EventHandler<StateChangedEventArgs> StateChanged;
 
@@ -106,6 +133,12 @@ namespace SoftSled.Components.Communication {
 
         /// <summary>Raised once on the UI thread when the framebuffer is ready (ACTIVE + bitmap allocated).</summary>
         public event EventHandler FrameReady;
+
+        /// <summary>Raised ~once per second (on the FreeRDP worker thread) with the
+        /// incoming WMC frame rate and the post-coalescing rendered frame rate.
+        /// Only fires while something is subscribed; subscribers that touch the UI
+        /// must marshal to the dispatcher themselves.</summary>
+        public event EventHandler<FrameStatsEventArgs> FrameStats;
 
         public FreeRdpClient() {
             _handle = SoftSledNative.softsled_client_new();
@@ -300,6 +333,7 @@ namespace SoftSled.Components.Communication {
         // through the multi-rect path (e.g. allocation failure). Both paths
         // funnel into the same coalescer.
         private void OnNativePaint(IntPtr user, int x, int y, int w, int h) {
+            NoteIncomingFrame();
             QueueRect(x, y, w, h);
         }
 
@@ -312,6 +346,7 @@ namespace SoftSled.Components.Communication {
         // rect is queued discretely; QueueRect keeps them separate for the blit.
         private unsafe void OnNativePaintRects(IntPtr user, IntPtr rects, uint count) {
             if (rects == IntPtr.Zero || count == 0) return;
+            NoteIncomingFrame();
             SoftSledNative.Rect* p = (SoftSledNative.Rect*)rects;
             for (uint i = 0; i < count; i++) {
                 SoftSledNative.Rect r = p[i];
@@ -455,6 +490,33 @@ namespace SoftSled.Components.Communication {
                 b.Unlock();
             }
             rects.Clear();
+
+            // One flush = one rendered frame (however many rects it carried).
+            if (FrameStats != null) Interlocked.Increment(ref _fpsRendered);
+        }
+
+        // Frame-rate meter, called once per WMC frame from the paint callbacks
+        // (serialised on the FreeRDP worker thread). Emits a FrameStats event
+        // about once a second. No-ops unless something is subscribed, so it
+        // costs a single field read per frame when the FPS log is off.
+        private void NoteIncomingFrame() {
+            if (FrameStats == null) return;
+            long now = _fpsClock.ElapsedMilliseconds;
+            if (_fpsWindowStartMs < 0) {          // first frame of a window
+                _fpsWindowStartMs = now;
+                _fpsIncoming = 1;
+                return;
+            }
+            _fpsIncoming++;
+            long elapsed = now - _fpsWindowStartMs;
+            if (elapsed < 1000) return;
+
+            int incoming = _fpsIncoming;
+            int rendered = Interlocked.Exchange(ref _fpsRendered, 0);
+            double secs = elapsed / 1000.0;
+            _fpsIncoming = 0;
+            _fpsWindowStartMs = now;
+            FrameStats?.Invoke(this, new FrameStatsEventArgs(incoming / secs, rendered / secs));
         }
 
         private void OnNativeChannelData(IntPtr user, IntPtr namePtr, IntPtr dataPtr, UIntPtr length) {

@@ -122,6 +122,10 @@ namespace SoftSled.Components.Configuration {
         public bool LogMcxSessChannel = false;
         public bool LogAvCtrlChannel  = false;
         public bool LogRdpFastpath    = false;
+        // Gates the [rdp-fps] meter: one line/second giving the incoming WMC
+        // frame rate (pre-coalescing) vs the rendered rate (post-coalescing).
+        // Default OFF — it's a tuning aid, not routine output.
+        public bool LogRdpFps         = false;
 
         // Gates the A/V playback log group: FFME (Media.Open/Close, MediaOpened/Failed),
         // the FFME and external-sync controllers, the libav decoder throughput,

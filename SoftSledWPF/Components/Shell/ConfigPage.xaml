@@ -339,6 +339,10 @@
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Include RDP Fastpath logs"
                               Click="OnConfigChanged"/>
+                    <CheckBox x:Name="ChkLogRdpFps"
+                              Style="{StaticResource WmcCheckBoxStyle}"
+                              Content="Include RDP frame-rate (FPS) meter"
+                              Click="OnConfigChanged"/>
                     <CheckBox x:Name="ChkLogAvPlayback"
                               Style="{StaticResource WmcCheckBoxStyle}"
                               Content="Include A/V (libav / sync) logs"

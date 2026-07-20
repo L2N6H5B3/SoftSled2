@@ -586,6 +586,12 @@ namespace SoftSledWPF.Components.Shell {
             freeRdpClient.DataReceived += FreeRdpClient_DataReceived;
             freeRdpClient.StateChanged += FreeRdpClient_StateChanged;
             freeRdpClient.FrameReady += FreeRdpClient_FrameReady;
+            // FPS meter: only subscribe when the toggle is on — with no
+            // subscriber the client skips all per-frame stat work. The event
+            // fires on the FreeRDP worker thread; we only log, which is safe
+            // from any thread here.
+            if (cfg.LogRdpFps)
+                freeRdpClient.FrameStats += FreeRdpClient_FrameStats;
             foreach (var ch in new[] { "McxSess", "devcaps", "avctrl", "splash" })
                 freeRdpClient.RegisterChannel(ch);
 
@@ -1083,6 +1089,14 @@ namespace SoftSledWPF.Components.Shell {
             VideoImage.Width = r.Width;
             VideoImage.Height = r.Height;
             VideoImage.Stretch = _currentZoomStretch;
+        }
+
+        // FPS meter sink. Fires on the FreeRDP worker thread ~once/second while
+        // the RDP-FPS toggle is on. "WMC" is the rate WMC pushed frames at (before
+        // our coalescer); "rendered" is what we blitted after coalescing. A wide
+        // gap means the UI thread is the bottleneck and frames are being merged.
+        private void FreeRdpClient_FrameStats(object sender, FrameStatsEventArgs e) {
+            m_logger?.LogInfo($"[rdp-fps] WMC {e.IncomingFps:F0} fps → rendered {e.RenderedFps:F0} fps");
         }
 
         private void FreeRdpClient_FrameReady(object sender, EventArgs e) {

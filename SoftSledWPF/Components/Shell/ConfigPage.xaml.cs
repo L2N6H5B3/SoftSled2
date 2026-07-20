@@ -154,6 +154,7 @@ namespace SoftSledWPF.Components.Shell {
                 ChkLogMcxSess.IsChecked        = _config.LogMcxSessChannel;
                 ChkLogAvCtrl.IsChecked         = _config.LogAvCtrlChannel;
                 ChkLogRdpFastpath.IsChecked    = _config.LogRdpFastpath;
+                ChkLogRdpFps.IsChecked         = _config.LogRdpFps;
                 ChkLogAvPlayback.IsChecked     = _config.LogAvPlayback;
                 ChkLogToFile.IsChecked         = _config.LogToFile;
                 DiagFolderPath.Text            = SoftSled.Components.Configuration
@@ -278,6 +279,7 @@ namespace SoftSledWPF.Components.Shell {
             _config.LogMcxSessChannel       = ChkLogMcxSess.IsChecked == true;
             _config.LogAvCtrlChannel        = ChkLogAvCtrl.IsChecked == true;
             _config.LogRdpFastpath          = ChkLogRdpFastpath.IsChecked == true;
+            _config.LogRdpFps               = ChkLogRdpFps.IsChecked == true;
             _config.LogAvPlayback           = ChkLogAvPlayback.IsChecked == true;
             _config.LogToFile               = ChkLogToFile.IsChecked == true;
             _config.EnableSplashRawDump     = ChkDumpSplashRaw.IsChecked == true;
