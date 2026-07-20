@@ -180,7 +180,7 @@
                          labelled row so it visually groups with the
                          tickboxes without trying to be one. -->
                     <TextBlock Style="{StaticResource WmcSubtitleStyle}"
-                               Text="Resolution"
+                               Text="UI Resolution"
                                Foreground="{StaticResource WmcTextBrush}"
                                Margin="10,30,0,8"/>
                     <Button x:Name="BtnResolution"
