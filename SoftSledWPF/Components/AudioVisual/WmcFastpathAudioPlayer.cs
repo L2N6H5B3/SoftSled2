@@ -82,8 +82,9 @@ namespace SoftSled.Components.AudioVisual {
         private long   _headStartTicks;   // 0 = nothing playing
         private double _headDurationMs;
         // A sound at least this long is treated as a protected "long" sound (the
-        // intro chime is ~6 s; UI clicks are well under 500 ms), so a stray UI
-        // sound firing during it neither cuts it short nor queues audibly behind.
+        // intro chime is ~6 s; UI clicks are well under 500 ms): a stray UI sound
+        // firing during it never cuts it short — instead the stray is queued
+        // behind it and plays once it finishes, so no feedback is lost.
         private const int LongSoundMs = 400;
 
         // Multi-slot cache of decoded PCM, keyed by the trailer's last byte.
@@ -222,22 +223,31 @@ namespace SoftSled.Components.AudioVisual {
                         double headRemainingMs = _headStartTicks == 0 ? 0
                             : _headDurationMs - (now - _headStartTicks) / (double)TimeSpan.TicksPerMillisecond;
                         if (_headDurationMs >= LongSoundMs && headRemainingMs > MaxQueuedMs) {
-                            // A long sound is still playing — protect it: don't
-                            // cut it, and don't queue this stray sound audibly
-                            // behind it. Drop the incoming sound. (This is the
-                            // intro-chime case: WMC fires focus/transition sounds
-                            // during it that used to clear the chime.)
-                            Trace($"slot=0x{slot:X2} {action} dropped — long sound playing "
-                                  + $"({(long)headRemainingMs}ms of {(long)_headDurationMs}ms left)");
-                            return;
+                            // A long sound is still playing — protect it: never cut
+                            // it short. Instead of dropping the incoming stray, we
+                            // now QUEUE it (fall through to AddSamples) so it plays
+                            // once the long sound finishes and no UI feedback is
+                            // lost. Head tracking is deliberately left pointing at
+                            // the long sound — the strays we append are not the
+                            // head, the long sound still is; that keeps this branch
+                            // firing (and queuing) for every stray until the long
+                            // sound completes. (Intro-chime case: WMC's focus/
+                            // transition sounds now trail the chime instead of
+                            // vanishing.) The 8 s BufferDuration +
+                            // DiscardOnBufferOverflow cap the queue if a burst
+                            // outruns the long sound.
+                            Trace($"slot=0x{slot:X2} {action} QUEUED behind long sound "
+                                  + $"({(long)headRemainingMs}ms of {(long)_headDurationMs}ms left, "
+                                  + $"buffered {_buffer.BufferedBytes}B)");
+                        } else {
+                            // Short-click backlog: drop it so the newest sound plays
+                            // now instead of stacking (the "clicks queue up when I
+                            // scroll fast" symptom), and this sound becomes the head.
+                            Trace($"dropping {_buffer.BufferedBytes}B click backlog "
+                                  + $"({(long)bufferedMs}ms > {MaxQueuedMs}ms) before slot=0x{slot:X2} {action}");
+                            _buffer.ClearBuffer();
+                            _headStartTicks = now; _headDurationMs = incomingMs;
                         }
-                        // Short-click backlog: drop it so the newest sound plays
-                        // now instead of stacking (the "clicks queue up when I
-                        // scroll fast" symptom), and this sound becomes the head.
-                        Trace($"dropping {_buffer.BufferedBytes}B click backlog "
-                              + $"({(long)bufferedMs}ms > {MaxQueuedMs}ms) before slot=0x{slot:X2} {action}");
-                        _buffer.ClearBuffer();
-                        _headStartTicks = now; _headDurationMs = incomingMs;
                     } else if (bufferedMs < 10) {
                         // Idle buffer — this sound starts playing now and becomes
                         // the head (records duration for the long-sound check).
