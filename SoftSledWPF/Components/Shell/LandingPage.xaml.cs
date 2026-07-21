@@ -32,6 +32,12 @@ namespace SoftSledWPF.Components.Shell {
                 ? $"Paired with {config.RdpLoginHost}"
                 : "Not paired — choose Start Extender to begin";
 
+            // With tray mode on, this item folds the window to the tray rather
+            // than exiting (the tray's Exit item is the real quit), so label it
+            // honestly. Re-read here — Loaded fires on every re-entry — so
+            // toggling the setting in Settings updates the label on return.
+            ItemQuit.Content = config.MinimizeToTray ? "Close to tray" : "Quit";
+
             // Ensure the menu has keyboard focus when the page appears so
             // arrow keys work without the user having to click first.
             MenuListBox.Focus();

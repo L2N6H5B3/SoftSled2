@@ -51,11 +51,40 @@ namespace SoftSledWPF {
         // against re-entrancy from the SizeChanged it triggers.
         private bool _applyingAspect;
 
+        // ---- System-tray / resident-idle state ------------------------
+        // Tray icon (created lazily on first hide-to-tray). While hidden the
+        // process stays resident so the remote's Green button — delivered via
+        // Raw Input INPUTSINK on the still-live HWND — can wake it.
+        private TrayIconController _tray;
+        // True while hidden in the tray (no window, no RDP session).
+        private bool _inTray;
+        // Set by the tray "Exit" item so OnClosing performs a genuine shutdown
+        // instead of hiding to the tray. (The landing "Quit" deliberately does
+        // NOT set this, so it folds to the tray when tray mode is enabled.)
+        private bool _reallyExit;
+        // True when launched with --tray (boot-to-tray). Forces tray behaviour
+        // even before config is consulted.
+        private bool _launchedToTray;
+
         public ShellWindow() {
             InitializeComponent();
+
+            // Boot-to-tray: start minimized + off the taskbar so the StartupUri
+            // Show() realises the HWND (so Loaded runs and Raw Input registers)
+            // without a visible window flash; Loaded then hides it to the tray.
+            if (App.StartHiddenToTray) {
+                this.WindowState   = WindowState.Minimized;
+                this.ShowInTaskbar = false;
+            }
+
             this.Loaded += ShellWindow_Loaded;
             this.PreviewKeyDown += ShellWindow_PreviewKeyDown;
             this.PreviewKeyUp += ShellWindow_PreviewKeyUp;
+            this.StateChanged += ShellWindow_StateChanged;
+
+            // A second launch (e.g. double-click while idling in the tray) asks
+            // the running instance to surface.
+            App.ActivateRequested += ShowFromTray;
         }
 
         private void ShellWindow_Loaded(object sender, RoutedEventArgs e) {
@@ -63,6 +92,16 @@ namespace SoftSledWPF {
             // constrained to the selected aspect ratio. Done once, here,
             // because the HWND only exists after the window is sourced.
             InstallSizingHook();
+
+            // Boot-to-tray: the HWND now exists (Raw Input is registered above),
+            // so hide straight to the tray, idle. Skip fullscreen/landing — no
+            // window is shown until the Green button or the tray menu wakes us.
+            if (App.StartHiddenToTray) {
+                _launchedToTray = true;
+                _logger?.LogInfo("[tray] launched with --tray → starting hidden in the tray");
+                HideToTray();
+                return;
+            }
 
             // Apply the persisted window mode preference. Doing this in
             // Loaded (after the window is on screen) avoids the flicker
@@ -446,7 +485,99 @@ namespace SoftSledWPF {
         }
 
         private void Landing_QuitRequested(object sender, EventArgs e) {
+            // With tray mode on, "Quit" folds to the tray like the window's
+            // close / minimize buttons (OnClosing does the hide); the tray's
+            // Exit item remains the genuine shutdown. With tray mode off there's
+            // nowhere to hide, so OnClosing lets this through as a real exit.
             Close();
+        }
+
+        // ---- System-tray lifecycle ------------------------------------
+
+        /// <summary>Whether close/minimize should hide to the tray. True when the
+        /// config toggle is on, or we were launched straight into the tray.</summary>
+        private bool TrayModeEnabled {
+            get {
+                if (_launchedToTray) return true;
+                try { return SoftSledConfigManager.ReadConfig().MinimizeToTray; }
+                catch { return false; }
+            }
+        }
+
+        private void EnsureTray() {
+            if (_tray == null) {
+                _tray = new TrayIconController(_logger);
+                _tray.OpenRequested += (s, e) => ShowFromTray();
+                _tray.ExitRequested += (s, e) => { _reallyExit = true; Close(); };
+            }
+            _tray.Show();
+        }
+
+        /// <summary>Hide the window to the tray, idle. Always drops a live RDP
+        /// session first — SoftSled must not stay connected while tray-resident.
+        /// Non-session pages (landing) are kept so a plain restore is instant.
+        /// The HWND is only hidden (never closed) so Raw Input keeps delivering
+        /// the Green button.</summary>
+        private void HideToTray() {
+            EnsureTray();
+            if (CurrentPage is ExtenderSessionControl) {
+                PopPage();   // DetachPageEvents -> session.Stop() tears down RDP
+            }
+            _inTray = true;
+            this.Hide();
+            this.ShowInTaskbar = false;
+            _logger?.LogInfo("[tray] hidden to tray (idle, no session)");
+        }
+
+        /// <summary>Bring the window back from the tray and re-apply presentation.
+        /// Does not choose a page — callers decide (menu vs straight-to-session).</summary>
+        private void RestoreWindowFromTray() {
+            _inTray = false;
+            this.Show();
+            this.ShowInTaskbar = true;
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            try {
+                var cfg = SoftSledConfigManager.ReadConfig();
+                RefreshAspectLockFromConfig(cfg);
+                ApplyFullScreen(cfg.RunFullScreen);
+                ApplyAspectRatioToCurrentWindow();
+            } catch { }
+            _tray?.Hide();   // icon only present while idle-hidden
+            Activate();
+            _logger?.LogInfo("[tray] restored from tray");
+        }
+
+        /// <summary>Tray "Open" / double-click / second-instance activation: show
+        /// the window and land on the main menu.</summary>
+        private void ShowFromTray() {
+            RestoreWindowFromTray();
+            if (CurrentPage == null) ShowLanding();
+            Focus();
+        }
+
+        private void ShellWindow_StateChanged(object sender, EventArgs e) {
+            // User pressed minimize: fold to the tray instead (when enabled).
+            if (WindowState == WindowState.Minimized && !_inTray && TrayModeEnabled) {
+                HideToTray();
+            }
+        }
+
+        protected override void OnClosing(System.ComponentModel.CancelEventArgs e) {
+            // In tray mode, closing the window hides it instead of quitting —
+            // unless a genuine exit was requested (the tray's Exit item).
+            if (!_reallyExit && TrayModeEnabled) {
+                e.Cancel = true;
+                HideToTray();
+                return;
+            }
+            base.OnClosing(e);
+        }
+
+        protected override void OnClosed(EventArgs e) {
+            App.ActivateRequested -= ShowFromTray;
+            try { _tray?.Dispose(); } catch { }
+            _tray = null;
+            base.OnClosed(e);
         }
 
         /// <summary>
@@ -475,6 +606,13 @@ namespace SoftSledWPF {
                 // honour CloseOnWmcClose here without quitting on user
                 // back-navigation.
                 var current = SoftSledConfigManager.ReadConfig();
+                // Tray mode: return to the tray idle (drops the session, holds no
+                // RDP). This supersedes CloseOnWmcClose — instead of quitting we
+                // simply fold back to the tray, ready for the next Green press.
+                if (current.MinimizeToTray || _launchedToTray) {
+                    HideToTray();
+                    return;
+                }
                 if (current.CloseOnWmcClose) {
                     Close();
                     return;
@@ -548,8 +686,10 @@ namespace SoftSledWPF {
                 } else {
                     _logger?.LogInfo("[mcx-remote] Green button while idle → starting extender session");
                     try {
-                        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
-                        Activate();
+                        // Surface the window (from the tray if hidden) and go
+                        // straight into the session — the connecting overlay,
+                        // never the main menu.
+                        RestoreWindowFromTray();
                     } catch { }
                     StartExtenderSession();
                 }

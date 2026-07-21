@@ -80,7 +80,7 @@ namespace SoftSled.Components.Input {
             // Client-side session control. Default = the ESC key, which is what
             // used to hard-quit the session — now it's just this rebindable
             // command, so ESC can be freed up for anything else.
-            Local("ExitSession", "Exit Session (to menu)", RemoteLocalAction.ExitSession, Key.Escape),
+            Local("ExitSession", "Exit Session", RemoteLocalAction.ExitSession, Key.Escape),
             // --- Transport (Consumer page, report 0x02) ---
             Cmd("Play",       "Play",            9,  REPORT_CONSUMER, 0x00B0),
             Cmd("Pause",      "Pause",           8,  REPORT_CONSUMER, 0x00B1),

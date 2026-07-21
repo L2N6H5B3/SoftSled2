@@ -12,11 +12,23 @@
     <SolidColorBrush x:Key="WmcDimOverlayBrush"  Color="#80000000"/>
     <SolidColorBrush x:Key="WmcSelectionBorderBrush" Color="#A0FFFFFF"/>
 
+    <!-- The signature WMC "glass" selection fill: a bright specular highlight
+         across the top edge, a quick falloff into a translucent glass body, and
+         a soft lift again at the bottom. Reads as a glossy lozenge over the blue
+         background, matching the real Media Center selected-row look. -->
     <LinearGradientBrush x:Key="WmcSelectionFillBrush" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#60FFFFFF" Offset="0"/>
-        <GradientStop Color="#15FFFFFF" Offset="0.5"/>
-        <GradientStop Color="#28FFFFFF" Offset="1"/>
+        <GradientStop Color="#C8FFFFFF" Offset="0.0"/>
+        <GradientStop Color="#5AFFFFFF" Offset="0.08"/>
+        <GradientStop Color="#26FFFFFF" Offset="0.48"/>
+        <GradientStop Color="#18FFFFFF" Offset="0.52"/>
+        <GradientStop Color="#33FFFFFF" Offset="0.92"/>
+        <GradientStop Color="#4DFFFFFF" Offset="1.0"/>
     </LinearGradientBrush>
+
+    <!-- Soft white halo applied to the selected menu bar / focused action so it
+         glows off the background the way Media Center's selection does. -->
+    <DropShadowEffect x:Key="WmcSelectionGlow"
+                      Color="#B0FFFFFF" BlurRadius="18" ShadowDepth="0" Opacity="0.6"/>
 
     <!-- Title block (e.g. 'settings', 'general'). -->
     <Style x:Key="WmcTitleStyle" TargetType="TextBlock">
@@ -40,13 +52,37 @@
         <Setter Property="TextWrapping" Value="Wrap"/>
     </Style>
 
+    <!-- Uppercase page title shown next to the 'settings' watermark, mirroring
+         Media Center's sub-page headings (e.g. RECORDING DEFAULTS). Text is
+         upper-cased by the caller. Light weight, roomy tracking via Segoe UI
+         Light at a large size. -->
+    <Style x:Key="WmcPageTitleStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource WmcTextBrush}"/>
+        <Setter Property="FontFamily" Value="Segoe UI Light"/>
+        <Setter Property="FontSize"   Value="34"/>
+    </Style>
+
+    <!-- Uppercase section header inside a sub-page (e.g. GENERAL RECORDING
+         DEFAULTS). Slightly heavier + brighter than body text, with generous
+         top spacing so groups read as distinct blocks. -->
+    <Style x:Key="WmcSectionHeaderStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="#E6FFFFFF"/>
+        <Setter Property="FontFamily" Value="Segoe UI"/>
+        <Setter Property="FontSize"   Value="18"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Margin"     Value="0,26,0,12"/>
+    </Style>
+
     <!-- ListBox container — transparent so background bleeds through. -->
     <Style x:Key="WmcListBoxStyle" TargetType="ListBox">
         <Setter Property="Background"      Value="Transparent"/>
         <Setter Property="BorderThickness" Value="0"/>
         <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Hidden"/>
         <Setter Property="ScrollViewer.VerticalScrollBarVisibility"   Value="Hidden"/>
-        <Setter Property="KeyboardNavigation.DirectionalNavigation"   Value="Cycle"/>
+        <!-- Contained (not Cycle): arrow keys move the selection and stop at
+             the first / last item instead of wrapping around, matching the
+             no-wrap focus stepping in the config sub-views. -->
+        <Setter Property="KeyboardNavigation.DirectionalNavigation"   Value="Contained"/>
     </Style>
 
     <!-- Generic WMC list-item: rounded outline, gradient on focus/select.
@@ -81,11 +117,21 @@
                         <!-- IsSelected drives the WMC focus look. Keep
                              IsMouseOver as a softer hover so mouse users
                              aren't left in the dark either. -->
-                        <Trigger Property="IsSelected" Value="True">
+                        <!-- Show the selection look only while the list itself
+                             is the active focus (Selector.IsSelectionActive).
+                             When focus moves out — e.g. Left over to the Back
+                             button on the config overview — the highlight lets
+                             go instead of lingering as a second highlight. -->
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="IsSelected" Value="True"/>
+                                <Condition Property="Selector.IsSelectionActive" Value="True"/>
+                            </MultiTrigger.Conditions>
                             <Setter Property="Foreground" Value="White"/>
                             <Setter TargetName="ItemBorder" Property="BorderBrush" Value="{StaticResource WmcSelectionBorderBrush}"/>
                             <Setter TargetName="ItemBorder" Property="Background"  Value="{StaticResource WmcSelectionFillBrush}"/>
-                        </Trigger>
+                            <Setter TargetName="ItemBorder" Property="Effect"      Value="{StaticResource WmcSelectionGlow}"/>
+                        </MultiTrigger>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter Property="Foreground" Value="White"/>
                             <Setter TargetName="ItemBorder" Property="BorderBrush" Value="#40FFFFFF"/>
@@ -124,6 +170,7 @@
                         <Trigger Property="IsFocused" Value="True">
                             <Setter TargetName="BtnBorder" Property="BorderBrush" Value="{StaticResource WmcSelectionBorderBrush}"/>
                             <Setter TargetName="BtnBorder" Property="Background"  Value="{StaticResource WmcSelectionFillBrush}"/>
+                            <Setter TargetName="BtnBorder" Property="Effect"      Value="{StaticResource WmcSelectionGlow}"/>
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="BtnBorder" Property="BorderBrush" Value="#C0FFFFFF"/>

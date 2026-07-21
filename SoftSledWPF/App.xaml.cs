@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
@@ -31,6 +32,29 @@ namespace SoftSledWPF {
         //  that).
         // ===================================================================
         public static FileLogger AppLog { get; private set; }
+
+        // ===================================================================
+        //  Single-instance + tray launch
+        //  ------------------------------------------------------------------
+        //  Boot auto-start (and a curious double-click) can try to launch a
+        //  second SoftSled while one already idles in the tray. A named mutex
+        //  makes the first instance the owner; later launches signal it (via a
+        //  named event) to come to the foreground and then exit. StartHiddenToTray
+        //  carries the "--tray" launch flag through to ShellWindow so it realises
+        //  its HWND (for Raw Input) but starts hidden.
+        // ===================================================================
+        private const string SingleInstanceMutexName = "SoftSled.SingleInstance";
+        private const string ActivateEventName       = "SoftSled.Activate";
+        private static Mutex _singleInstanceMutex;
+        private static EventWaitHandle _activateEvent;
+
+        /// <summary>True when launched with <c>--tray</c>: start hidden in the
+        /// system tray rather than showing the shell window.</summary>
+        public static bool StartHiddenToTray { get; private set; }
+
+        /// <summary>Raised on the UI thread when a second launch asks the running
+        /// instance to surface. ShellWindow subscribes to un-hide from the tray.</summary>
+        public static event Action ActivateRequested;
 
         // We ship the FreeRDP-derived native DLLs (softsled-rdp.dll, freerdp3.dll,
         // winpr3.dll, freerdp-client3.dll, libcrypto/libssl, zd) under
@@ -105,6 +129,17 @@ namespace SoftSledWPF {
             TryInitAppLog();
             SubscribeGlobalExceptionHandlers();
 
+            // Single-instance gate. If SoftSled is already running (e.g. idling
+            // in the tray after a boot auto-start), signal it to surface and
+            // exit this launch instead of starting a second copy.
+            StartHiddenToTray = HasTrayArg(e.Args);
+            if (!AcquireSingleInstance()) {
+                try { AppLog?.LogInfo("[app] another instance is running — signalling it and exiting"); } catch { }
+                SignalExistingInstance();
+                Shutdown();
+                return;   // do NOT call base.OnStartup — no window for this instance
+            }
+
             // True Windows version — Environment.OSVersion is shimmed back
             // to 6.2 (Win8) on Win 10/11 unless the manifest declares
             // supportedOS GUIDs. RtlGetVersion bypasses the shim.
@@ -144,6 +179,68 @@ namespace SoftSledWPF {
             try { AppLog?.LogInfo("[app] OnStartup completed — entering main message loop"); } catch { }
 
             base.OnStartup(e);
+        }
+
+        private static bool HasTrayArg(string[] args) {
+            if (args == null) return false;
+            foreach (var a in args) {
+                if (string.Equals(a, SoftSled.Components.Utility.StartupRegistration.TrayArg,
+                                   StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(a, "/tray", StringComparison.OrdinalIgnoreCase)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>Try to become the single running instance. Returns true when
+        /// this process is the owner; false when one is already running.</summary>
+        private bool AcquireSingleInstance() {
+            try {
+                _singleInstanceMutex = new Mutex(initiallyOwned: true, name: SingleInstanceMutexName,
+                                                 createdNew: out bool createdNew);
+                if (!createdNew) return false;
+
+                // Owner: create the activation event + a background listener that
+                // marshals "please surface" requests onto the UI thread.
+                _activateEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ActivateEventName);
+                var t = new Thread(ActivateListenerLoop) {
+                    IsBackground = true,
+                    Name = "SoftSled-Activate",
+                };
+                t.Start();
+                return true;
+            } catch (Exception ex) {
+                // If the mutex machinery fails, fall back to running normally
+                // (better a possible second instance than no app at all).
+                try { AppLog?.LogError("[app] AcquireSingleInstance threw: " + ex.Message); } catch { }
+                return true;
+            }
+        }
+
+        /// <summary>Signal an already-running instance to come to the foreground.</summary>
+        private static void SignalExistingInstance() {
+            try {
+                if (EventWaitHandle.TryOpenExisting(ActivateEventName, out EventWaitHandle existing)) {
+                    existing.Set();
+                    existing.Dispose();
+                }
+            } catch { /* best-effort */ }
+        }
+
+        private static void ActivateListenerLoop() {
+            var evt = _activateEvent;
+            if (evt == null) return;
+            try {
+                while (true) {
+                    evt.WaitOne();
+                    Current?.Dispatcher.BeginInvoke(new Action(() => {
+                        try { ActivateRequested?.Invoke(); } catch { }
+                    }));
+                }
+            } catch {
+                // Event disposed at shutdown — exit the loop quietly.
+            }
         }
 
         private static void ApplySetDllDirectory(string nativeDir) {
@@ -471,6 +568,15 @@ namespace SoftSledWPF {
             // Let the normal screen-saver / sleep idle timers resume now that
             // we're shutting down.
             try { SoftSled.Components.Utility.DisplayKeepAwake.Release(); } catch { }
+            // Release the single-instance handles so a fresh launch can take over.
+            try { _activateEvent?.Dispose(); _activateEvent = null; } catch { }
+            try {
+                if (_singleInstanceMutex != null) {
+                    try { _singleInstanceMutex.ReleaseMutex(); } catch { }
+                    _singleInstanceMutex.Dispose();
+                    _singleInstanceMutex = null;
+                }
+            } catch { }
             try { AppLog?.Dispose(); } catch { }
             AppLog = null;
             base.OnExit(e);

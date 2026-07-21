@@ -112,6 +112,18 @@ namespace SoftSledWPF.Components.Shell {
         }
 
         private void ConfigPage_PreviewKeyDown(object sender, KeyEventArgs e) {
+            // Arrow keys: step focus control-by-control through the current
+            // sub-view instead of letting the ScrollViewer creep-scroll a few
+            // pixels per press. WPF directional navigation lands focus on the
+            // next control and auto-scrolls it into view, so one press = one
+            // highlighted item with the scroll following naturally. The root
+            // category menu and resolution picker are ListBoxes that do their
+            // own arrow-key selection, so TryDirectionalMove leaves them alone.
+            if (e.Key == Key.Up || e.Key == Key.Down ||
+                e.Key == Key.Left || e.Key == Key.Right) {
+                if (TryDirectionalMove(e.Key)) e.Handled = true;
+                return;
+            }
             if (e.Key != Key.Enter) return;
             if (Keyboard.FocusedElement is CheckBox cb) {
                 cb.IsChecked = !(cb.IsChecked == true);
@@ -125,6 +137,215 @@ namespace SoftSledWPF.Components.Shell {
                 btn.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, btn));
                 e.Handled = true;
             }
+        }
+
+        /// <summary>
+        /// Step keyboard focus one control in the pressed direction within a
+        /// scrollable sub-view, bringing the target into view. Returns true
+        /// when we've taken ownership of the key (so the caller marks it
+        /// handled and the ScrollViewer never creep-scrolls). Returns false —
+        /// leaving default behaviour intact — when focus is inside a Selector
+        /// (root menu / resolution list, which navigate themselves) or isn't
+        /// inside a ScrollViewer at all (Back column, modal dialogs).
+        ///
+        /// Up/Down use an explicit geometry search over the list's focusable
+        /// controls (nearest control on a different row) rather than WPF's
+        /// MoveFocus, whose wrap/escape behaviour depends on container
+        /// navigation modes — it was variously getting stuck on the +/- stepper
+        /// rows or cycling from the bottom back to the top. This is bounded to
+        /// the current list: it stops cleanly at the ends and never escapes.
+        /// Left/Right stay on geometric MoveFocus for intra-row movement (the
+        /// stepper buttons and the Remote page's Learn/Clear/Default rows),
+        /// bounded so they can't jump out of the list either.
+        /// </summary>
+        private bool TryDirectionalMove(Key key) {
+            var focused = Keyboard.FocusedElement as DependencyObject;
+            if (focused == null) return false;
+
+            // ListBox et al. move their own selection with Up/Down, so we
+            // leave those alone. The one exception is Left from the root
+            // category menu: its ListBox is DirectionalNavigation=Contained,
+            // which traps focus, so cross to the Back button ourselves —
+            // matching the sub-views. (Right back into the menu uses default
+            // nav, since Back sits outside the ListBox.)
+            var selector = FindAncestor<System.Windows.Controls.Primitives.Selector>(focused);
+            if (selector != null) {
+                if (key == Key.Left && ReferenceEquals(selector, RootMenu)) {
+                    BtnRootBack.Focus();
+                    return true;
+                }
+                return false;
+            }
+
+            // Only take over inside the scrollable content of a sub-view.
+            var scroller = FindAncestor<ScrollViewer>(focused);
+            if (scroller == null) return false;
+            if (!(focused is FrameworkElement fe)) return false;
+
+            if (key == Key.Up || key == Key.Down) {
+                bool down = key == Key.Down;
+                FrameworkElement next = FindVerticalNeighbor(scroller, fe, down);
+                if (next != null) {
+                    next.Focus();
+                    // When landing on the terminal control in this direction,
+                    // scroll fully to that end so the non-focusable trimmings
+                    // also show — the section header above the first item, or
+                    // the explainer text below the last one — which a plain
+                    // BringIntoView on the control itself leaves clipped.
+                    if (FindVerticalNeighbor(scroller, next, down) == null) {
+                        if (down) scroller.ScrollToBottom(); else scroller.ScrollToTop();
+                    } else {
+                        next.BringIntoView();
+                    }
+                }
+                // Swallow either way so the ScrollViewer doesn't creep-scroll
+                // when we're already at the top / bottom of the list.
+                return true;
+            }
+
+            // Left/Right: step within the current row when there's another
+            // control that way (the +/- steppers, the Remote page's
+            // Learn/Clear/Default). From the row's left edge, Left crosses out
+            // to the Back / action column so the remote can always reach Back
+            // from anywhere in the list; Right at the right edge does nothing.
+            bool right = key == Key.Right;
+            FrameworkElement sib = FindHorizontalNeighbor(scroller, fe, right);
+            if (sib != null) {
+                sib.Focus();
+                sib.BringIntoView();
+            } else if (!right) {
+                FrameworkElement back = FindActionColumnButton(scroller);
+                back?.Focus();
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Nearest focusable control on the SAME row as <paramref
+        /// name="current"/>, in the requested horizontal direction, within
+        /// <paramref name="scroller"/>. Null when the row has no further control
+        /// that way. Used to step across the +/- steppers and Remote-page rows.
+        /// </summary>
+        private static FrameworkElement FindHorizontalNeighbor(
+            ScrollViewer scroller, FrameworkElement current, bool right) {
+            var candidates = new System.Collections.Generic.List<FrameworkElement>();
+            CollectFocusables(scroller, candidates);
+
+            Rect cur = current.TransformToAncestor(scroller)
+                              .TransformBounds(new Rect(current.RenderSize));
+            double curMid = cur.Top + cur.Height / 2;
+
+            FrameworkElement best = null;
+            double bestDx = 0;
+            foreach (FrameworkElement c in candidates) {
+                if (ReferenceEquals(c, current)) continue;
+                Rect r = c.TransformToAncestor(scroller)
+                          .TransformBounds(new Rect(c.RenderSize));
+                double mid = r.Top + r.Height / 2;
+                if (System.Math.Abs(mid - curMid) > 8) continue;             // not same row
+                if (right ? r.Left <= cur.Left + 2 : r.Left >= cur.Left - 2) // wrong side
+                    continue;
+                double dx = System.Math.Abs(r.Left - cur.Left);
+                if (best == null || dx < bestDx) { best = c; bestDx = dx; }
+            }
+            return best;
+        }
+
+        /// <summary>The current sub-view's Back button (the first focusable in
+        /// the left action column, which sits outside the content scroller).
+        /// Null if the view has no such column.</summary>
+        private FrameworkElement FindActionColumnButton(ScrollViewer scroller) {
+            FrameworkElement root = CurrentViewRoot();
+            if (root == null) return null;
+            var all = new System.Collections.Generic.List<FrameworkElement>();
+            CollectFocusables(root, all);
+            // Left action column comes first in the visual tree, so the first
+            // focusable that isn't inside the content scroller is Back.
+            foreach (FrameworkElement c in all) {
+                if (FindAncestor<ScrollViewer>(c) != scroller) return c;
+            }
+            return null;
+        }
+
+        /// <summary>Root grid of the currently visible sub-view (for locating
+        /// its Back column). Null for the root menu / no sub-view.</summary>
+        private FrameworkElement CurrentViewRoot() {
+            switch (_currentView) {
+                case View.General:   return GeneralView;
+                case View.Pairing:   return PairingView;
+                case View.Video:     return VideoView;
+                case View.Audio:     return AudioView;
+                case View.Ui:        return UiView;
+                case View.Remote:    return RemoteView;
+                case View.Debugging: return DebuggingView;
+                default:             return null;
+            }
+        }
+
+        /// <summary>
+        /// Nearest focusable control on a different row than <paramref
+        /// name="current"/>, in the requested vertical direction, within
+        /// <paramref name="scroller"/>. Picks the closest row, then the control
+        /// on that row horizontally nearest the current one. Null when there is
+        /// no further row that way (top / bottom of the list).
+        /// </summary>
+        private static FrameworkElement FindVerticalNeighbor(
+            ScrollViewer scroller, FrameworkElement current, bool down) {
+            var candidates = new System.Collections.Generic.List<FrameworkElement>();
+            CollectFocusables(scroller, candidates);
+
+            Rect cur = current.TransformToAncestor(scroller)
+                              .TransformBounds(new Rect(current.RenderSize));
+            double curMid = cur.Top + cur.Height / 2;
+
+            FrameworkElement best = null;
+            double bestRow = 0, bestDx = 0;
+            foreach (FrameworkElement c in candidates) {
+                if (ReferenceEquals(c, current)) continue;
+                Rect r = c.TransformToAncestor(scroller)
+                          .TransformBounds(new Rect(c.RenderSize));
+                double mid = r.Top + r.Height / 2;
+                // Require a real row change (row heights differ, so use a few
+                // px of slack rather than exact equality).
+                if (down ? mid <= curMid + 2 : mid >= curMid - 2) continue;
+                double rowDist = System.Math.Abs(mid - curMid);
+                double dx = System.Math.Abs(r.Left - cur.Left);
+                if (best == null
+                    || rowDist < bestRow - 0.5
+                    || (System.Math.Abs(rowDist - bestRow) <= 0.5 && dx < bestDx)) {
+                    best = c; bestRow = rowDist; bestDx = dx;
+                }
+            }
+            return best;
+        }
+
+        /// <summary>Collect the tab-stoppable, enabled, visible controls under
+        /// <paramref name="root"/> (not descending into a control's own template
+        /// once found).</summary>
+        private static void CollectFocusables(
+            DependencyObject root, System.Collections.Generic.List<FrameworkElement> outList) {
+            int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < n; i++) {
+                DependencyObject child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+                if (child is Control ctl && ctl.Focusable && ctl.IsEnabled
+                    && ctl.IsVisible && KeyboardNavigation.GetIsTabStop(ctl)) {
+                    outList.Add(ctl);
+                    continue;   // don't recurse into the control's own parts
+                }
+                CollectFocusables(child, outList);
+            }
+        }
+
+        /// <summary>Walk up the visual (then logical) tree for the nearest
+        /// ancestor of type <typeparamref name="T"/>.</summary>
+        private static T FindAncestor<T>(DependencyObject start) where T : DependencyObject {
+            DependencyObject d = start;
+            while (d != null) {
+                if (d is T match) return match;
+                d = System.Windows.Media.VisualTreeHelper.GetParent(d)
+                    ?? LogicalTreeHelper.GetParent(d);
+            }
+            return null;
         }
 
         private void ConfigPage_Loaded(object sender, RoutedEventArgs e) {
@@ -141,6 +362,9 @@ namespace SoftSledWPF.Components.Shell {
                 ChkCloseOnWmcClose.IsChecked   = _config.CloseOnWmcClose;
                 ChkKeepScreenAwake.IsChecked   = _config.KeepScreenAwake;
                 ChkMediaMode.IsChecked         = _config.MediaPlaybackModeEnabled;
+                ChkMinimizeToTray.IsChecked    = _config.MinimizeToTray;
+                ChkBootTray.IsChecked          = _config.BootStartMode == BootStartMode.Tray;
+                ChkBootUi.IsChecked            = _config.BootStartMode == BootStartMode.Ui;
                 ChkRemoteRendering.IsChecked   = _config.EnableRemoteRendering;
                 Chk2DAnimations.IsChecked      = _config.Enable2DAnimations;
                 ChkIntenseAnimations.IsChecked = _config.EnableIntenseAnimations;
@@ -194,37 +418,45 @@ namespace SoftSledWPF.Components.Shell {
             RemoteView.Visibility    = view == View.Remote    ? Visibility.Visible : Visibility.Collapsed;
             DebuggingView.Visibility = view == View.Debugging ? Visibility.Visible : Visibility.Collapsed;
 
-            BreadcrumbText.Text = view == View.Root ? "" : view.ToString().ToLowerInvariant();
-            HeaderText.Text     = view == View.Root ? "settings" : "settings";
+            // Uppercase page title shown beside the 'settings' watermark, like
+            // Media Center's sub-page headings. Blank on the root menu.
+            PageTitleText.Text = view == View.Root ? "" : view.ToString().ToUpperInvariant();
 
-            // Re-focus appropriately so the remote keeps working without a click.
-            switch (view) {
-                case View.Root:
-                    RootMenu.Focus();
-                    if (RootMenu.SelectedItem is ListBoxItem rlbi) rlbi.Focus();
-                    break;
-                case View.General:
-                    ChkAutoStart.Focus();
-                    break;
-                case View.Pairing:
-                    UnpairButton.Focus();
-                    break;
-                case View.Video:
-                    ChkRemoteRendering.Focus();
-                    break;
-                case View.Audio:
-                    BtnAudioSyncReset.Focus();
-                    break;
-                case View.Ui:
-                    ChkUiSounds.Focus();
-                    break;
-                case View.Remote:
-                    BtnRemoteReset.Focus();
-                    break;
-                case View.Debugging:
-                    ChkLogDevCaps.Focus();
-                    break;
-            }
+            // Re-focus appropriately so the remote keeps working without a
+            // click — and so the landing item shows its highlight on entry.
+            // Deferred to DispatcherPriority.Input: we've just flipped the
+            // target sub-view from Collapsed to Visible, and Focus() before
+            // that layout pass runs silently fails (the control isn't hit-
+            // visible yet), which left the first item un-highlighted until the
+            // user pressed a key. Letting layout settle first fixes that. (Same
+            // reason the resolution picker defers its focus.)
+            Dispatcher.BeginInvoke(new Action(() => {
+                switch (view) {
+                    case View.Root:
+                        RootMenu.Focus();
+                        if (RootMenu.SelectedItem is ListBoxItem rlbi) rlbi.Focus();
+                        break;
+                    case View.General:   ChkFullScreen.Focus();     break;
+                    case View.Pairing:   UnpairButton.Focus();      break;
+                    case View.Video:     ChkHdContent.Focus();      break;
+                    case View.Audio:     BtnAudioSyncReset.Focus();  break;
+                    case View.Ui:        ChkUiSounds.Focus();        break;
+                    case View.Remote:    BtnRemoteReset.Focus();     break;
+                    case View.Debugging: ChkLogDevCaps.Focus();     break;
+                }
+            }), System.Windows.Threading.DispatcherPriority.Input);
+        }
+
+        /// <summary>Left-column "Back" button on every sub-view — returns to the
+        /// category list (same as the remote's Back/Escape at sub-view level).</summary>
+        private void BtnBack_Click(object sender, RoutedEventArgs e) {
+            ShowView(View.Root);
+        }
+
+        /// <summary>Left-column "Back" button on the root category list — leaves
+        /// settings entirely and returns to the landing page.</summary>
+        private void BtnRootBack_Click(object sender, RoutedEventArgs e) {
+            CloseRequested?.Invoke(this, EventArgs.Empty);
         }
 
         private void RootMenu_KeyDown(object sender, KeyEventArgs e) {
@@ -261,6 +493,24 @@ namespace SoftSledWPF.Components.Shell {
 
             bool prevFullScreen = _config.RunFullScreen;
 
+            // Tray + boot options: keep the two boot choices mutually exclusive
+            // and make "boot to tray" imply tray mode. Programmatic IsChecked
+            // changes here don't re-fire Click, so this can't recurse.
+            if (sender == ChkBootTray && ChkBootTray.IsChecked == true) {
+                ChkBootUi.IsChecked = false;
+                ChkMinimizeToTray.IsChecked = true;      // boot-to-tray needs tray mode
+            } else if (sender == ChkBootUi && ChkBootUi.IsChecked == true) {
+                ChkBootTray.IsChecked = false;
+            } else if (sender == ChkMinimizeToTray && ChkMinimizeToTray.IsChecked != true) {
+                ChkBootTray.IsChecked = false;           // tray off can't coexist with boot-to-tray
+            }
+
+            _config.MinimizeToTray = ChkMinimizeToTray.IsChecked == true;
+            BootStartMode bootMode = ChkBootTray.IsChecked == true ? BootStartMode.Tray
+                                   : ChkBootUi.IsChecked == true   ? BootStartMode.Ui
+                                   : BootStartMode.Off;
+            _config.BootStartMode = bootMode;
+
             _config.AutoStartWmcOnOpen      = ChkAutoStart.IsChecked == true;
             _config.RunFullScreen           = ChkFullScreen.IsChecked == true;
             _config.CloseOnWmcClose         = ChkCloseOnWmcClose.IsChecked == true;
@@ -294,6 +544,10 @@ namespace SoftSledWPF.Components.Shell {
                 MessageBox.Show("Failed to save settings: " + ex.Message);
                 return;
             }
+
+            // Apply the Windows boot auto-start choice to the HKCU Run key now,
+            // so it takes effect without a restart.
+            SoftSled.Components.Utility.StartupRegistration.Apply(bootMode);
 
             ConfigChanged?.Invoke(this, EventArgs.Empty);
             if (prevFullScreen != _config.RunFullScreen) {
@@ -619,6 +873,12 @@ namespace SoftSledWPF.Components.Shell {
             RemoteList.Children.Clear();
             _learnButtonsByKey.Clear();
 
+            // Let the per-row Grids share column widths, so the "Default" column
+            // reserves the same width in every row even when its button is
+            // hidden — otherwise a row without it would let its star column grow
+            // and shove Learn/Clear out of line with the other rows.
+            Grid.SetIsSharedSizeScope(RemoteList, true);
+
             var bodyStyle   = (Style)TryFindResource("WmcBodyStyle");
             var buttonStyle = (Style)TryFindResource("WmcButtonStyle");
             var subtleBrush = TryFindResource("WmcSubtleTextBrush") as System.Windows.Media.Brush;
@@ -628,11 +888,15 @@ namespace SoftSledWPF.Components.Shell {
                 bool isDefault = RemoteCommandCatalog.IsDefault(_config, def.Key);
 
                 var row = new Grid { Margin = new Thickness(10, 4, 0, 4) };
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(240) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(140) });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                // Shared group: this column is sized to the widest Default
+                // button across all rows and stays that width even where the
+                // button is hidden, keeping Learn/Clear aligned down the list.
+                row.ColumnDefinitions.Add(new ColumnDefinition {
+                    Width = GridLength.Auto, SharedSizeGroup = "RemoteDefaultCol" });
 
                 var name = new TextBlock {
                     Style = bodyStyle,
@@ -647,8 +911,7 @@ namespace SoftSledWPF.Components.Shell {
                     Foreground = subtleBrush,
                     VerticalAlignment = VerticalAlignment.Center,
                     TextTrimming = TextTrimming.CharacterEllipsis,
-                    Text = RemoteCommandCatalog.DescribeUsage(usage)
-                           + (usage < 0 ? "" : isDefault ? "   (default)" : "   (custom)"),
+                    Text = isDefault ? "(default)" : RemoteCommandCatalog.DescribeUsage(usage) + (usage < 0 ? "" : "   (custom)"),
                 };
                 Grid.SetColumn(bound, 1);
                 row.Children.Add(bound);
@@ -684,8 +947,11 @@ namespace SoftSledWPF.Components.Shell {
                     Tag = def.Key,
                     MinWidth = 110,
                     Margin = new Thickness(8, 0, 0, 0),
-                    // Already at its shipped default — nothing to reset.
-                    IsEnabled = !isDefault,
+                    // Already at its shipped default — nothing to reset, so hide
+                    // the button rather than showing a dead greyed-out control.
+                    // The shared-size column still reserves its width so the
+                    // other rows' buttons stay aligned.
+                    Visibility = isDefault ? Visibility.Collapsed : Visibility.Visible,
                 };
                 reset.Click += OnRemoteDefaultClick;
                 Grid.SetColumn(reset, 4);

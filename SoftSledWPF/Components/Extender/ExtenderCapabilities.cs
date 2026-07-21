@@ -66,6 +66,7 @@ namespace SoftSled.Components.Extender {
             // DVD
             Capabilities.Add(new DeviceCapability("DRC", "Is DVD burning allowed?", "DVD", false));
             Capabilities.Add(new DeviceCapability("DVD", "Is DVD playback allowed?", "DVD", true));
+
             #endregion ########################################################
 
             #region Extender ##################################################

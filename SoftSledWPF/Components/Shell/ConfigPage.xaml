@@ -7,494 +7,667 @@
              Background="Transparent"
              d:DesignHeight="720" d:DesignWidth="1280">
     <UserControl.Resources>
-        <!-- Root-menu items keep the shared WmcListItemStyle's look and
-             padding, and spend the slot freed by dropping the About page on a
-             little extra breathing room between them (margin 2 -> 3).
-             RootView's bottom margin is trimmed to suit: the list is
-             Top-aligned, so that margin is purely where clipping starts and
-             moving it changes nothing about where the items sit. Local to this
-             page so the landing page and first-run wizard, which share
-             WmcListItemStyle, are untouched. The page is inside a Viewbox over
-             a fixed 1280x720 grid, so these are exact logical pixels at any
-             window size or DPI — see the measured fit in RootView below. -->
+        <!-- Root-menu items: the shared WMC list look, bumped to a larger
+             10-foot size to match Media Center's settings menu, with a touch
+             more spacing between rows. Local to this page so the landing page
+             and wizard (which share WmcListItemStyle) are untouched. -->
         <Style x:Key="ConfigRootItemStyle"
                TargetType="ListBoxItem"
                BasedOn="{StaticResource WmcListItemStyle}">
-            <Setter Property="Margin" Value="0,3"/>
+            <Setter Property="FontSize" Value="26"/>
+            <Setter Property="Padding"  Value="22,12"/>
+            <Setter Property="Margin"   Value="0,3"/>
+        </Style>
+
+        <!-- Left-column action button, styled like Media Center's Save/Cancel:
+             plain text until focused, then a glossy glass lozenge with a soft
+             halo. Left-aligned, full width of the action column. -->
+        <Style x:Key="SideActionButtonStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="{StaticResource WmcTextBrush}"/>
+            <Setter Property="FontSize"   Value="23"/>
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="Padding"    Value="22,12"/>
+            <Setter Property="Margin"     Value="0,0,0,6"/>
+            <Setter Property="HorizontalAlignment"        Value="Stretch"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Cursor"     Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="B"
+                                Background="Transparent"
+                                BorderBrush="Transparent"
+                                BorderThickness="1"
+                                CornerRadius="6">
+                            <ContentPresenter HorizontalAlignment="Left"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsFocused" Value="True">
+                                <Setter TargetName="B" Property="Background"  Value="{StaticResource WmcSelectionFillBrush}"/>
+                                <Setter TargetName="B" Property="BorderBrush" Value="{StaticResource WmcSelectionBorderBrush}"/>
+                                <Setter TargetName="B" Property="Effect"      Value="{StaticResource WmcSelectionGlow}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="B" Property="BorderBrush" Value="#60FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="#40FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Media-Center-style value field for the +/- steppers: a glossy
+             rounded box holding the current value. -->
+        <Style x:Key="WmcValueBoxStyle" TargetType="Border">
+            <Setter Property="Background"      Value="{StaticResource WmcSelectionFillBrush}"/>
+            <Setter Property="BorderBrush"     Value="#55FFFFFF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius"    Value="4"/>
+            <Setter Property="Height"          Value="50"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="WmcValueTextStyle" TargetType="TextBlock">
+            <Setter Property="Foreground"  Value="White"/>
+            <Setter Property="FontFamily"  Value="Segoe UI"/>
+            <Setter Property="FontSize"    Value="24"/>
+            <Setter Property="TextAlignment"      Value="Center"/>
+            <Setter Property="VerticalAlignment"  Value="Center"/>
+        </Style>
+
+        <!-- ===== Themed scrollbar (page-scoped) ======================= -->
+        <!-- A minimal Media-Center-style scrollbar: no arrow buttons, a faint
+             translucent track and a rounded frosted-white thumb that brightens
+             on hover/drag. Implicit so every ScrollViewer on this page picks it
+             up; other pages are unaffected. -->
+        <Style x:Key="WmcScrollThumb" TargetType="Thumb">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border x:Name="T" CornerRadius="5" Margin="3,0"
+                                Background="#59FFFFFF" MinHeight="40"/>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="T" Property="Background" Value="#8CFFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter TargetName="T" Property="Background" Value="#B0FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="WmcScrollPageButton" TargetType="RepeatButton">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Border Background="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="{x:Type ScrollBar}">
+            <Setter Property="Width" Value="12"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ScrollBar}">
+                        <Grid Background="Transparent">
+                            <Border CornerRadius="6" Margin="3,2" Background="#12FFFFFF"/>
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Style="{StaticResource WmcScrollPageButton}"
+                                                  Command="ScrollBar.PageUpCommand"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Style="{StaticResource WmcScrollPageButton}"
+                                                  Command="ScrollBar.PageDownCommand"/>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource WmcScrollThumb}"/>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </UserControl.Resources>
+
     <Viewbox Stretch="Uniform">
         <Grid Width="1280" Height="720">
 
-            <!-- Title strip — shared across all sub-views, content set
-                 from code-behind when sub-view changes. -->
+            <!-- 'settings' watermark — shared across every view. -->
             <TextBlock x:Name="HeaderText"
                        Style="{StaticResource WmcTitleStyle}"
                        Text="settings"
-                       Margin="100,60,0,0"
+                       Margin="100,58,0,0"
                        HorizontalAlignment="Left"
                        VerticalAlignment="Top"/>
 
-            <TextBlock x:Name="BreadcrumbText"
-                       Style="{StaticResource WmcSubtitleStyle}"
-                       Foreground="{StaticResource WmcSubtleTextBrush}"
-                       Margin="100,135,0,0"
+            <!-- Uppercase page title, aligned over the content column. Set from
+                 code-behind per sub-view; empty on the root menu. -->
+            <TextBlock x:Name="PageTitleText"
+                       Style="{StaticResource WmcPageTitleStyle}"
+                       Margin="440,72,0,0"
                        HorizontalAlignment="Left"
                        VerticalAlignment="Top"/>
 
             <!-- ===== Root menu ============================================ -->
-            <!-- Bottom margin is 20 rather than the sub-views' 80 so the eight
-                 items (~490px at the roomier spacing) clear the clip boundary
-                 with ~13px to spare. Not trimmed further: the list would then
-                 run close enough to the screen edge to risk being lost to TV
-                 overscan. Top margin stays 200 so the list starts exactly
-                 where it always has, in line with every sub-view. -->
             <Grid x:Name="RootView"
-                  Margin="100,200,100,20"
+                  Margin="100,150,80,60"
                   Visibility="Visible">
-                <ListBox x:Name="RootMenu"
-                         Style="{StaticResource WmcListBoxStyle}"
-                         ItemContainerStyle="{StaticResource ConfigRootItemStyle}"
-                         ScrollViewer.VerticalScrollBarVisibility="Disabled"
-                         Width="520"
-                         HorizontalAlignment="Left"
-                         VerticalAlignment="Top"
-                         KeyDown="RootMenu_KeyDown"
-                         MouseLeftButtonUp="RootMenu_MouseLeftButtonUp">
-                    <ListBoxItem x:Name="ItemSetup"     Content="First-Time Setup" IsSelected="True"/>
-                    <ListBoxItem x:Name="ItemGeneral"   Content="General"/>
-                    <ListBoxItem x:Name="ItemPairing"   Content="Pairing"/>
-                    <ListBoxItem x:Name="ItemVideo"     Content="Video"/>
-                    <ListBoxItem x:Name="ItemAudio"     Content="Audio"/>
-                    <ListBoxItem x:Name="ItemUi"        Content="UI"/>
-                    <ListBoxItem x:Name="ItemRemote"    Content="Remote"/>
-                    <ListBoxItem x:Name="ItemDebugging" Content="Debugging"/>
-                </ListBox>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="340"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Margin="0,26,40,0" VerticalAlignment="Top">
+                        <Button x:Name="BtnRootBack"
+                                Style="{StaticResource SideActionButtonStyle}"
+                                Content="Back" Click="BtnRootBack_Click"/>
+                    </StackPanel>
+
+                    <ListBox Grid.Column="1" x:Name="RootMenu"
+                             Style="{StaticResource WmcListBoxStyle}"
+                             ItemContainerStyle="{StaticResource ConfigRootItemStyle}"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             MaxHeight="500"
+                             Width="560"
+                             HorizontalAlignment="Left"
+                             VerticalAlignment="Top"
+                             KeyDown="RootMenu_KeyDown"
+                             MouseLeftButtonUp="RootMenu_MouseLeftButtonUp">
+                        <ListBoxItem x:Name="ItemSetup"     Content="First-Time Setup" IsSelected="True"/>
+                        <ListBoxItem x:Name="ItemGeneral"   Content="General"/>
+                        <ListBoxItem x:Name="ItemPairing"   Content="Pairing"/>
+                        <ListBoxItem x:Name="ItemVideo"     Content="Video"/>
+                        <ListBoxItem x:Name="ItemAudio"     Content="Audio"/>
+                        <ListBoxItem x:Name="ItemUi"        Content="UI"/>
+                        <ListBoxItem x:Name="ItemRemote"    Content="Remote"/>
+                        <ListBoxItem x:Name="ItemDebugging" Content="Debugging"/>
+                    </ListBox>
+                </Grid>
             </Grid>
 
             <!-- ===== General sub-view ===================================== -->
             <Grid x:Name="GeneralView"
-                  Margin="100,200,100,80"
+                  Margin="100,150,80,60"
                   Visibility="Collapsed">
-                <StackPanel HorizontalAlignment="Left" Width="640">
-                    
-                    <CheckBox x:Name="ChkFullScreen"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Run full screen"
-                              Click="OnConfigChanged"/>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                              Foreground="{StaticResource WmcSubtleTextBrush}"
-                              Margin="10,16,0,0"
-                              Text="Tip: press F11 at any time to toggle full screen without changing this setting."/>
-                    <!-- No aspect-lock tickbox by request: LockWindowAspectRatio
-                         stays live in Config.xml (ShellWindow still honours it),
-                         it's just not surfaced here. -->
-                    <CheckBox x:Name="ChkAutoStart"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Auto-start the extender session on launch"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkCloseOnWmcClose"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Close SoftSled when Windows Media Center closes"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkKeepScreenAwake"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Keep screen awake while running"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkMediaMode"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Media Playback Mode remote mappings"
-                              Margin="0,16,0,0"
-                              Click="OnConfigChanged"/>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="10,4,0,0"
-                               TextWrapping="Wrap"
-                               Text="While watching full-screen video (no menu/OSD on screen), remaps Left/Right to Skip Back/Forward and OK to Play/Pause. Reverts to normal navigation the moment any WMC UI appears over the video."/>
-                    
-                </StackPanel>
-            </Grid>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="340"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
 
-            <!-- ===== Pairing sub-view ===================================== -->
-            <Grid x:Name="PairingView"
-                  Margin="100,200,100,80"
-                  Visibility="Collapsed">
-                <StackPanel HorizontalAlignment="Left" Width="640">
-                    <TextBlock x:Name="PairingStatusText"
-                               Style="{StaticResource WmcBodyStyle}"
-                               Margin="10,0,0,30"/>
-                    <Button x:Name="UnpairButton"
-                            Style="{StaticResource WmcButtonStyle}"
-                            Content="Unpair extender"
-                            HorizontalAlignment="Left"
-                            MinWidth="240"
-                            Click="UnpairButton_Click"/>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="10,30,0,0"
-                               TextWrapping="Wrap"
-                               Text="Unpairing clears the stored host credentials. You will need to run the Add Extender wizard in Windows Media Center again before you can connect."/>
-                </StackPanel>
-            </Grid>
-
-            <!-- ===== Video sub-view ======================================= -->
-            <Grid x:Name="VideoView"
-                  Margin="100,200,100,80"
-                  Visibility="Collapsed">
-                <!-- Content can overflow the ~440px sub-view height
-                     once enough toggles are added; wrap in a
-                     ScrollViewer so lower controls stay reachable.
-                     Focusable=False keeps the WMC-remote tab-stop
-                     traversal walking through the child checkboxes,
-                     and each focused control auto-scrolls into view
-                     via WPF's default BringIntoView behaviour. -->
-                <ScrollViewer VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Disabled"
-                              PanningMode="VerticalOnly"
-                              Focusable="False">
-                <StackPanel HorizontalAlignment="Left" Width="640">
-                    <CheckBox x:Name="ChkHdContent"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Enable HD Content"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkRemoteRendering"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Enable Remote Rendering"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="Chk2DAnimations"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Enable 2D animations"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkIntenseAnimations"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Enable Intense animations"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkOverscan"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Enable Overscan Margin"
-                              Click="OnConfigChanged"/>
-
-                    <!-- Resolution picker. The button shows the current
-                         selection; clicking opens the ResolutionOverlay
-                         below for picking a new one. Lives in its own
-                         labelled row so it visually groups with the
-                         tickboxes without trying to be one. -->
-                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
-                               Text="UI Resolution"
-                               Foreground="{StaticResource WmcTextBrush}"
-                               Margin="10,30,0,8"/>
-                    <Button x:Name="BtnResolution"
-                            Style="{StaticResource WmcButtonStyle}"
-                            HorizontalAlignment="Left"
-                            MinWidth="320"
-                            Margin="10,0,0,0"
-                            Content="—"
-                            Click="BtnResolution_Click"/>
-                </StackPanel>
-                </ScrollViewer>
-            </Grid>
-
-            <!-- ===== Audio sub-view ======================================= -->
-            <Grid x:Name="AudioView"
-                  Margin="100,200,100,80"
-                  Visibility="Collapsed">
-                <StackPanel HorizontalAlignment="Left" Width="640">
-                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
-                               Text="Audio sync offset"
-                               Foreground="{StaticResource WmcTextBrush}"
-                               Margin="10,0,0,8"/>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="10,0,0,16"
-                               TextWrapping="Wrap"
-                               Text="Adjust if audio appears out of sync with video — e.g. when an HDMI display adds picture-processing lag or an A/V receiver delays audio. Positive values delay audio (use when video lags); negative values delay video (use when audio lags). Applied automatically when the external-sync audio engine is enabled."/>
-                    <StackPanel Orientation="Horizontal"
-                                HorizontalAlignment="Left"
-                                Margin="10,0,0,0">
-                        <Button x:Name="BtnAudioSyncMinusBig"
-                                Style="{StaticResource WmcButtonStyle}"
-                                Content="-50ms"
-                                MinWidth="100"
-                                Click="BtnAudioSyncMinusBig_Click"/>
-                        <Button x:Name="BtnAudioSyncMinus"
-                                Style="{StaticResource WmcButtonStyle}"
-                                Content="-10ms"
-                                MinWidth="100"
-                                Click="BtnAudioSyncMinus_Click"/>
-                        <TextBlock x:Name="AudioSyncValueText"
-                                   Style="{StaticResource WmcSubtitleStyle}"
-                                   Foreground="{StaticResource WmcTextBrush}"
-                                   VerticalAlignment="Center"
-                                   Width="160"
-                                   TextAlignment="Center"
-                                   Text="0 ms"/>
-                        <Button x:Name="BtnAudioSyncPlus"
-                                Style="{StaticResource WmcButtonStyle}"
-                                Content="+10ms"
-                                MinWidth="100"
-                                Click="BtnAudioSyncPlus_Click"/>
-                        <Button x:Name="BtnAudioSyncPlusBig"
-                                Style="{StaticResource WmcButtonStyle}"
-                                Content="+50ms"
-                                MinWidth="100"
-                                Click="BtnAudioSyncPlusBig_Click"/>
+                    <StackPanel Grid.Column="0" Margin="0,26,40,0" VerticalAlignment="Top">
+                        <Button Style="{StaticResource SideActionButtonStyle}"
+                                Content="Back" Click="BtnBack_Click"/>
                     </StackPanel>
-                    <Button x:Name="BtnAudioSyncReset"
-                            Style="{StaticResource WmcButtonStyle}"
-                            Content="Reset to 0 ms"
-                            HorizontalAlignment="Left"
-                            MinWidth="240"
-                            Margin="10,16,0,0"
-                            Click="BtnAudioSyncReset_Click"/>
-                </StackPanel>
-            </Grid>
 
-            <!-- ===== UI sub-view ========================================== -->
-            <Grid x:Name="UiView"
-                  Margin="100,200,100,80"
-                  Visibility="Collapsed">
-                <StackPanel HorizontalAlignment="Left" Width="640">
-                    <CheckBox x:Name="ChkUiSounds"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Enable UI Sounds"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkPopups"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Enable Pop-ups"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkToolbar"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Enable Toolbar"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkMouseInput"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Enable mouse input"
-                              Click="OnConfigChanged"/>
-                </StackPanel>
-            </Grid>
-
-            <!-- ===== Remote sub-view ===================================== -->
-            <Grid x:Name="RemoteView"
-                  Margin="100,190,100,80"
-                  Visibility="Collapsed">
-                <Grid Width="1040" HorizontalAlignment="Left">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock Grid.Row="0"
-                               Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="10,0,0,12"
-                               TextWrapping="Wrap"
-                               Text="Choose a command and press Learn, then press the button on your remote you want to use for it. Navigation, OK and number buttons are handled directly and aren't listed here."/>
-
-                    <!-- Command rows are generated in code from the remote
-                         command catalogue and dropped into RemoteList. -->
-                    <ScrollViewer Grid.Row="1"
+                    <ScrollViewer Grid.Column="1"
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
                                   PanningMode="VerticalOnly"
                                   Focusable="False">
-                        <StackPanel x:Name="RemoteList" HorizontalAlignment="Stretch"/>
-                    </ScrollViewer>
+                        <StackPanel HorizontalAlignment="Left" Width="700">
 
-                    <Button Grid.Row="2"
-                            x:Name="BtnRemoteReset"
-                            Style="{StaticResource WmcButtonStyle}"
-                            Content="Reset all to defaults"
-                            HorizontalAlignment="Left"
-                            MinWidth="280"
-                            Margin="10,16,0,0"
-                            Click="BtnRemoteReset_Click"/>
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="DISPLAY" Margin="0,0,0,12"/>
+                            <CheckBox x:Name="ChkFullScreen"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Run full screen"
+                                      Click="OnConfigChanged"/>
+                            <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                       Foreground="{StaticResource WmcSubtleTextBrush}"
+                                       Margin="48,2,0,0" FontSize="15"
+                                       Text="Tip: press F11 at any time to toggle full screen without changing this setting."/>
+                            <CheckBox x:Name="ChkKeepScreenAwake"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Keep screen awake while running"
+                                      Click="OnConfigChanged"/>
+
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="PLAYBACK"/>
+                            <CheckBox x:Name="ChkMediaMode"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Media Playback Mode remote mappings"
+                                      Click="OnConfigChanged"/>
+                            <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                       Foreground="{StaticResource WmcSubtleTextBrush}"
+                                       Margin="48,2,0,0" FontSize="15"
+                                       Text="While watching full-screen video (no menu/OSD on screen), remaps Left/Right to Skip Back/Forward and OK to Play/Pause. Reverts to normal navigation the moment any WMC UI appears over the video."/>
+
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="STARTUP"/>
+                            <CheckBox x:Name="ChkAutoStart"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Auto-start the extender session on launch"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="ChkCloseOnWmcClose"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Close SoftSled when Windows Media Center closes"
+                                      Click="OnConfigChanged"/>
+
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="SYSTEM TRAY"/>
+                            <CheckBox x:Name="ChkMinimizeToTray"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Minimize to tray &amp; enable Green-button start"
+                                      Click="OnConfigChanged"/>
+                            <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                       Foreground="{StaticResource WmcSubtleTextBrush}"
+                                       Margin="48,2,0,0" FontSize="15"
+                                       Text="Closing or minimizing hides SoftSled to the system tray instead of quitting, so the remote's Green Start button can wake it straight into a session."/>
+                            <CheckBox x:Name="ChkBootTray"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Start in the system tray when Windows starts"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="ChkBootUi"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Open SoftSled when Windows starts"
+                                      Click="OnConfigChanged"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+
+            <!-- ===== Pairing sub-view ===================================== -->
+            <Grid x:Name="PairingView"
+                  Margin="100,150,80,60"
+                  Visibility="Collapsed">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="340"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Margin="0,26,40,0" VerticalAlignment="Top">
+                        <Button Style="{StaticResource SideActionButtonStyle}"
+                                Content="Back" Click="BtnBack_Click"/>
+                        <Button x:Name="UnpairButton"
+                                Style="{StaticResource SideActionButtonStyle}"
+                                Content="Unpair extender"
+                                Click="UnpairButton_Click"/>
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Column="1"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  PanningMode="VerticalOnly"
+                                  Focusable="False">
+                        <StackPanel HorizontalAlignment="Left" Width="700">
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="PAIRING STATUS" Margin="0,0,0,12"/>
+                            <TextBlock x:Name="PairingStatusText"
+                                       Style="{StaticResource WmcBodyStyle}"
+                                       Margin="0,0,0,20"/>
+                            <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                       Foreground="{StaticResource WmcSubtleTextBrush}"
+                                       FontSize="15"
+                                       Text="Unpairing clears the stored host credentials. You will need to run the Add Extender wizard in Windows Media Center again before you can connect."/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+
+            <!-- ===== Video sub-view ======================================= -->
+            <Grid x:Name="VideoView"
+                  Margin="100,150,80,60"
+                  Visibility="Collapsed">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="340"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Margin="0,26,40,0" VerticalAlignment="Top">
+                        <Button Style="{StaticResource SideActionButtonStyle}"
+                                Content="Back" Click="BtnBack_Click"/>
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Column="1"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  PanningMode="VerticalOnly"
+                                  Focusable="False">
+                        <StackPanel HorizontalAlignment="Left" Width="700">
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="PLAYBACK" Margin="0,0,0,12"/>
+                            <CheckBox x:Name="ChkHdContent"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Enable HD Content"
+                                      Click="OnConfigChanged"/>
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="RENDERING" Margin="0,0,0,12"/>
+                            <CheckBox x:Name="ChkRemoteRendering"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Enable Remote Rendering"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="Chk2DAnimations"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Enable 2D animations"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="ChkIntenseAnimations"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Enable Intense animations"
+                                      Click="OnConfigChanged"/>
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="DISPLAY" Margin="0,0,0,12"/>
+                            <CheckBox x:Name="ChkOverscan"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Enable Overscan Margin"
+                                      Click="OnConfigChanged"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+
+            <!-- ===== Audio sub-view ======================================= -->
+            <Grid x:Name="AudioView"
+                  Margin="100,150,80,60"
+                  Visibility="Collapsed">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="340"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Margin="0,26,40,0" VerticalAlignment="Top">
+                        <Button Style="{StaticResource SideActionButtonStyle}"
+                                Content="Back" Click="BtnBack_Click"/>
+                        <Button x:Name="BtnAudioSyncReset"
+                                Style="{StaticResource SideActionButtonStyle}"
+                                Content="Reset to 0 ms"
+                                Click="BtnAudioSyncReset_Click"/>
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Column="1"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  PanningMode="VerticalOnly"
+                                  Focusable="False">
+                        <StackPanel HorizontalAlignment="Left" Width="700">
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="AUDIO SYNC OFFSET" Margin="0,0,0,10"/>
+                            <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                       Foreground="{StaticResource WmcSubtleTextBrush}"
+                                       Margin="0,0,0,18" FontSize="15"
+                                       Text="Adjust if audio appears out of sync with video — e.g. when an HDMI display adds picture-processing lag or an A/V receiver delays audio. Positive values delay audio (use when video lags); negative values delay video (use when audio lags). Applied automatically when the external-sync audio engine is enabled."/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                <Button x:Name="BtnAudioSyncMinusBig"
+                                        Style="{StaticResource WmcButtonStyle}"
+                                        Content="-50ms" MinWidth="90"
+                                        Click="BtnAudioSyncMinusBig_Click"/>
+                                <Button x:Name="BtnAudioSyncMinus"
+                                        Style="{StaticResource WmcButtonStyle}"
+                                        Content="-10ms" MinWidth="90"
+                                        Click="BtnAudioSyncMinus_Click"/>
+                                <Border Style="{StaticResource WmcValueBoxStyle}" Width="150" Margin="6,0">
+                                    <TextBlock x:Name="AudioSyncValueText"
+                                               Style="{StaticResource WmcValueTextStyle}"
+                                               Text="0 ms"/>
+                                </Border>
+                                <Button x:Name="BtnAudioSyncPlus"
+                                        Style="{StaticResource WmcButtonStyle}"
+                                        Content="+10ms" MinWidth="90"
+                                        Click="BtnAudioSyncPlus_Click"/>
+                                <Button x:Name="BtnAudioSyncPlusBig"
+                                        Style="{StaticResource WmcButtonStyle}"
+                                        Content="+50ms" MinWidth="90"
+                                        Click="BtnAudioSyncPlusBig_Click"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+
+            <!-- ===== UI sub-view ========================================== -->
+            <Grid x:Name="UiView"
+                  Margin="100,150,80,60"
+                  Visibility="Collapsed">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="340"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Margin="0,26,40,0" VerticalAlignment="Top">
+                        <Button Style="{StaticResource SideActionButtonStyle}"
+                                Content="Back" Click="BtnBack_Click"/>
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Column="1"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  PanningMode="VerticalOnly"
+                                  Focusable="False">
+                        <StackPanel HorizontalAlignment="Left" Width="700">
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="INTERFACE" Margin="0,0,0,12"/>
+                            <CheckBox x:Name="ChkUiSounds"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Enable UI Sounds"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="ChkPopups"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Enable Pop-ups"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="ChkToolbar"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Enable Toolbar"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="ChkMouseInput"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Enable mouse input"
+                                      Click="OnConfigChanged"/>
+
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="GUI RESOLUTION"/>
+                            <Button x:Name="BtnResolution"
+                                    Style="{StaticResource WmcButtonStyle}"
+                                    HorizontalAlignment="Left"
+                                    MinWidth="320"
+                                    Margin="48,0,0,0"
+                                    Content="—"
+                                    Click="BtnResolution_Click"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+
+            <!-- ===== Remote sub-view ===================================== -->
+            <Grid x:Name="RemoteView"
+                  Margin="100,150,80,60"
+                  Visibility="Collapsed">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="340"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Margin="0,26,40,0" VerticalAlignment="Top">
+                        <Button Style="{StaticResource SideActionButtonStyle}"
+                                Content="Back" Click="BtnBack_Click"/>
+                        <Button x:Name="BtnRemoteReset"
+                                Style="{StaticResource SideActionButtonStyle}"
+                                Content="Reset all to defaults"
+                                Click="BtnRemoteReset_Click"/>
+                    </StackPanel>
+
+                    <Grid Grid.Column="1">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0"
+                                   Style="{StaticResource WmcBodyStyle}"
+                                   Foreground="{StaticResource WmcSubtleTextBrush}"
+                                   Margin="0,26,0,14" FontSize="15"
+                                   Text="Choose a command and press Learn, then press the button on your remote you want to use for it. Navigation, OK and number buttons are handled directly and aren't listed here."/>
+                        <ScrollViewer Grid.Row="1"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      PanningMode="VerticalOnly"
+                                      Focusable="False">
+                            <StackPanel x:Name="RemoteList" HorizontalAlignment="Stretch"/>
+                        </ScrollViewer>
+                    </Grid>
                 </Grid>
             </Grid>
 
             <!-- ===== Debugging sub-view =================================== -->
             <Grid x:Name="DebuggingView"
-                  Margin="100,200,100,80"
+                  Margin="100,150,80,60"
                   Visibility="Collapsed">
-                <!-- Wrap in ScrollViewer so the growing list of toggles
-                     stays reachable. Matches the Video sub-view pattern. -->
-                <ScrollViewer VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Disabled"
-                              PanningMode="VerticalOnly"
-                              Focusable="False">
-                <StackPanel HorizontalAlignment="Left" Width="640">
-                    <CheckBox x:Name="ChkLogDevCaps"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Include DevCaps VirtualChannel logs"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkLogMcxSess"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Include McxSess VirtualChannel logs"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkLogAvCtrl"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Include AvCtrl VirtualChannel logs"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkLogRdpFastpath"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Include RDP Fastpath logs"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkLogRdpFps"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Include RDP frame-rate (FPS) meter"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkLogAvPlayback"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Include A/V (libav / sync) logs"
-                              Click="OnConfigChanged"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="340"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
 
-                    <!-- File logging — survives a crash so release-build
-                         hangs on remote machines can still be diagnosed. -->
-                    <CheckBox x:Name="ChkLogToFile"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Write logs to file"
-                              Margin="0,16,0,0"
-                              Click="OnConfigChanged"/>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="10,4,0,8"
-                               TextWrapping="Wrap"
-                               Text="A timestamped log file is created per session. Auto-flushed so a crash still leaves a captured log on disk."/>
-
-                    <!-- ONE folder for every kind of diagnostic output: the
-                         session logs and the raw dumps below both live under
-                         this root (Logs\ and Dumps\). -->
-                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
-                               Text="Diagnostics folder"
-                               Foreground="{StaticResource WmcTextBrush}"
-                               Margin="0,24,0,4"/>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="0,0,0,8"
-                               TextWrapping="Wrap"
-                               Text="Everything SoftSled writes for diagnosis goes under this one folder: session logs in Logs\, and the raw dumps below in Dumps\."/>
-                    <StackPanel Orientation="Horizontal" Margin="10,0,0,0">
-                        <TextBlock x:Name="DiagFolderPath"
-                                   Style="{StaticResource WmcBodyStyle}"
-                                   Foreground="{StaticResource WmcSubtleTextBrush}"
-                                   VerticalAlignment="Center"
-                                   TextWrapping="Wrap"
-                                   MaxWidth="360"
-                                   Text="(folder)"/>
-                        <Button x:Name="BtnOpenDiagFolder"
-                                Content="Open"
-                                Margin="12,0,0,0"
-                                Padding="14,4"
-                                Click="OnOpenDiagFolderClick"/>
-                        <Button x:Name="BtnChangeDiagFolder"
-                                Content="Change..."
-                                Margin="6,0,0,0"
-                                Padding="14,4"
-                                Click="OnChangeDiagFolderClick"/>
+                    <StackPanel Grid.Column="0" Margin="0,26,40,0" VerticalAlignment="Top">
+                        <Button Style="{StaticResource SideActionButtonStyle}"
+                                Content="Back" Click="BtnBack_Click"/>
                     </StackPanel>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="10,4,0,0"
-                               FontSize="12"
-                               TextWrapping="Wrap"
-                               Text="Log path changes take effect on the NEXT app launch; dump paths on the next session start."/>
 
-                    <!-- Video jitter buffer (libav + D3DImage player). -->
-                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
-                               Text="Video jitter buffer"
-                               Foreground="{StaticResource WmcTextBrush}"
-                               Margin="0,32,0,4"/>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="0,0,0,16"
-                               TextWrapping="Wrap"
-                               Text="How much video the player buffers to absorb bursty RTSP delivery (frames arrive in ~160 ms bursts around I-frames). Larger values smooth out judder at the cost of more start-up latency. Default 250 ms. Takes effect on the next playback."/>
-                    <StackPanel Orientation="Horizontal"
-                                HorizontalAlignment="Left"
-                                Margin="10,0,0,0">
-                        <Button x:Name="BtnJitterMinus"
-                                Style="{StaticResource WmcButtonStyle}"
-                                Content="-250ms"
-                                MinWidth="100"
-                                Click="BtnJitterMinus_Click"/>
-                        <TextBlock x:Name="JitterBufferValueText"
-                                   Style="{StaticResource WmcSubtitleStyle}"
-                                   Foreground="{StaticResource WmcTextBrush}"
-                                   VerticalAlignment="Center"
-                                   Width="160"
-                                   TextAlignment="Center"
-                                   Text="250 ms"/>
-                        <Button x:Name="BtnJitterPlus"
-                                Style="{StaticResource WmcButtonStyle}"
-                                Content="+250ms"
-                                MinWidth="100"
-                                Click="BtnJitterPlus_Click"/>
-                    </StackPanel>
-                    <Button x:Name="BtnJitterReset"
-                            Style="{StaticResource WmcButtonStyle}"
-                            Content="Reset to 250 ms"
-                            HorizontalAlignment="Left"
-                            MinWidth="240"
-                            Margin="10,16,0,0"
-                            Click="BtnJitterReset_Click"/>
+                    <ScrollViewer Grid.Column="1"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  PanningMode="VerticalOnly"
+                                  Focusable="False">
+                        <StackPanel HorizontalAlignment="Left" Width="700">
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="CHANNEL LOGGING" Margin="0,0,0,12"/>
+                            <CheckBox x:Name="ChkLogDevCaps"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Include DevCaps VirtualChannel logs"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="ChkLogMcxSess"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Include McxSess VirtualChannel logs"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="ChkLogAvCtrl"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Include AvCtrl VirtualChannel logs"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="ChkLogRdpFastpath"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Include RDP Fastpath logs"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="ChkLogRdpFps"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Include RDP frame-rate (FPS) meter"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="ChkLogAvPlayback"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Include A/V (libav / sync) logs"
+                                      Click="OnConfigChanged"/>
 
-                    <!-- =================================================
-                         Advanced diagnostics — these surface env-var
-                         toggles that previously had to be set before
-                         launch via `set SOFTSLED_X=Y`. The config
-                         values are translated into process-scope env
-                         vars at session start, so existing call sites
-                         keep working unchanged.
-                         ================================================= -->
-                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
-                               Text="Advanced diagnostic dumps"
-                               Foreground="{StaticResource WmcTextBrush}"
-                               Margin="0,32,0,4"/>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="0,0,0,16"
-                               TextWrapping="Wrap"
-                               Text="Mirror of the SOFTSLED_* environment variables. Files are written to Dumps\ under the diagnostics folder above. Changes take effect on the NEXT session start."/>
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="LOG FILE"/>
+                            <CheckBox x:Name="ChkLogToFile"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Write logs to file"
+                                      Click="OnConfigChanged"/>
+                            <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                       Foreground="{StaticResource WmcSubtleTextBrush}"
+                                       Margin="48,2,0,0" FontSize="15"
+                                       Text="A timestamped log file is created per session. Auto-flushed so a crash still leaves a captured log on disk."/>
 
-                    <CheckBox x:Name="ChkDumpSplashRaw"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Dump splash wire bytes + events (SOFTSLED_SPLASH_RAW_DUMP)"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkDumpFastpathRaw"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Dump RDP fastpath payloads (SOFTSLED_FASTPATH_RAW_DUMP)"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkDumpRtspWire"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Dump RTSP control-channel wire (SOFTSLED_RTSP_WIRE_DUMP)"
-                              Click="OnConfigChanged"/>
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="DIAGNOSTICS FOLDER"/>
+                            <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                       Foreground="{StaticResource WmcSubtleTextBrush}"
+                                       Margin="0,0,0,8" FontSize="15"
+                                       Text="Everything SoftSled writes for diagnosis goes under this one folder: session logs in Logs\, and the raw dumps below in Dumps\."/>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock x:Name="DiagFolderPath"
+                                           Style="{StaticResource WmcBodyStyle}"
+                                           Foreground="{StaticResource WmcSubtleTextBrush}"
+                                           VerticalAlignment="Center"
+                                           MaxWidth="380"
+                                           Text="(folder)"/>
+                                <Button x:Name="BtnOpenDiagFolder"
+                                        Content="Open"
+                                        Margin="12,0,0,0"
+                                        Padding="14,4"
+                                        Click="OnOpenDiagFolderClick"/>
+                                <Button x:Name="BtnChangeDiagFolder"
+                                        Content="Change..."
+                                        Margin="6,0,0,0"
+                                        Padding="14,4"
+                                        Click="OnChangeDiagFolderClick"/>
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                       Foreground="{StaticResource WmcSubtleTextBrush}"
+                                       Margin="0,6,0,0" FontSize="13"
+                                       Text="Log path changes take effect on the NEXT app launch; dump paths on the next session start."/>
 
-                    <TextBlock Style="{StaticResource WmcSubtitleStyle}"
-                               Text="Advanced behaviour toggles"
-                               Foreground="{StaticResource WmcTextBrush}"
-                               Margin="0,32,0,4"/>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="0,0,0,16"
-                               TextWrapping="Wrap"
-                               Text="These change runtime behaviour rather than producing files. Use for isolating audio-pipeline and connection issues."/>
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="VIDEO JITTER BUFFER"/>
+                            <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                       Foreground="{StaticResource WmcSubtleTextBrush}"
+                                       Margin="0,0,0,14" FontSize="15"
+                                       Text="How much video the player buffers to absorb bursty RTSP delivery (frames arrive in ~160 ms bursts around I-frames). Larger values smooth out judder at the cost of more start-up latency. Default 250 ms. Takes effect on the next playback."/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                <Button x:Name="BtnJitterMinus"
+                                        Style="{StaticResource WmcButtonStyle}"
+                                        Content="-250ms" MinWidth="100"
+                                        Click="BtnJitterMinus_Click"/>
+                                <Border Style="{StaticResource WmcValueBoxStyle}" Width="150" Margin="6,0">
+                                    <TextBlock x:Name="JitterBufferValueText"
+                                               Style="{StaticResource WmcValueTextStyle}"
+                                               Text="250 ms"/>
+                                </Border>
+                                <Button x:Name="BtnJitterPlus"
+                                        Style="{StaticResource WmcButtonStyle}"
+                                        Content="+250ms" MinWidth="100"
+                                        Click="BtnJitterPlus_Click"/>
+                                <Button x:Name="BtnJitterReset"
+                                        Style="{StaticResource WmcButtonStyle}"
+                                        Content="Reset"
+                                        MinWidth="120"
+                                        Margin="12,0,0,0"
+                                        Click="BtnJitterReset_Click"/>
+                            </StackPanel>
 
-                    <CheckBox x:Name="ChkAudioTrace"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Verbose fastpath audio trace (SOFTSLED_AUDIO_TRACE)"
-                              Click="OnConfigChanged"/>
-                    <CheckBox x:Name="ChkAlwaysShowRdp"
-                              Style="{StaticResource WmcCheckBoxStyle}"
-                              Content="Always show RDP framebuffer"
-                              Margin="0,16,0,0"
-                              Click="OnConfigChanged"/>
-                    <TextBlock Style="{StaticResource WmcBodyStyle}"
-                               Foreground="{StaticResource WmcSubtleTextBrush}"
-                               Margin="10,4,0,8"
-                               TextWrapping="Wrap"
-                               Text="Skips the 'connecting' overlay and keeps the raw RDP picture on screen for the whole session, even before Media Center's shell opens. For diagnosing connections that never complete. Expect a broken-looking picture in RUI mode — the framebuffer will paint over the splash UI and video. Takes effect on the next session."/>
-                </StackPanel>
-                </ScrollViewer>
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="ADVANCED DIAGNOSTIC DUMPS"/>
+                            <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                       Foreground="{StaticResource WmcSubtleTextBrush}"
+                                       Margin="0,0,0,12" FontSize="15"
+                                       Text="Mirror of the SOFTSLED_* environment variables. Files are written to Dumps\ under the diagnostics folder above. Changes take effect on the NEXT session start."/>
+                            <CheckBox x:Name="ChkDumpSplashRaw"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Dump splash wire bytes + events (SOFTSLED_SPLASH_RAW_DUMP)"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="ChkDumpFastpathRaw"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Dump RDP fastpath payloads (SOFTSLED_FASTPATH_RAW_DUMP)"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="ChkDumpRtspWire"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Dump RTSP control-channel wire (SOFTSLED_RTSP_WIRE_DUMP)"
+                                      Click="OnConfigChanged"/>
+
+                            <TextBlock Style="{StaticResource WmcSectionHeaderStyle}" Text="ADVANCED BEHAVIOUR"/>
+                            <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                       Foreground="{StaticResource WmcSubtleTextBrush}"
+                                       Margin="0,0,0,12" FontSize="15"
+                                       Text="These change runtime behaviour rather than producing files. Use for isolating audio-pipeline and connection issues."/>
+                            <CheckBox x:Name="ChkAudioTrace"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Verbose fastpath audio trace (SOFTSLED_AUDIO_TRACE)"
+                                      Click="OnConfigChanged"/>
+                            <CheckBox x:Name="ChkAlwaysShowRdp"
+                                      Style="{StaticResource WmcCheckBoxStyle}"
+                                      Content="Always show RDP framebuffer"
+                                      Click="OnConfigChanged"/>
+                            <TextBlock Style="{StaticResource WmcBodyStyle}"
+                                       Foreground="{StaticResource WmcSubtleTextBrush}"
+                                       Margin="48,2,0,10" FontSize="15"
+                                       Text="Skips the 'connecting' overlay and keeps the raw RDP picture on screen for the whole session, even before Media Center's shell opens. For diagnosing connections that never complete. Expect a broken-looking picture in RUI mode — the framebuffer will paint over the splash UI and video. Takes effect on the next session."/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
             </Grid>
 
             <!-- ===== Unpair confirm overlay =============================== -->
@@ -608,13 +781,6 @@
                 </Border>
             </Grid>
 
-            <!-- Hint strip -->
-            <TextBlock Text="Use the remote arrow keys to navigate. Press Backspace or Escape to go back."
-                       Style="{StaticResource WmcBodyStyle}"
-                       Foreground="{StaticResource WmcSubtleTextBrush}"
-                       HorizontalAlignment="Right"
-                       VerticalAlignment="Bottom"
-                       Margin="0,0,40,30"/>
         </Grid>
     </Viewbox>
 </UserControl>

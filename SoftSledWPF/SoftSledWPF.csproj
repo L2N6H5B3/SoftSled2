@@ -305,6 +305,7 @@
     <Compile Include="Components\Utility\DataUtilities.cs" />
     <Compile Include="Components\Utility\DisplayKeepAwake.cs" />
     <Compile Include="Components\Utility\Enums.cs" />
+    <Compile Include="Components\Utility\StartupRegistration.cs" />
     <Compile Include="Components\Utility\Utility.cs" />
     <Compile Include="Components\Splash\Objects\SplashScene.cs" />
     <Compile Include="Components\Splash\SplashController.cs" />
@@ -323,6 +324,7 @@
       <DependentUpon>ShellWindow.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="Components\Shell\TrayIconController.cs" />
     <Compile Include="Components\Shell\LandingPage.xaml.cs">
       <DependentUpon>LandingPage.xaml</DependentUpon>
       <SubType>Code</SubType>

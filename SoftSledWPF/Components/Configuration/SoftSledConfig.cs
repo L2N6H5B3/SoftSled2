@@ -1,6 +1,15 @@
 using System.Collections.Generic;
 
 namespace SoftSled.Components.Configuration {
+
+    /// <summary>How SoftSled launches when Windows starts. Persisted in config
+    /// and applied to the HKCU Run key by StartupRegistration.</summary>
+    public enum BootStartMode {
+        Off = 0,
+        Tray = 1,
+        Ui = 2,
+    }
+
     public class SoftSledConfig {
         public bool IsPaired = false;
         // Write-only BY DESIGN — nothing reads this back. ExtenderDevice
@@ -85,6 +94,22 @@ namespace SoftSled.Components.Configuration {
         // disconnect path so a user navigating back doesn't accidentally
         // quit.
         public bool CloseOnWmcClose = false;
+
+        // System-tray behaviour. When true, closing or minimizing the shell
+        // window hides it to a tray icon instead of exiting, keeping the
+        // process (and its Raw Input HWND) resident so the MCE remote's Green
+        // Start button can wake it straight into a session while idle. Default
+        // OFF — a plain launch behaves exactly as before. See BootStartMode
+        // (a "boot to tray" launch implies this behaviour).
+        public bool MinimizeToTray = false;
+
+        // How SoftSled should launch when Windows starts, if at all. Written to
+        // the HKCU ...\Run key by StartupRegistration when this changes.
+        //   Off  = no boot auto-start (Run entry removed).
+        //   Tray = start hidden in the system tray, idle, waiting for Green
+        //          (implies MinimizeToTray). Launched with "--tray".
+        //   Ui   = open the normal shell on screen at login.
+        public BootStartMode BootStartMode = BootStartMode.Off;
 
         public bool EnableHdContent = true;
 
