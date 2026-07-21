@@ -41,6 +41,31 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private bool _paused;   // true between PauseAsync and the next PlayAsync (server RTSP-paused)
         private volatile bool _disposed;
 
+        // ----- Source-level pause/resume PTS continuity -----
+        // WMPNss's RTP timestamp is a transmission (Send-Time) clock that keeps
+        // advancing THROUGH an RTSP PAUSE, so on resume both streams' wire PTS
+        // jump forward by ~the wall time we were paused. Left untouched, that jump
+        // looks exactly like missing content: the audio renderer's WritePcm gap
+        // fill injects ~pauseDuration of silence and the video pacer holds waiting
+        // for the master clock to traverse it — freezing playback for the pause
+        // duration (observed: ~4s stall ~1s after resume). We cancel the jump at
+        // the SOURCE: carry a cumulative shift (ms) and subtract it from every
+        // post-resume wire PTS, in BOTH streams equally so A/V stays locked, so the
+        // downstream sync machinery (gap fill, pacer, master clock) never sees the
+        // discontinuity. Applied at the wire-arrival handlers (OnAudioMau /
+        // OnVideoMau) — retained pre-pause MAUs already passed those before the
+        // pause, so only post-resume packets are shifted. Reset to 0 on any
+        // re-baseline (seek / trick-play exit) and on new media, where a fresh
+        // timeline + re-latched anchors make a carried shift both meaningless and
+        // (for video, whose rtpTs it subtracts from) a potential underflow if the
+        // new position is earlier than the accumulated shift. 0 until the first
+        // resume. Written by the control thread (Pause/PlayAsync), read on the
+        // RTSP worker thread (On*Mau) — hence Interlocked.
+        private readonly System.Diagnostics.Stopwatch _resumeShiftClock =
+            System.Diagnostics.Stopwatch.StartNew();
+        private long _pauseStartMs = -1;   // _resumeShiftClock ms at PauseAsync; -1 = not paused
+        private long _resumePtsShiftMs;    // cumulative ms subtracted from post-resume wire PTS
+
 
         // Smoothed master clock. The raw audio-position clock (min bytes
         // played/written) JUMPS when delivery is bursty (live TV swings ~57-164%
@@ -318,6 +343,11 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // Discard pre-seek in-flight MAUs until the post-seek RTP-Info lands.
             if (Interlocked.Read(ref _firstAudioMauRtpRaw) < 0 && !AnchorGateOpen()) return;
             long ptsMs = (long)rtpTs * 1000L / _audioClockHz;
+            // Cancel any accumulated pause/resume Send-Time jump so this MAU lands
+            // on the continuous timeline (see _resumePtsShiftMs). Applied before
+            // every downstream use — content ref, anchor, and the decoder submit —
+            // so they all agree. 0 (no-op) until the first resume.
+            ptsMs -= Interlocked.Read(ref _resumePtsShiftMs);
             // Latch the content-clock reference (content-ms paired with THIS
             // MAU's wire ms) from the first post-gate MAU carrying one. Wire ms
             // is written first so a reader that sees content ≥ 0 sees both.
@@ -531,6 +561,18 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // a non-decodable P/B frame that the decoder skips, so anchoring the
             // offset here used a different origin than the pacer and skewed sync.
             if (Interlocked.Read(ref _firstVideoMauRtpRaw) < 0 && !AnchorGateOpen()) return;
+            // Cancel any accumulated pause/resume Send-Time jump (see
+            // _resumePtsShiftMs) at the source. The decoder derives PTS from the
+            // raw rtpTs, so we shift rtpTs itself — converting the ms shift into
+            // this stream's RTP clock units — and every downstream use (content
+            // ref, diagnostic, decoder submit → OnFrame → pacer) then sees the
+            // continuous timeline. 0 (no-op) until the first resume. Mid-stream
+            // rtpTs values are far larger than the shift, so no unsigned
+            // underflow; a re-baseline/new-media zeroes the shift before any
+            // earlier-position stream could make it underflow.
+            long vShiftMs = Interlocked.Read(ref _resumePtsShiftMs);
+            if (vShiftMs > 0 && _videoClockHz > 0)
+                rtpTs = (uint)((long)rtpTs - vShiftMs * _videoClockHz / 1000L);
             // Latch the content-clock reference from the first post-gate MAU
             // carrying one (paired with this MAU's wire ms). UpdateSyncOffset
             // re-expresses it at the first DECODED frame's wire pts, which
@@ -807,6 +849,20 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 // RTSPClient.Pause() armed _resumeNextPlay so this PLAY hits the
                 // wire even though (startMs,rate) match the pre-pause values.
                 ResetMasterSmoothing();   // re-seed the smoothed clock across the pause gap
+                // Cancel the Send-Time pause jump at the source: grow the shared
+                // PTS shift by how long we were paused, BEFORE sending the PLAY
+                // (so it's in place before any post-resume MAU can arrive). The
+                // wire jump ≈ this wall duration; the sub-GapFillMinMs (60ms)
+                // residual is ignored by the gap tracker, so no silence is
+                // injected and the pacer sees a continuous timeline.
+                long pauseStart = Interlocked.Exchange(ref _pauseStartMs, -1L);
+                if (pauseStart >= 0) {
+                    long pausedMs = _resumeShiftClock.ElapsedMilliseconds - pauseStart;
+                    if (pausedMs > 0) {
+                        long total = Interlocked.Add(ref _resumePtsShiftMs, pausedMs);
+                        _log?.LogInfo($"[ext-sync] resume PTS shift += {pausedMs}ms (cumulative {total}ms) — cancelling Send-Time pause gap at source");
+                    }
+                }
                 try { _rtsp?.Play(-1L, _lastRequestedRate); }
                 catch (Exception ex) { _log?.LogError($"[ext-sync] resume PLAY failed: {ex.Message}"); }
                 _log?.LogInfo("[ext-sync] resume from pause — bare PLAY (Scale, no Range); timeline continues, buffers kept");
@@ -817,6 +873,9 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         public Task PauseAsync() {
             _playRequested = false;
             _paused = true;
+            // Timestamp the pause so the resume can measure how long the
+            // Send-Time clock advanced and cancel that jump (see _resumePtsShiftMs).
+            Interlocked.Exchange(ref _pauseStartMs, _resumeShiftClock.ElapsedMilliseconds);
 
             // Freeze the LOCAL pipeline FIRST, retaining every buffer so the
             // resume is instant. Pausing the audio device stalls the master
@@ -917,6 +976,12 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             Interlocked.Exchange(ref _firstVideoMauRtpRaw, -1L);
             Interlocked.Exchange(ref _firstAudioMauWirePtsMs, -1L);
             Interlocked.Exchange(ref _firstVideoMauWirePtsMs, -1L);
+            // A re-baseline establishes a fresh timeline with re-latched anchors,
+            // so any accumulated pause/resume shift is both meaningless here and a
+            // video-rtpTs underflow hazard if this position is earlier than it —
+            // drop it (and any in-progress pause).
+            Interlocked.Exchange(ref _resumePtsShiftMs, 0L);
+            Interlocked.Exchange(ref _pauseStartMs, -1L);
             ResetContentRefs();   // new position = new content anchors
             Interlocked.Exchange(ref _anchorMinRtpInfoGen, (_rtsp?.RtpInfoGeneration ?? 0) + 1);
             _seekGateTick = Environment.TickCount;
@@ -964,6 +1029,12 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             Interlocked.Exchange(ref _firstVideoMauRtpRaw, -1L);
             Interlocked.Exchange(ref _firstAudioMauWirePtsMs, -1L);
             Interlocked.Exchange(ref _firstVideoMauWirePtsMs, -1L);
+            // A re-baseline establishes a fresh timeline with re-latched anchors,
+            // so any accumulated pause/resume shift is both meaningless here and a
+            // video-rtpTs underflow hazard if this position is earlier than it —
+            // drop it (and any in-progress pause).
+            Interlocked.Exchange(ref _resumePtsShiftMs, 0L);
+            Interlocked.Exchange(ref _pauseStartMs, -1L);
             ResetContentRefs();   // new position = new content anchors
             Interlocked.Exchange(ref _anchorMinRtpInfoGen, (_rtsp?.RtpInfoGeneration ?? 0) + 1);
             _seekGateTick = Environment.TickCount;
@@ -1160,6 +1231,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // SetRate/re-baseline during the new open).
             _lastRequestedRate = 1.0;
             _paused = false;
+            // Fresh timeline for the new media — drop any pause/resume PTS shift
+            // carried from the previous media (the controller is reused across media).
+            Interlocked.Exchange(ref _resumePtsShiftMs, 0L);
+            Interlocked.Exchange(ref _pauseStartMs, -1L);
             // Fresh open gate so the next media's OpenAsync waits for the new
             // renderer rather than returning the previous media's result.
             if (!_disposed) _openTcs = new TaskCompletionSource<bool>();
