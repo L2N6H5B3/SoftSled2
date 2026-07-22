@@ -35,9 +35,8 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         // buffer every cycle and video oscillates freeze↔catch-up.
         private int _maxBufferMs;
         // Upper bound on the buffer so a pathological offset can't blow up
-        // memory. Frames are buffered as packed yuv420p (~3 MB each at 1080p,
-        // vs ~8 MB for BGRA) so 8 s at 1080p25 ≈ 600 MB worst case (was ~1.66 GB
-        // pre-YUV). The good 4 s-jitter session already ran a 6 s buffer fine.
+        // memory (decoded BGRA frames: ~8 MB each at 1080p25 → ~1.66 GB at
+        // 8 s). The good 4 s-jitter session already ran a 6 s buffer fine.
         private const int MaxBufferHardCapMs = 8000;
 
         public int PrerollMs => _prerollMs;
@@ -45,23 +44,10 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         private readonly Action<IntPtr, int, int, int> _present;
         private readonly Logger _log;
 
-        // Queued frames are stored as packed yuv420p (1.5 B/px); this converts
-        // each released frame to BGRA at present time (see Submit / Loop). Only
-        // frames actually shown are converted — dropped frames cost nothing.
-        private readonly Yuv420ToBgra _converter;
-
         private readonly object _gate = new object();
         private readonly Queue<Frame> _queue = new Queue<Frame>();
         private readonly Stack<byte[]> _pool = new Stack<byte[]>();
         private int _bufBytes;
-
-        // Packed yuv420p byte count for a w×h frame: Y plane w*h plus U and V
-        // planes cw*ch each (cw=(w+1)/2, ch=(h+1)/2). This is what a queued frame
-        // occupies — 1.5× the pixel count vs 4× for BGRA.
-        private static int Yuv420Size(int w, int h) {
-            int cw = (w + 1) / 2, ch = (h + 1) / 2;
-            return w * h + 2 * cw * ch;
-        }
 
         private Thread _thread;
         private volatile bool _stop;
@@ -228,7 +214,6 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         public PtsFramePacer(Action<IntPtr, int, int, int> present, int prerollMs, Logger log) {
             _present = present;
             _log = log;
-            _converter = new Yuv420ToBgra(log);
             _prerollMs = prerollMs > 0 ? prerollMs : 250;
             // Headroom above the pre-roll so the buffer can fill to the
             // pre-roll depth, plus slack for drift before overflow-dropping.
@@ -237,15 +222,11 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             _thread.Start();
         }
 
-        /// <summary>Submit a decoded frame as packed yuv420p (from
-        /// <see cref="LibAvVideoPushDecoder"/>). Copies into a pooled buffer so
-        /// the caller's decode buffer can be reused immediately; the frame is
-        /// colour-converted to BGRA only when it is later released to the screen.
-        /// <paramref name="stride"/> is the luma stride (= width); the packed
-        /// size is derived from width/height.</summary>
+        /// <summary>Submit a decoded BGRA frame. Copies into a pooled buffer so
+        /// the caller's decode buffer can be reused immediately.</summary>
         public void Submit(IntPtr src, int stride, int w, int h, long ptsMs) {
-            if (_disposed || src == IntPtr.Zero || w <= 0 || h <= 0) return;
-            int need = Yuv420Size(w, h);
+            if (_disposed || src == IntPtr.Zero) return;
+            int need = stride * h;
             lock (_gate) {
                 // Audio-slaved overflow: drop the NEWEST (this) frame, not the
                 // oldest. When the master (audio) clock runs slower than video
@@ -435,15 +416,9 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                     var f = due.Value;
                     var gch = GCHandle.Alloc(f.Buf, GCHandleType.Pinned);
                     try {
-                        // Convert the packed yuv420p frame to BGRA (into the
-                        // converter's own native scratch), then present. The pin
-                        // only needs to last for the conversion (which reads the
-                        // pinned YUV); _present then copies the BGRA scratch
-                        // synchronously (D3D SubmitFrame copies into its staging).
-                        IntPtr bgra = _converter.Convert(gch.AddrOfPinnedObject(), f.W, f.H);
-                        if (bgra != IntPtr.Zero) {
-                            _present(bgra, _converter.Stride, f.W, f.H);
-                        }
+                        // SubmitFrame copies synchronously, so the pin only
+                        // needs to last for this call.
+                        _present(gch.AddrOfPinnedObject(), f.Stride, f.W, f.H);
                     } catch (Exception ex) {
                         _log?.LogError($"[pacer] present threw: {ex.Message}");
                     } finally {
@@ -488,15 +463,9 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             }
         }
 
-        // Pool cap: a small ring of reusable frame buffers to avoid per-frame LOH
-        // allocation. Kept low (3) — the queue itself holds the working set, so a
-        // deep idle pool is just retained RAM. At yuv420p a 1080p buffer is ~3 MB,
-        // so 3 pooled ≈ 9 MB worst case.
-        private const int PoolCap = 3;
-
         private void Recycle(byte[] buf) {
             lock (_gate) {
-                if (_pool.Count < PoolCap) _pool.Push(buf);
+                if (_pool.Count < 8) _pool.Push(buf);
             }
         }
 
@@ -507,7 +476,6 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             try { _thread?.Join(2000); } catch { }
             _thread = null;
             lock (_gate) { _queue.Clear(); _pool.Clear(); }
-            try { _converter.Dispose(); } catch { }
         }
 
         private struct Frame {

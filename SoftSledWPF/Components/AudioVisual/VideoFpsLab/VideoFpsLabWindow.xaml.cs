@@ -35,11 +35,6 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         // Live RTSP tap state.
         private LibAvVideoPushDecoder _pushDecoder;
         private PtsFramePacer _pacer;
-        // Unpaced live path only: the push decoder now emits packed yuv420p, so
-        // when we present straight to the D3D surface (bypassing the pacer, which
-        // would otherwise do this) we convert to BGRA here. Called only from the
-        // decoder worker thread → single-threaded, matching the converter.
-        private Yuv420ToBgra _liveConverter;
         private bool _liveActive;
         private bool _paced;
         private int _liveClockHz = 90000;
@@ -228,12 +223,7 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                             var pacer = _pacer;
                             d.OnFrame += (ptr, stride, w, h, ptsMs) => pacer?.Submit(ptr, stride, w, h, ptsMs);
                         } else {
-                            _liveConverter = new Yuv420ToBgra(_log);
-                            var conv = _liveConverter;
-                            d.OnFrame += (ptr, stride, w, h, ptsMs) => {
-                                IntPtr bgra = conv.Convert(ptr, w, h);
-                                if (bgra != IntPtr.Zero) _presenter?.SubmitFrame(bgra, conv.Stride, w, h);
-                            };
+                            d.OnFrame += (ptr, stride, w, h, ptsMs) => _presenter?.SubmitFrame(ptr, stride, w, h);
                         }
                         try {
                             d.Start();
@@ -349,8 +339,6 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                 _pushDecoder = null;
                 try { _pacer?.Dispose(); } catch { }
                 _pacer = null;
-                try { _liveConverter?.Dispose(); } catch { }
-                _liveConverter = null;
             }
             _paced = false;
 
