@@ -76,7 +76,7 @@ namespace SoftSled.Components.Configuration {
         // OK/Enter = Play-Pause. The moment any UI covers the centre (seek bar,
         // menu, OSD) the mappings revert to normal so you can navigate. Default
         // ON.
-        public bool MediaPlaybackModeEnabled = true;
+        public bool MediaPlaybackModeEnabled = false;
 
         // Keep the display (and system) awake while SoftSled is running, so
         // the Windows screen-saver / display-off / sleep idle timers don't

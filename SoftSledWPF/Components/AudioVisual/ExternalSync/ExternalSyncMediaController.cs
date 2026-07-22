@@ -1238,6 +1238,20 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // Fresh open gate so the next media's OpenAsync waits for the new
             // renderer rather than returning the previous media's result.
             if (!_disposed) _openTcs = new TaskCompletionSource<bool>();
+
+            // Return the just-freed decoded-frame buffers to the OS. Each queued
+            // video frame is a multi-MB Large Object Heap allocation; the LOH is
+            // NOT compacted by default, so without this the process working set
+            // lingers near its playback high-water even after the pacer/decoder
+            // are gone — costly on a 1 GB target. Media teardown is the right
+            // moment: playback has stopped, so the brief blocking gen2 GC is
+            // invisible, and the next media starts from a small baseline.
+            try {
+                System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                    System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                GC.Collect();
+            } catch { }
+
             _log?.LogInfo("[ext-sync] pipeline reset for new media");
         }
 
