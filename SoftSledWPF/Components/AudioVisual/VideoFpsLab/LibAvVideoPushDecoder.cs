@@ -11,8 +11,9 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
     /// <summary>
     /// Push-fed libav video decoder: decodes raw elementary-stream packets
     /// (H.264 Annex-B access units or MPEG-1/2 video access units) submitted
-    /// via <see cref="SubmitPacket"/>, colour-converts each frame to BGRA
-    /// with swscale, and raises <see cref="OnFrame"/>.
+    /// via <see cref="SubmitPacket"/>, emits each frame as packed <c>yuv420p</c>
+    /// (1.5 B/px; colour conversion to BGRA is deferred to present time so the
+    /// pacer buffers cheaply), and raises <see cref="OnFrame"/>.
     ///
     /// <para>This is the live-stream counterpart of
     /// <see cref="LibAvVideoDecoder"/> (which opens a file via avformat). It
@@ -76,8 +77,17 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         // teardown. Starts running; Dispose sets it so a paused worker exits.
         private readonly ManualResetEventSlim _runGate = new ManualResetEventSlim(true);
 
-        private byte[] _bgra;
-        private int _width, _height, _stride;
+        // Decoded frames are emitted as PACKED yuv420p (Y plane w*h, then U and
+        // V planes cw*ch, tight strides) — 1.5 bytes/pixel — NOT BGRA. The heavy
+        // YUV→BGRA colour conversion is deferred to present time (Yuv420ToBgra)
+        // so the pacer's jitter buffer holds frames at 1.5 B/px instead of 4 B/px
+        // (a 2.67× cut on the dominant playback buffer). _sws is built lazily and
+        // ONLY for non-yuv420p inputs (e.g. full-range yuvj420p), to normalise
+        // them to yuv420p before packing; native yuv420p takes a plain plane-copy
+        // fast path with no colour conversion at all.
+        private byte[] _packed;
+        private int _width, _height;
+        private AVPixelFormat _srcFmt = AVPixelFormat.AV_PIX_FMT_NONE;
 
         private long _framesDecoded;
         public long FramesDecoded => Interlocked.Read(ref _framesDecoded);
@@ -120,10 +130,12 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
 
         public event Action<int, int> OnFormatReady;
 
-        /// <summary>Per decoded frame: (bgraPtr, stride, width, height, ptsMs).
-        /// ptsMs is the frame's presentation time in milliseconds, derived
-        /// from the wire RTP timestamp via the stream clock — used by the
-        /// pacer to schedule presentation.</summary>
+        /// <summary>Per decoded frame: (yuv420pPtr, lumaStride, width, height,
+        /// ptsMs). The pointer is packed yuv420p (Y w*h, then U/V cw*ch, tight
+        /// strides); lumaStride == width. ptsMs is the frame's presentation time
+        /// in milliseconds, derived from the wire RTP timestamp via the stream
+        /// clock — used by the pacer to schedule presentation. Convert to BGRA at
+        /// present time via <see cref="Yuv420ToBgra"/>.</summary>
         public event Action<IntPtr, int, int, int, long> OnFrame;
 
         public LibAvVideoPushDecoder(AVCodecID codecId, int clockHz, Logger log) {
@@ -325,11 +337,12 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             }
         }
 
-        /// <summary>Colour-convert one (already-deinterlaced, if applicable)
-        /// frame to BGRA and raise OnFrame with its presentation time.</summary>
+        /// <summary>Pack one (already-deinterlaced, if applicable) frame as
+        /// planar yuv420p and raise OnFrame with its presentation time. The
+        /// heavy YUV→BGRA colour conversion is deferred to present time
+        /// (<see cref="Yuv420ToBgra"/>) so the pacer buffers at 1.5 B/px.</summary>
         private void EmitFrame(AVFrame* frame) {
-            EnsureSws(frame);
-            if (_sws == null) return;
+            if (!EnsurePacked(frame)) return;
 
             // Presentation timestamp: prefer the reorder-correct
             // best_effort_timestamp (carries the rtpTs we set on the
@@ -360,15 +373,37 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             }
             _frameCounter++;
 
-            fixed (byte* dst = _bgra) {
-                var dstData = new byte_ptrArray8();
-                dstData[0] = dst;
-                var dstLines = new int_array8();
-                dstLines[0] = _stride;
-                ffmpeg.sws_scale(_sws, frame->data, frame->linesize, 0,
-                                 frame->height, dstData, dstLines);
+            int w = _width, h = _height;
+            int ySize = w * h;
+            int cw = (w + 1) / 2, ch = (h + 1) / 2;
+            int cSize = cw * ch;
+
+            fixed (byte* dst = _packed) {
+                if ((AVPixelFormat)frame->format == AVPixelFormat.AV_PIX_FMT_YUV420P) {
+                    // Fast path: planes already in our target layout — straight
+                    // plane copies into the tight packed buffer (honouring the
+                    // decoder's padded linesize), no colour conversion.
+                    ffmpeg.av_image_copy_plane(dst,                 w,  frame->data[0], frame->linesize[0], w,  h);
+                    ffmpeg.av_image_copy_plane(dst + ySize,         cw, frame->data[1], frame->linesize[1], cw, ch);
+                    ffmpeg.av_image_copy_plane(dst + ySize + cSize, cw, frame->data[2], frame->linesize[2], cw, ch);
+                } else {
+                    // Any other format (incl. full-range yuvj420p): normalise to
+                    // yuv420p via swscale, writing directly into the packed buffer.
+                    if (_sws == null) return;
+                    var dstData = new byte_ptrArray8();
+                    dstData[0] = dst;
+                    dstData[1] = dst + ySize;
+                    dstData[2] = dst + ySize + cSize;
+                    var dstLines = new int_array8();
+                    dstLines[0] = w;
+                    dstLines[1] = cw;
+                    dstLines[2] = cw;
+                    ffmpeg.sws_scale(_sws, frame->data, frame->linesize, 0, h, dstData, dstLines);
+                }
                 Interlocked.Increment(ref _framesDecoded);
-                try { OnFrame?.Invoke((IntPtr)dst, _stride, _width, _height, ptsMs); }
+                // stride param carries the luma stride (= width); the pacer derives
+                // the chroma plane geometry from width/height.
+                try { OnFrame?.Invoke((IntPtr)dst, w, w, h, ptsMs); }
                 catch (Exception ex) { _log?.LogError($"[libav-vpush] OnFrame threw: {ex.Message}"); }
             }
         }
@@ -433,24 +468,40 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             _srcCtx = null; _sinkCtx = null; _deintActive = false;
         }
 
-        private void EnsureSws(AVFrame* frame) {
-            if (_sws != null && frame->width == _width && frame->height == _height) return;
-            if (_sws != null) { ffmpeg.sws_freeContext(_sws); _sws = null; }
+        /// <summary>Size the packed yuv420p buffer for the frame and, for
+        /// non-yuv420p inputs ONLY, (re)build a swscale context that normalises
+        /// them to yuv420p before packing. Native yuv420p needs no context.
+        /// Returns false if the buffer/context couldn't be prepared.</summary>
+        private bool EnsurePacked(AVFrame* frame) {
+            int w = frame->width, h = frame->height;
+            var fmt = (AVPixelFormat)frame->format;
+            bool sizeChanged = w != _width || h != _height;
 
-            _width = frame->width;
-            _height = frame->height;
-            _stride = _width * 4;
-            _bgra = new byte[_stride * _height];
+            if (sizeChanged || _packed == null) {
+                _width = w;
+                _height = h;
+                int cw = (w + 1) / 2, ch = (h + 1) / 2;
+                _packed = new byte[w * h + 2 * cw * ch];
+                try { OnFormatReady?.Invoke(w, h); }
+                catch (Exception ex) { _log?.LogError($"[libav-vpush] OnFormatReady threw: {ex.Message}"); }
+                _log?.LogInfo($"[libav-vpush] packed yuv420p ready: {w}x{h} (src {fmt})");
+            }
 
-            _sws = ffmpeg.sws_getContext(
-                _width, _height, (AVPixelFormat)frame->format,
-                _width, _height, AVPixelFormat.AV_PIX_FMT_BGRA,
-                ffmpeg.SWS_BILINEAR, null, null, null);
-            if (_sws == null) { _log?.LogError("[libav-vpush] sws_getContext failed"); return; }
-            _log?.LogInfo($"[libav-vpush] sws ready: {_width}x{_height} " +
-                          $"{(AVPixelFormat)frame->format} → BGRA");
-            try { OnFormatReady?.Invoke(_width, _height); }
-            catch (Exception ex) { _log?.LogError($"[libav-vpush] OnFormatReady threw: {ex.Message}"); }
+            if (fmt != AVPixelFormat.AV_PIX_FMT_YUV420P
+                && (_sws == null || sizeChanged || _srcFmt != fmt)) {
+                if (_sws != null) { ffmpeg.sws_freeContext(_sws); _sws = null; }
+                _sws = ffmpeg.sws_getContext(
+                    w, h, fmt, w, h, AVPixelFormat.AV_PIX_FMT_YUV420P,
+                    ffmpeg.SWS_BILINEAR, null, null, null);
+                _srcFmt = fmt;
+                if (_sws == null) {
+                    _log?.LogError($"[libav-vpush] sws_getContext ({fmt} → yuv420p) failed");
+                    return false;
+                }
+                _log?.LogInfo($"[libav-vpush] sws normalise {fmt} → yuv420p ({w}x{h})");
+            }
+
+            return _packed != null;
         }
 
         public void Dispose() {
