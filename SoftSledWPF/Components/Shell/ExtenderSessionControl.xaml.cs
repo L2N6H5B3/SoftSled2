@@ -771,6 +771,15 @@ namespace SoftSledWPF.Components.Shell {
             // here will keep the page alive past navigation.
             HideConnectingOverlay();
 
+            // Stop media playback + the RTSP session FIRST — before the RDP
+            // teardown below, whose native FreeRDP dispose can block (worker-
+            // thread join + a fixed sleep). The media streams over a SEPARATE
+            // RTSP connection that WMC normally tears down via avctrl
+            // CloseMedia; that never arrives on a local exit (ESC / window
+            // close), so without stopping it here the NAudio renderer (on its
+            // own thread) keeps playing audio after the window is already gone.
+            try { AvCtrlHandler?.ShutdownMedia(); } catch { }
+
             DisconnectRdp();
             try { freeRdpClient?.Dispose(); } catch { }
             freeRdpClient = null;

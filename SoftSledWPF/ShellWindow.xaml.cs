@@ -570,6 +570,14 @@ namespace SoftSledWPF {
                 HideToTray();
                 return;
             }
+            // Genuine exit (tray mode off, or the tray's Exit item): the window
+            // is about to close without going through PopPage/DetachPageEvents,
+            // so stop a live session ourselves. Otherwise its media/RTSP + RDP
+            // threads outlive the window and audio keeps playing until the
+            // process finally dies. Stop() is idempotent.
+            if (CurrentPage is ExtenderSessionControl exitingSession) {
+                try { exitingSession.Stop(); } catch { }
+            }
             base.OnClosing(e);
         }
 

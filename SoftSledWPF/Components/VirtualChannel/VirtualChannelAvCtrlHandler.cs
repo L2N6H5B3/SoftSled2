@@ -70,6 +70,30 @@ namespace SoftSled.Components.VirtualChannel {
         }
         private SoftSled.Components.AudioVisual.IMediaController _mediaController;
 
+        /// <summary>
+        /// Tear down any live RTSP media session right now — halt playback,
+        /// detach the decode pipeline, and Stop the RTSP client (which sends
+        /// RTSP TEARDOWN so the media server stops streaming). Normally this is
+        /// driven by WMC's avctrl CloseMedia / Stop, but those never arrive when
+        /// the user leaves the session locally (ESC) or closes the SoftSled
+        /// window — the RDP channel is already gone. <see cref="ExtenderSessionControl.Stop"/>
+        /// calls this BEFORE tearing down the RDP transport (whose native
+        /// dispose can block), so media audio stops immediately instead of
+        /// playing on in the background. Mirrors the CloseMedia teardown;
+        /// idempotent (a second call finds rtspClient already null and no-ops).
+        /// </summary>
+        public void ShutdownMedia() {
+            RTSPClient client = rtspClient;
+            rtspClient = null;
+            if (client == null) return;
+            m_logger?.LogInfo("AVCTRL: ShutdownMedia — stopping RTSP media session (local session end)");
+            try { _mediaController?.HaltPlaybackNow(); } catch { }
+            try { _mediaController?.AttachRtspClient(null); } catch { }
+            try { client.Stop(); } catch (Exception ex) {
+                m_logger?.LogError($"AVCTRL: ShutdownMedia rtsp stop threw: {ex.Message}");
+            }
+        }
+
         private void OnControllerBufferingEnded() {
             m_logger?.LogInfo("AVCTRL: BufferingEnded → emitting BUFFERING_STOP");
             OnMediaEvent(MediaEvent.BUFFERING_STOP, /*errorCode:*/ 0);
