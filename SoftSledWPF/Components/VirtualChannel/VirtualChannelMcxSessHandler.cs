@@ -319,16 +319,6 @@ namespace SoftSled.Components.VirtualChannel {
                     //   bytes ...    155 × scan code (u32) entries, sliced by
                     //                  the arity sequence to recover per-cmd
                     //                  keystroke shortcuts
-                    //
-                    // We don't need to ACT on this for any current code path —
-                    // SoftSled doesn't currently translate remote-control
-                    // events into WMC keystrokes. But decoding it eliminates
-                    // the previously-unknown McxSess-handle 4 from the wire
-                    // dump and documents the binding table for future work
-                    // (remote-control mapping, custom-keystroke injection,
-                    // etc.). We log a digest at INFO and the full decoded
-                    // mapping at DEBUG, then ACK with the standard
-                    // GenericOKResponse.
                     else if (dispatchFunctionHandle == 4) {
 
                         try {
