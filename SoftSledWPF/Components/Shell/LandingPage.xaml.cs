@@ -38,6 +38,8 @@ namespace SoftSledWPF.Components.Shell {
             // toggling the setting in Settings updates the label on return.
             ItemQuit.Content = config.MinimizeToTray ? "Close to tray" : "Quit";
 
+            ItemQuit.Visibility = config.ShowCloseOption ? Visibility.Visible : Visibility.Collapsed;
+
             // Ensure the menu has keyboard focus when the page appears so
             // arrow keys work without the user having to click first.
             MenuListBox.Focus();

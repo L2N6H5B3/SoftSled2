@@ -29,6 +29,7 @@ namespace SoftSled.Components.Configuration {
         public bool KeepScreenAwake = true;
         public bool CloseOnWmcClose = false;
         public bool MinimizeToTray = false;
+        public bool ShowCloseOption = true;
         public BootStartMode BootStartMode = BootStartMode.Off;
         public bool EnableHdContent = true;
         public bool EnableUiSounds = true;
