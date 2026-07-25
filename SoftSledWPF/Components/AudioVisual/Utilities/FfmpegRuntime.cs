@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Reflection;
 
-namespace SoftSled.Components.AudioVisual.VideoFpsLab {
+namespace SoftSled.Components.AudioVisual.Utilities {
 
     /// <summary>
     /// Resolves the bundled native FFmpeg DLL directory for the CURRENT

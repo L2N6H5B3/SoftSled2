@@ -3,7 +3,7 @@ using SoftSled.Components.Diagnostics;
 using System;
 using System.Runtime.InteropServices;
 
-namespace SoftSled.Components.AudioVisual.VideoFpsLab {
+namespace SoftSled.Components.AudioVisual.Utilities {
 
     /// <summary>
     /// One-frame YUV420p → BGRA colour converter, used at PRESENT time so the

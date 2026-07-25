@@ -206,21 +206,15 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
-    <Page Include="Components\AudioVisual\VideoFpsLab\VideoFpsLabWindow.xaml">
-      <Generator>MSBuild:Compile</Generator>
-      <SubType>Designer</SubType>
-    </Page>
     <Compile Include="App.xaml.cs">
       <DependentUpon>App.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Components\AudioVisual\VideoFpsLab\LibAvVideoDecoder.cs" />
-    <Compile Include="Components\AudioVisual\VideoFpsLab\LibAvVideoPushDecoder.cs" />
-    <Compile Include="Components\AudioVisual\VideoFpsLab\LiveVideoTap.cs" />
-    <Compile Include="Components\AudioVisual\VideoFpsLab\PtsFramePacer.cs" />
-    <Compile Include="Components\AudioVisual\VideoFpsLab\Yuv420ToBgra.cs" />
-    <Compile Include="Components\AudioVisual\VideoFpsLab\D3DImagePresenter.cs" />
-    <Compile Include="Components\AudioVisual\VideoFpsLab\FfmpegRuntime.cs" />
+    <Compile Include="Components\AudioVisual\Utilities\LibAvVideoPushDecoder.cs" />
+    <Compile Include="Components\AudioVisual\Utilities\PtsFramePacer.cs" />
+    <Compile Include="Components\AudioVisual\Utilities\Yuv420ToBgra.cs" />
+    <Compile Include="Components\AudioVisual\Utilities\D3DImagePresenter.cs" />
+    <Compile Include="Components\AudioVisual\Utilities\FfmpegRuntime.cs" />
     <Compile Include="Components\AudioVisual\ExternalSync\AvSyncPolicy.cs" />
     <Compile Include="Components\AudioVisual\ExternalSync\ExternalAudioFormat.cs" />
     <Compile Include="Components\AudioVisual\ExternalSync\LibAvAudioDecoder.cs" />
@@ -345,10 +339,6 @@
     </Compile>
     <Compile Include="Components\Shell\ExtenderSessionControl.xaml.cs">
       <DependentUpon>ExtenderSessionControl.xaml</DependentUpon>
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Components\AudioVisual\VideoFpsLab\VideoFpsLabWindow.xaml.cs">
-      <DependentUpon>VideoFpsLabWindow.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
   </ItemGroup>

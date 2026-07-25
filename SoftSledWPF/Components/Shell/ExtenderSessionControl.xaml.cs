@@ -76,7 +76,7 @@ namespace SoftSledWPF.Components.Shell {
         // GPU surface (D3DImage), paced to the audio clock. _videoPresenter owns
         // the D3D9Ex device + D3DImage; it's bound to VideoImage.Source.
         private SoftSled.Components.AudioVisual.ExternalSync.ExternalSyncMediaController _extSyncController;
-        private SoftSled.Components.AudioVisual.VideoFpsLab.D3DImagePresenter _videoPresenter;
+        private SoftSled.Components.AudioVisual.Utilities.D3DImagePresenter _videoPresenter;
         // Render mode (GDI vs RUI), resolved once at session start. GDI mode
         // letterboxes the RDP framebuffer (rdpDisplay, Stretch=Uniform) inside
         // the window, so the video plane must be constrained to that same
@@ -645,7 +645,7 @@ namespace SoftSledWPF.Components.Shell {
                 IntPtr hwnd = win != null
                     ? new System.Windows.Interop.WindowInteropHelper(win).Handle
                     : IntPtr.Zero;
-                _videoPresenter = new SoftSled.Components.AudioVisual.VideoFpsLab
+                _videoPresenter = new SoftSled.Components.AudioVisual.Utilities
                     .D3DImagePresenter(Dispatcher, hwnd, _avLogger);
                 VideoImage.Source = _videoPresenter.Image;
                 _extSyncController.AttachVideoPresenter(_videoPresenter);
@@ -918,7 +918,7 @@ namespace SoftSledWPF.Components.Shell {
             // ffmpeg.RootPath, which must be set process-wide before the first
             // ffmpeg call. Safe to set repeatedly.
             try {
-                string ffmpegDir = SoftSled.Components.AudioVisual.VideoFpsLab.FfmpegRuntime.NativeDir();
+                string ffmpegDir = SoftSled.Components.AudioVisual.Utilities.FfmpegRuntime.NativeDir();
                 FFmpeg.AutoGen.ffmpeg.RootPath = ffmpegDir;
                 _avLogger?.LogInfo($"[ffmpeg] RootPath set to {ffmpegDir} " +
                                    $"(exists={System.IO.Directory.Exists(ffmpegDir)})");

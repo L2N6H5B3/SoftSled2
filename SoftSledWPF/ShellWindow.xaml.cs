@@ -300,21 +300,6 @@ namespace SoftSledWPF {
                 return;
             }
 
-            // F12 opens the Video FPS Lab (libav decode + D3DImage GPU present
-            // benchmark). Dev tool — not part of the normal session flow.
-            if (e.Key == Key.F12) {
-                try {
-                    var lab = new SoftSled.Components.AudioVisual.VideoFpsLab.VideoFpsLabWindow {
-                        Owner = this
-                    };
-                    lab.Show();
-                } catch (Exception ex) {
-                    System.Diagnostics.Debug.WriteLine("[shell] FPS lab open failed: " + ex.Message);
-                }
-                e.Handled = true;
-                return;
-            }
-
             // While the live session is active, forward the key into RDP
             // BEFORE any WPF control sees it. ESC explicitly bypasses this
             // path so it acts as a "leave session" gesture; without that,

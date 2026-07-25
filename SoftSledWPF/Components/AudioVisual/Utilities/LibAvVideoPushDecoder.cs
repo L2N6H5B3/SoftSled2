@@ -6,7 +6,7 @@ using System.IO;
 using System.Reflection;
 using System.Threading;
 
-namespace SoftSled.Components.AudioVisual.VideoFpsLab {
+namespace SoftSled.Components.AudioVisual.Utilities {
 
     /// <summary>
     /// Push-fed libav video decoder: decodes raw elementary-stream packets
@@ -15,12 +15,9 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
     /// (1.5 B/px; colour conversion to BGRA is deferred to present time so the
     /// pacer buffers cheaply), and raises <see cref="OnFrame"/>.
     ///
-    /// <para>This is the live-stream counterpart of
-    /// <see cref="LibAvVideoDecoder"/> (which opens a file via avformat). It
-    /// is fed the same video MAUs the FFME producer path receives, so the
-    /// FPS Lab can benchmark the GPU present path against the *real* RTSP
-    /// workload — and it is the exact decoder a Stage-1 integration would
-    /// reuse to replace FFME.</para>
+    /// <para>This is the decoder the live playback path uses: it is fed the
+    /// video MAUs arriving from RTSP and drives the GPU present path
+    /// (<see cref="PtsFramePacer"/> → <see cref="D3DImagePresenter"/>).</para>
     ///
     /// <para>Mirrors <c>LibAvAudioDecoder</c>: a bounded queue + dedicated
     /// worker thread; <see cref="SubmitPacket"/> is safe from any thread and

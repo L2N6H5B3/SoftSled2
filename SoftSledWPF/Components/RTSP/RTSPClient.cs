@@ -291,14 +291,6 @@ namespace SoftSled.Components.RTSP {
                     Debug.WriteLine($"[ext-sync-anchor] first video MAU contentMs={eventData.ContentMs}");
                 }
 
-                // Diagnostic tap for the Video FPS Lab — forwards the video
-                // elementary stream to a libav+D3DImage benchmark consumer when
-                // one is attached. Cheap no-op (one null check) otherwise, so it
-                // stays out of the way in normal sessions.
-                if (AudioVisual.VideoFpsLab.LiveVideoTap.HasSubscribers) {
-                    AudioVisual.VideoFpsLab.LiveVideoTap.Publish(eventData.data, eventData.timestamp, _wireVideoCodec);
-                }
-
                 // External-video consumer (the libav + D3DImage player).
                 // When attached it owns video decoding + presentation, so the
                 // FFME producer branches below are skipped. Commit the wire

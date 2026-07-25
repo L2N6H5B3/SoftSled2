@@ -6,7 +6,7 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Threading;
 
-namespace SoftSled.Components.AudioVisual.VideoFpsLab {
+namespace SoftSled.Components.AudioVisual.Utilities {
 
     /// <summary>
     /// GPU video presenter for the Video FPS Lab. Backs a WPF

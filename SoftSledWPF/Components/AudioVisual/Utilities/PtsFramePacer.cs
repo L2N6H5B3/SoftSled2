@@ -5,7 +5,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 
-namespace SoftSled.Components.AudioVisual.VideoFpsLab {
+namespace SoftSled.Components.AudioVisual.Utilities {
 
     /// <summary>
     /// Jitter buffer + PTS-scheduled frame release. Decoded BGRA frames are
