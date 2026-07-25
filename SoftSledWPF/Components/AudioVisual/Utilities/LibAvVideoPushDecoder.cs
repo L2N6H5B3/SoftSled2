@@ -107,8 +107,19 @@ namespace SoftSled.Components.AudioVisual.Utilities {
         /// the pacer's decoded-frame span so the server sees our TRUE total video
         /// buffering — otherwise the backpressure backlog is invisible, the server
         /// thinks we're empty and floods a burst, the backlog balloons, then it
-        /// over-corrects and stalls (delivery oscillates → freeze + desync).</summary>
-        public int InputQueuedMs => _queue.Count * 40;  // ~25 fps content
+        /// over-corrects and stalls (delivery oscillates → freeze + desync).
+        ///
+        /// <para>Scaled by the stream's REAL frame duration, not a fixed 40 ms.
+        /// The old 25 fps assumption DOUBLED the reported backlog on 50 fps
+        /// content (log softsled-20260725-193615: a 251-packet queue reported as
+        /// ~10 s of video when it held ~5 s), so the server saw a full buffer and
+        /// throttled video delivery to 6–11 fps at the very moment the decoder was
+        /// already behind — deepening the starvation instead of relieving it.</para></summary>
+        public int InputQueuedMs => _queue.Count * _msPerPacket;
+
+        // Per-MAU duration in ms, from the decoder's detected frame rate (set on
+        // the first decoded frame). 40 ms (25 fps) until then.
+        private volatile int _msPerPacket = 40;
 
         // Set by Flush() (any thread); honoured on the worker thread before the
         // next decode. Seek/trick-play uses it to drop stale pre-seek frames.
@@ -367,6 +378,10 @@ namespace SoftSled.Components.AudioVisual.Utilities {
                 _reorderDiagDone = true;
                 double fps = _ctx->framerate.den != 0 ? (double)_ctx->framerate.num / _ctx->framerate.den : 0;
                 long frameDur = fps > 0 ? (long)(1000.0 / fps) : 0;
+                // Feed the real frame duration to InputQueuedMs so the video BFR
+                // reports the TRUE coded backlog (see there) — a 50 fps stream was
+                // otherwise reported as twice its actual buffering.
+                if (frameDur > 0 && frameDur <= 1000) _msPerPacket = (int)frameDur;
                 // pktsBufferedBeforeFirst = reorder depth in packets; ×frameDur ≈ the
                 // display latency the reorder adds. decodeOrderRtp non-monotonic ⇒
                 // B-frames present (their count/pattern = the reorder structure).

@@ -330,6 +330,21 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// this stays false until the post-seek RTP-Info has been parsed (so we
         /// discard pre-seek in-flight MAUs), with a timeout fallback so we never
         /// stall forever if the server doesn't re-send RTP-Info.</summary>
+        /// <summary>Shut the anchor gate for an upcoming position change, so no
+        /// MAU or decoded frame can latch a sync anchor until this position's own
+        /// RTP-Info has been parsed.
+        ///
+        /// <para>MUST be called BEFORE the PLAY/SetRate that performs the change:
+        /// the request is synchronous and parsing its response already bumps
+        /// <see cref="SoftSled.Components.RTSP.RTSPClient.RtpInfoGeneration"/>, so
+        /// arming afterwards would demand generation+1 — a value that never
+        /// arrives — leaving the gate shut until the timeout fallback and throwing
+        /// away seconds of audio in the meantime.</para></summary>
+        private void ArmAnchorGate() {
+            Interlocked.Exchange(ref _anchorMinRtpInfoGen, (_rtsp?.RtpInfoGeneration ?? 0) + 1);
+            _seekGateTick = Environment.TickCount;
+        }
+
         private bool AnchorGateOpen() {
             long min = Interlocked.Read(ref _anchorMinRtpInfoGen);
             if (min <= 0) return true;                                  // no seek gate (initial play)
@@ -934,10 +949,28 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                     // which is why FF is clean and a seek wasn't.
                     try { _renderer?.Pause(); } catch { }
                 }
+                // Re-baseline BEFORE the PLAY, not after. The PLAY is synchronous
+                // (it returns once the response — and its RTP-Info — has been
+                // parsed), and parsing RTP-Info BUMPS RtpInfoGeneration. Doing the
+                // re-baseline afterwards broke the anchor gate two ways (both seen
+                // in log softsled-20260725-193615, seek at 19:39:51):
+                //   • the gate was armed at (already-bumped gen)+1, a generation
+                //     that never arrives → it stayed shut for the full 3s timeout,
+                //     discarding ~3.3s of audio and injecting a 4013ms silence gap;
+                //   • the anchors were cleared while the gate was still open (it is
+                //     0 = open on the initial play), so a stale PRE-seek decoded
+                //     frame latched the video sync origin (ptsMs=231776, the last
+                //     pre-seek frame) while the pacer anchored a post-seek pts0
+                //     (238851) — a 7s origin mismatch that made the computed offset
+                //     10251ms instead of ~0 and desynced playback for good.
+                // Re-baselining first arms the gate against the PRE-PLAY generation
+                // and purges the pipeline while the gate is still shut, so the gate
+                // opens exactly when this seek's RTP-Info lands — with nothing stale
+                // left to latch.
+                ReBaselineSync($"seek to {(long)position.TotalMilliseconds}ms");
                 _rtsp?.Play(startMs: (long)position.TotalMilliseconds, rate: _lastRequestedRate);
             } catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP seek failed: {ex.Message}"); }
 
-            ReBaselineSync($"seek to {(long)position.TotalMilliseconds}ms");
             // Resume the device now that the clean segment-start is captured.
             if (_isOpen && _playRequested) { try { _renderer?.Play(); } catch { } }
             return Task.CompletedTask;
@@ -971,6 +1004,15 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // captured from the first DECODED frame (see the decoder OnFrame
             // handler) so it matches the pacer's pts0 anchor — the earlier erratic
             // -2465/-873/+4066 values came from using the first ARRIVED MAU.
+            //
+            // SHUT THE ANCHOR GATE FIRST — before clearing the anchors below.
+            // Clearing them while the gate is still open leaves a window in which
+            // a stale pre-seek decoded frame can latch the video sync origin (the
+            // decoder emits in bursts while draining its backlog, so the window is
+            // hit in practice — see the SeekAsync note). Callers must invoke this
+            // BEFORE sending the PLAY so the generation snapshot is the pre-PLAY
+            // one and the gate reopens on this position's own RTP-Info.
+            ArmAnchorGate();
             _syncFinalized = false;
             Interlocked.Exchange(ref _firstAudioMauRtpRaw, -1L);
             Interlocked.Exchange(ref _firstVideoMauRtpRaw, -1L);
@@ -983,8 +1025,6 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             Interlocked.Exchange(ref _resumePtsShiftMs, 0L);
             Interlocked.Exchange(ref _pauseStartMs, -1L);
             ResetContentRefs();   // new position = new content anchors
-            Interlocked.Exchange(ref _anchorMinRtpInfoGen, (_rtsp?.RtpInfoGeneration ?? 0) + 1);
-            _seekGateTick = Environment.TickCount;
             // The estimator still runs for diagnostics; reset it so its logged
             // fit restarts cleanly at the new position (we don't act on it).
             try { _rtsp?.ResetCorrespondenceEstimator(); } catch { }
@@ -1024,6 +1064,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// the two can still evolve independently.</para>
         /// </summary>
         private void ReanchorAfterTrickPlay() {
+            // Gate first, then clear the anchors — same ordering requirement as
+            // ReBaselineSync (see there); the caller invokes this BEFORE the
+            // rate-change PLAY so the gate reopens on the new RTP-Info.
+            ArmAnchorGate();
             _syncFinalized = false;
             Interlocked.Exchange(ref _firstAudioMauRtpRaw, -1L);
             Interlocked.Exchange(ref _firstVideoMauRtpRaw, -1L);
@@ -1036,8 +1080,6 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             Interlocked.Exchange(ref _resumePtsShiftMs, 0L);
             Interlocked.Exchange(ref _pauseStartMs, -1L);
             ResetContentRefs();   // new position = new content anchors
-            Interlocked.Exchange(ref _anchorMinRtpInfoGen, (_rtsp?.RtpInfoGeneration ?? 0) + 1);
-            _seekGateTick = Environment.TickCount;
             try { _rtsp?.ResetCorrespondenceEstimator(); } catch { }
             // Drop the trick-play audio backlog (deep coded queue + PCM buffer)
             // and stale video frames so 1× resumes from the new position without
@@ -1082,8 +1124,6 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 try { _renderer?.Pause(); } catch { }
                 try { _decoder?.Pause(); } catch { }
             }
-            try { _rtsp?.SetRate(rate); }
-            catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP SetRate({rate}) failed: {ex.Message}"); }
             // Reaching here with normal=true means we were in trick play (prev
             // rate ≠ 1×) and are returning to 1× — that lands at a NEW position
             // with NEW RTP-Info, so re-anchor the timeline and RECOMPUTE the
@@ -1092,11 +1132,20 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // path (NOT ReBaselineSync) so it can evolve independently of
             // seek/resume. Entering trick play (rate≠1) needs nothing — the
             // pacer is free-run and ignores the offset.
+            //
+            // Re-anchor BEFORE SetRate (which sends the PLAY and parses its
+            // RTP-Info): arming the gate afterwards would key it to an
+            // already-bumped generation and it would never reopen except by
+            // timeout — the seek-path bug documented in SeekAsync/ArmAnchorGate.
             if (normal) {
                 // Returning to 1×: re-anchor (flushes the stale reservoir + clears
-                // the PCM buffer), then resume audio decode + playback so the new
-                // 1× audio streams in fresh.
+                // the PCM buffer) so the new 1× audio/video streams in fresh.
                 ReanchorAfterTrickPlay();
+            }
+            try { _rtsp?.SetRate(rate); }
+            catch (Exception ex) { _log?.LogError($"[ext-sync] RTSP SetRate({rate}) failed: {ex.Message}"); }
+            if (normal) {
+                // Resume audio decode + playback now the pipeline is clean.
                 try { _decoder?.Resume(); } catch { }
                 if (_playRequested) { try { _renderer?.Play(); } catch { } }
             }
