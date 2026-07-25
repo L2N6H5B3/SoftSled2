@@ -226,12 +226,12 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                         }));
                         if (_paced) {
                             var pacer = _pacer;
-                            d.OnFrame += (ptr, stride, w, h, ptsMs) => pacer?.Submit(ptr, stride, w, h, ptsMs);
+                            d.OnFrame += (ptr, stride, w, h, ptsMs, colorspace, range) => pacer?.Submit(ptr, stride, w, h, ptsMs, colorspace, range);
                         } else {
                             _liveConverter = new Yuv420ToBgra(_log);
                             var conv = _liveConverter;
-                            d.OnFrame += (ptr, stride, w, h, ptsMs) => {
-                                IntPtr bgra = conv.Convert(ptr, w, h);
+                            d.OnFrame += (ptr, stride, w, h, ptsMs, colorspace, range) => {
+                                IntPtr bgra = conv.Convert(ptr, w, h, colorspace, range);
                                 if (bgra != IntPtr.Zero) _presenter?.SubmitFrame(bgra, conv.Stride, w, h);
                             };
                         }

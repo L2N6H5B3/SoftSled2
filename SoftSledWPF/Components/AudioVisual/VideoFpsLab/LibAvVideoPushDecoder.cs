@@ -131,12 +131,16 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         public event Action<int, int> OnFormatReady;
 
         /// <summary>Per decoded frame: (yuv420pPtr, lumaStride, width, height,
-        /// ptsMs). The pointer is packed yuv420p (Y w*h, then U/V cw*ch, tight
-        /// strides); lumaStride == width. ptsMs is the frame's presentation time
-        /// in milliseconds, derived from the wire RTP timestamp via the stream
-        /// clock — used by the pacer to schedule presentation. Convert to BGRA at
-        /// present time via <see cref="Yuv420ToBgra"/>.</summary>
-        public event Action<IntPtr, int, int, int, long> OnFrame;
+        /// ptsMs, colorspace, colorRange). The pointer is packed yuv420p (Y w*h,
+        /// then U/V cw*ch, tight strides); lumaStride == width. ptsMs is the
+        /// frame's presentation time in milliseconds, derived from the wire RTP
+        /// timestamp via the stream clock — used by the pacer to schedule
+        /// presentation. colorspace is the source frame's AVColorSpace and
+        /// colorRange its AVColorRange (as ints) so the deferred YUV→BGRA
+        /// conversion (<see cref="Yuv420ToBgra"/>) can pick the correct matrix
+        /// (BT.709 for HD, BT.601 for SD) and range instead of swscale's BT.601
+        /// default — otherwise HD H.264 (BT.709) renders with shifted colour.</summary>
+        public event Action<IntPtr, int, int, int, long, int, int> OnFrame;
 
         public LibAvVideoPushDecoder(AVCodecID codecId, int clockHz, Logger log) {
             _codecId = codecId;
@@ -195,9 +199,21 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             if (_disposed || data == null || data.Length == 0) return;
             Interlocked.Increment(ref _statPktsIn);
             if (!_queue.TryAdd(new QueuedPacket { Data = data, RtpTs = rtpTs })) {
-                if (_queue.TryTake(out _)) _queue.TryAdd(new QueuedPacket { Data = data, RtpTs = rtpTs });
+                // Queue saturated (backpressure + the BFR occupancy report should
+                // prevent this — a full 2048-deep queue is ~80 s of coded video).
+                // Drop the INCOMING packet rather than pulling one off the decode
+                // head: removing the head punches a hole right where the decoder
+                // is about to read and could discard an imminent IDR, corrupting
+                // decode until the next one. Dropping the newest keeps the queued
+                // run contiguous so the decoder keeps making clean progress; only
+                // the tail loses packets, and delivery recovers once it drains.
+                long n = Interlocked.Increment(ref _queueFullDrops);
+                if ((n & 0x3F) == 1)
+                    _log?.LogError($"[libav-vpush] input queue full (depth={_queue.Count}) — " +
+                                   $"dropping incoming packet (total {n}); decoder can't keep up / backpressure stuck");
             }
         }
+        private long _queueFullDrops;
 
         public void Complete() { try { _queue.CompleteAdding(); } catch { } }
 
@@ -378,6 +394,15 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             int cw = (w + 1) / 2, ch = (h + 1) / 2;
             int cSize = cw * ch;
 
+            // Colour metadata for the deferred YUV→BGRA conversion. The matrix
+            // (colorspace) is preserved by both packing paths; the effective
+            // sample RANGE differs: the fast path copies the source planes
+            // verbatim (so its range is the source frame's), while the swscale
+            // normalise path below writes limited-range (MPEG) yuv420p regardless
+            // of the source (full-range yuvj is scaled down to limited).
+            int csp = (int)frame->colorspace;
+            int rng;
+
             fixed (byte* dst = _packed) {
                 if ((AVPixelFormat)frame->format == AVPixelFormat.AV_PIX_FMT_YUV420P) {
                     // Fast path: planes already in our target layout — straight
@@ -386,6 +411,7 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                     ffmpeg.av_image_copy_plane(dst,                 w,  frame->data[0], frame->linesize[0], w,  h);
                     ffmpeg.av_image_copy_plane(dst + ySize,         cw, frame->data[1], frame->linesize[1], cw, ch);
                     ffmpeg.av_image_copy_plane(dst + ySize + cSize, cw, frame->data[2], frame->linesize[2], cw, ch);
+                    rng = (int)frame->color_range;   // preserved verbatim
                 } else {
                     // Any other format (incl. full-range yuvj420p): normalise to
                     // yuv420p via swscale, writing directly into the packed buffer.
@@ -399,11 +425,12 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                     dstLines[1] = cw;
                     dstLines[2] = cw;
                     ffmpeg.sws_scale(_sws, frame->data, frame->linesize, 0, h, dstData, dstLines);
+                    rng = (int)AVColorRange.AVCOL_RANGE_MPEG;   // sws output is limited
                 }
                 Interlocked.Increment(ref _framesDecoded);
                 // stride param carries the luma stride (= width); the pacer derives
                 // the chroma plane geometry from width/height.
-                try { OnFrame?.Invoke((IntPtr)dst, w, w, h, ptsMs); }
+                try { OnFrame?.Invoke((IntPtr)dst, w, w, h, ptsMs, csp, rng); }
                 catch (Exception ex) { _log?.LogError($"[libav-vpush] OnFrame threw: {ex.Message}"); }
             }
         }

@@ -167,34 +167,36 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                     if (_surface == null) return;
                 }
 
-                // Copy staging → D3D9 surface, honouring the surface pitch.
-                var dr = _surface.LockRectangle(LockFlags.None);
+                // WPF D3DImage contract: the back-buffer surface may be modified
+                // ONLY while the D3DImage is locked (Lock…AddDirtyRect…Unlock).
+                // Writing it outside that bracket (as this did previously) races
+                // the compositor's read of the surface and can tear, so the
+                // surface copy AND the dirty-rect are now issued inside one lock.
+                if (!Image.IsFrontBufferAvailable) return; // can't present; retry on next submit (_frameDirty stays set)
+                Image.Lock();
                 try {
-                    lock (_gate) {
-                        if (dr.Pitch == stride) {
-                            Marshal.Copy(_staging, 0, dr.DataPointer, stride * h);
-                        } else {
-                            for (int y = 0; y < h; y++) {
-                                Marshal.Copy(_staging, y * stride,
-                                             IntPtr.Add(dr.DataPointer, y * dr.Pitch),
-                                             stride);
-                            }
-                        }
-                        _frameDirty = false;
-                    }
-                } finally {
-                    _surface.UnlockRectangle();
-                }
-
-                // Tell WPF the GPU surface changed.
-                if (Image.IsFrontBufferAvailable) {
-                    Image.Lock();
+                    var dr = _surface.LockRectangle(LockFlags.None);
                     try {
-                        Image.AddDirtyRect(new Int32Rect(0, 0, w, h));
+                        lock (_gate) {
+                            if (!_frameDirty || _staging == null) return; // blanked/raced away
+                            if (dr.Pitch == stride) {
+                                Marshal.Copy(_staging, 0, dr.DataPointer, stride * h);
+                            } else {
+                                for (int y = 0; y < h; y++) {
+                                    Marshal.Copy(_staging, y * stride,
+                                                 IntPtr.Add(dr.DataPointer, y * dr.Pitch),
+                                                 stride);
+                                }
+                            }
+                            _frameDirty = false;
+                        }
                     } finally {
-                        Image.Unlock();
+                        _surface.UnlockRectangle();
                     }
+                    Image.AddDirtyRect(new Int32Rect(0, 0, w, h));
                     System.Threading.Interlocked.Increment(ref _framesPresented);
+                } finally {
+                    Image.Unlock();
                 }
             } catch (Exception ex) {
                 _log?.LogError($"[d3dimg] present failed: {ex.Message}");
@@ -252,25 +254,29 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                 // the old image after we've blanked.
                 lock (_gate) { _frameDirty = false; _staging = null; _w = _h = _stride = 0; }
 
-                var dr = _surface.LockRectangle(LockFlags.None);
+                // Same D3DImage contract as DoPresent: write the surface only
+                // inside Image.Lock…Unlock so the compositor never reads a
+                // half-cleared surface.
+                if (!Image.IsFrontBufferAvailable) return;
+                Image.Lock();
                 try {
-                    // A8R8G8B8 opaque black: B=G=R=0, A=0xFF. Alpha is the 4th
-                    // byte of each BGRA pixel. Build one row (full pitch) and
-                    // copy it to every scanline.
-                    int pitch = dr.Pitch;
-                    byte[] row = new byte[pitch];
-                    for (int i = 3; i < pitch; i += 4) row[i] = 0xFF;
-                    for (int y = 0; y < _surfaceH; y++) {
-                        Marshal.Copy(row, 0, IntPtr.Add(dr.DataPointer, y * pitch), pitch);
+                    var dr = _surface.LockRectangle(LockFlags.None);
+                    try {
+                        // A8R8G8B8 opaque black: B=G=R=0, A=0xFF. Alpha is the 4th
+                        // byte of each BGRA pixel. Build one row (full pitch) and
+                        // copy it to every scanline.
+                        int pitch = dr.Pitch;
+                        byte[] row = new byte[pitch];
+                        for (int i = 3; i < pitch; i += 4) row[i] = 0xFF;
+                        for (int y = 0; y < _surfaceH; y++) {
+                            Marshal.Copy(row, 0, IntPtr.Add(dr.DataPointer, y * pitch), pitch);
+                        }
+                    } finally {
+                        _surface.UnlockRectangle();
                     }
+                    Image.AddDirtyRect(new Int32Rect(0, 0, _surfaceW, _surfaceH));
                 } finally {
-                    _surface.UnlockRectangle();
-                }
-
-                if (Image.IsFrontBufferAvailable) {
-                    Image.Lock();
-                    try { Image.AddDirtyRect(new Int32Rect(0, 0, _surfaceW, _surfaceH)); }
-                    finally { Image.Unlock(); }
+                    Image.Unlock();
                 }
                 _log?.LogInfo("[d3dimg] surface blanked to black (media closed)");
             } catch (Exception ex) {

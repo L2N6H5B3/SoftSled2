@@ -36,9 +36,18 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         private int _maxBufferMs;
         // Upper bound on the buffer so a pathological offset can't blow up
         // memory. Frames are buffered as packed yuv420p (~3 MB each at 1080p,
-        // vs ~8 MB for BGRA) so 8 s at 1080p25 ≈ 600 MB worst case (was ~1.66 GB
-        // pre-YUV). The good 4 s-jitter session already ran a 6 s buffer fine.
-        private const int MaxBufferHardCapMs = 8000;
+        // vs ~8 MB for BGRA) so 10 s at 1080p25 ≈ 750 MB worst case (was ~1.66 GB
+        // pre-YUV). Sized to cover the largest REALISTIC content offset: the
+        // buffer must hold preroll + 2000 + |offset| (see SizeBufferForOffset),
+        // and observed long-GOP I-frame lead-ins reach ~6.2 s → need ~8.45 s. At
+        // 8 s the buffer couldn't hold those and dropped a frame every cycle
+        // (judder); 10 s covers offsets up to ~7.75 s. Offsets beyond that (the
+        // controller accepts up to MaxPlausibleContentOffsetMs = 15 s) still
+        // exceed the cap and drop frames — logged in SizeBufferForOffset — but
+        // holding 15 s of decoded video (~1.3 GB) is impractical, especially on
+        // the 32-bit build, so the cap deliberately trades those rare extremes
+        // for a bounded footprint.
+        private const int MaxBufferHardCapMs = 10000;
 
         public int PrerollMs => _prerollMs;
 
@@ -242,8 +251,11 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         /// the caller's decode buffer can be reused immediately; the frame is
         /// colour-converted to BGRA only when it is later released to the screen.
         /// <paramref name="stride"/> is the luma stride (= width); the packed
-        /// size is derived from width/height.</summary>
-        public void Submit(IntPtr src, int stride, int w, int h, long ptsMs) {
+        /// size is derived from width/height. <paramref name="colorspace"/> /
+        /// <paramref name="range"/> are the source frame's AVColorSpace /
+        /// AVColorRange, carried to the deferred YUV→BGRA conversion so it picks
+        /// the right matrix (BT.709 HD / BT.601 SD).</summary>
+        public void Submit(IntPtr src, int stride, int w, int h, long ptsMs, int colorspace, int range) {
             if (_disposed || src == IntPtr.Zero || w <= 0 || h <= 0) return;
             int need = Yuv420Size(w, h);
             lock (_gate) {
@@ -269,7 +281,8 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                 byte[] buf = (_pool.Count > 0 && _pool.Peek().Length >= need)
                              ? _pool.Pop() : new byte[need];
                 Marshal.Copy(src, buf, 0, need);
-                _queue.Enqueue(new Frame { Buf = buf, Stride = stride, W = w, H = h, PtsMs = ptsMs });
+                _queue.Enqueue(new Frame { Buf = buf, Stride = stride, W = w, H = h, PtsMs = ptsMs,
+                                           Colorspace = colorspace, Range = range });
                 _bufBytes += need;
 
                 // Free-run / self-clocked: keep latest-wins by dropping oldest
@@ -440,7 +453,7 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
                         // only needs to last for the conversion (which reads the
                         // pinned YUV); _present then copies the BGRA scratch
                         // synchronously (D3D SubmitFrame copies into its staging).
-                        IntPtr bgra = _converter.Convert(gch.AddrOfPinnedObject(), f.W, f.H);
+                        IntPtr bgra = _converter.Convert(gch.AddrOfPinnedObject(), f.W, f.H, f.Colorspace, f.Range);
                         if (bgra != IntPtr.Zero) {
                             _present(bgra, _converter.Stride, f.W, f.H);
                         }
@@ -478,7 +491,10 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
         }
 
         private void RecordRelease() {
-            double now = _wall?.Elapsed.TotalMilliseconds ?? 0;
+            // Use the always-running diagnostic clock, not _wall: _wall is only
+            // started in self-clocked (lab) mode, so in audio-slaved (production)
+            // mode it is null and the release-gap metric silently stayed 0.
+            double now = _diagClock.Elapsed.TotalMilliseconds;
             lock (_gate) {
                 if (_lastReleaseMs >= 0) {
                     double gap = now - _lastReleaseMs;
@@ -514,6 +530,7 @@ namespace SoftSled.Components.AudioVisual.VideoFpsLab {
             public byte[] Buf;
             public int Stride, W, H;
             public long PtsMs;
+            public int Colorspace, Range;   // source AVColorSpace / AVColorRange
         }
     }
 }

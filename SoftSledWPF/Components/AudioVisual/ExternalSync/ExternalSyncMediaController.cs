@@ -512,7 +512,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                     var p = _pacer;
                     return p != null && p.BufferedMs >= p.BackpressureTargetMs;
                 };
-                d.OnFrame += (ptr, stride, w, h, ptsMs) => {
+                d.OnFrame += (ptr, stride, w, h, ptsMs, colorspace, range) => {
                     // Capture the VIDEO sync origin from the first DECODED frame,
                     // NOT the first ARRIVED MAU (that was done in OnVideoMau). The
                     // pacer anchors pts0 on the first decoded frame; post-seek the
@@ -538,7 +538,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                             if (!_syncFinalized) UpdateSyncOffset();
                         }
                     }
-                    _pacer?.Submit(ptr, stride, w, h, ptsMs);
+                    _pacer?.Submit(ptr, stride, w, h, ptsMs, colorspace, range);
                 };
                 try {
                     d.Start();
