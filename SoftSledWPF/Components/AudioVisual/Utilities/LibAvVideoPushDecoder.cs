@@ -129,6 +129,8 @@ namespace SoftSled.Components.AudioVisual.Utilities {
         // Reveals whether the video is UNDER-DELIVERED (arrival < source fps) —
         // the cause of the slow jitter-buffer drain → starvation → audio-leads.
         private long _statPktsIn;
+        private long _statBytesIn;
+        private long _lastStatBytes;
         private readonly System.Diagnostics.Stopwatch _statClock = System.Diagnostics.Stopwatch.StartNew();
         private long _lastStatMs;
         private long _lastStatPkts;
@@ -206,6 +208,7 @@ namespace SoftSled.Components.AudioVisual.Utilities {
         public void SubmitPacket(byte[] data, uint rtpTs) {
             if (_disposed || data == null || data.Length == 0) return;
             Interlocked.Increment(ref _statPktsIn);
+            Interlocked.Add(ref _statBytesIn, data.Length);
             if (!_queue.TryAdd(new QueuedPacket { Data = data, RtpTs = rtpTs })) {
                 // Queue saturated (backpressure + the BFR occupancy report should
                 // prevent this — a full 2048-deep queue is ~80 s of coded video).
@@ -301,15 +304,26 @@ namespace SoftSled.Components.AudioVisual.Utilities {
             long win = now - _lastStatMs;
             if (win < 1000) return;
             long pkts = Interlocked.Read(ref _statPktsIn);
+            long bytes = Interlocked.Read(ref _statBytesIn);
             long frames = Interlocked.Read(ref _framesDecoded);
             long dPkts = pkts - _lastStatPkts;
+            long dBytes = bytes - _lastStatBytes;
             long dFrames = frames - _lastStatFrames;
-            _lastStatMs = now; _lastStatPkts = pkts; _lastStatFrames = frames;
+            _lastStatMs = now; _lastStatPkts = pkts; _lastStatBytes = bytes; _lastStatFrames = frames;
             double arrFps = dPkts * 1000.0 / win;
             double decFps = dFrames * 1000.0 / win;
-            _log.LogInfo($"[libav-vpush] stats: pktsIn={dPkts} framesOut={dFrames} window={win}ms " +
-                         $"→ arrival={arrFps:F1}fps decode={decFps:F1}fps ({arrFps / 25.0 * 100:F0}% of 25fps) " +
-                         $"queueDepth={_queue.Count}");
+            // bytesIn/kbps answer the question the fps figures cannot: when decode
+            // falls behind, did the STREAM get heavier (server changed bitrate —
+            // e.g. a recording starting on the tuned live channel) or did WE get
+            // slower (CPU)? Rising kbps with falling decode fps = the former;
+            // flat kbps with falling decode fps = the latter.
+            double kbps = dBytes * 8.0 / win;                       // bytes/ms*8 = kbit/s
+            double srcFps = _msPerPacket > 0 ? 1000.0 / _msPerPacket : 25.0;
+            _log.LogInfo($"[libav-vpush] stats: pktsIn={dPkts} bytesIn={dBytes} ({kbps:F0}kbps) " +
+                         $"framesOut={dFrames} window={win}ms " +
+                         $"→ arrival={arrFps:F1}fps decode={decFps:F1}fps " +
+                         $"({decFps / srcFps * 100:F0}% of source {srcFps:F0}fps) " +
+                         $"avgPkt={(dPkts > 0 ? dBytes / dPkts : 0)}B queueDepth={_queue.Count}");
         }
 
         private void SendPacket(AVPacket* pkt, QueuedPacket qp) {

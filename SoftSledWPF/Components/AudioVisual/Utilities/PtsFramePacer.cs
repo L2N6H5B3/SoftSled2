@@ -228,6 +228,15 @@ namespace SoftSled.Components.AudioVisual.Utilities {
         /// and master→audible latencies).</summary>
         public long LastReleasedElapsedMs { get { lock (_gate) { return _lastReleasedElapsed; } } }
 
+        /// <summary>STAGE A (content-clock migration): ABSOLUTE pts (ms) of the
+        /// most recently released frame — not anchor-relative like
+        /// <see cref="LastReleasedElapsedMs"/>. The shadow comparison needs the
+        /// raw wire pts so it can be converted to content time independently of
+        /// pts0/anchor, which is exactly the machinery under evaluation.
+        /// long.MinValue until the first release.</summary>
+        public long LastReleasedPtsMs { get { lock (_gate) { return _lastReleasedPts; } } }
+        private long _lastReleasedPts = long.MinValue;
+
         /// <summary>Largest gap (ms) between consecutive released frames since
         /// the last read. Reading resets it. Ideal ≈ the frame period (~40 ms).</summary>
         public double ReadMaxReleaseGapMs() {
@@ -435,7 +444,10 @@ namespace SoftSled.Components.AudioVisual.Utilities {
                                 _bufBytes -= f.Buf.Length;
                                 due = f;
                             }
-                            if (due != null) _lastReleasedElapsed = due.Value.PtsMs - _pts0;
+                            if (due != null) {
+                                _lastReleasedElapsed = due.Value.PtsMs - _pts0;
+                                _lastReleasedPts = due.Value.PtsMs;   // Stage A shadow
+                            }
                         }
 
                         // elapsed is only computed in this branch; the rest of

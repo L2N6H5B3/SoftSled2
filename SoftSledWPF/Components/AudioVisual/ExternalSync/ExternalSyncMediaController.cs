@@ -1,4 +1,4 @@
-using FFmpeg.AutoGen;
+﻿using FFmpeg.AutoGen;
 using SoftSled.Components.AudioVisual;
 using SoftSled.Components.AudioVisual.Utilities;
 using SoftSled.Components.Diagnostics;
@@ -183,6 +183,8 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // status) once at startup. Diagnostic only — proves the module loads
             // and shows which fixtures still need ground truth.
             try { _log?.LogInfo("[av-policy] " + AvSyncPolicy.SelfTest().Replace("\n", " | ")); } catch { }
+            _audContentDiag.Attach(log);
+            _vidContentDiag.Attach(log);
         }
 
         /// <summary>Bind the session-owned GPU presenter. Must be called before
@@ -355,6 +357,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
 
         private void OnAudioMau(byte[] data, uint rtpTs, long contentMs) {
             if (_decoder == null) return;
+            // Content-clock survey BEFORE the anchor gate, so gated (discarded)
+            // MAUs are surveyed too — whether the content clock keeps running
+            // through a gate closure is exactly what we need to know.
+            _audContentDiag.Sample(contentMs, (long)rtpTs * 1000L / _audioClockHz);
             // Discard pre-seek in-flight MAUs until the post-seek RTP-Info lands.
             if (Interlocked.Read(ref _firstAudioMauRtpRaw) < 0 && !AnchorGateOpen()) return;
             long ptsMs = (long)rtpTs * 1000L / _audioClockHz;
@@ -375,7 +381,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 _log?.LogDebug($"[ext-sync-anchor] first audio MAU rtpTs={rtpTs} ({ptsMs}ms, clk={_audioClockHz})");
                 UpdateSyncOffset();
             }
-            _decoder.SubmitPacket(data, ptsMs);
+            _decoder.SubmitPacket(data, ptsMs, CurrentEpoch);
         }
 
         private void OnDecoderFormatReady() {
@@ -414,8 +420,8 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             }
         }
 
-        private void OnDecodedPcm(byte[] pcm, int len, long ptsMs) {
-            _renderer?.WritePcm(pcm, len, ptsMs);
+        private void OnDecodedPcm(byte[] pcm, int len, long ptsMs, long epoch) {
+            _renderer?.WritePcm(pcm, len, ptsMs, epoch);
         }
 
         /// <summary>Rate-limited view of the audio master clock for video pacing.
@@ -575,6 +581,8 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // the pacer's pts0 anchor), NOT here — the first ARRIVED MAU is often
             // a non-decodable P/B frame that the decoder skips, so anchoring the
             // offset here used a different origin than the pacer and skewed sync.
+            // Content-clock survey BEFORE the gate — see OnAudioMau.
+            _vidContentDiag.Sample(contentMs, (long)rtpTs * 1000L / _videoClockHz);
             if (Interlocked.Read(ref _firstVideoMauRtpRaw) < 0 && !AnchorGateOpen()) return;
             // Cancel any accumulated pause/resume Send-Time jump (see
             // _resumePtsShiftMs) at the source. The decoder derives PTS from the
@@ -609,6 +617,134 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             _videoDecoder?.SubmitPacket(data, rtpTs);
         }
         private int _videoMauDiagCount;
+
+        // ---- Content-clock survey (B57/NPT viability study) -------------------
+        // Establishes whether the shared file-global content clock is solid
+        // enough to DRIVE playback directly (releasing video against the audible
+        // audio content time), which would remove the derived cross-stream offset
+        // — and with it the whole re-derive-on-discontinuity machinery that
+        // mishandled WMC's unattended mid-stream reposition.
+        //
+        // Today only the FIRST content-carrying MAU per position is ever read, so
+        // nothing proves the steady-state case. The three things that decide it:
+        //   1. COVERAGE — is contentMs on every MAU of both streams, or sparse?
+        //      A sparse clock needs a hold-last + interpolate fallback.
+        //   2. CONTINUITY — does it advance monotonically and 1:1 with real time,
+        //      including across a dropout/reposition (where the wire Send-Time
+        //      clock demonstrably jumps: +7075ms in log 20260725-193615)?
+        //   3. CROSS-STREAM AGREEMENT — do audio and video content clocks stay on
+        //      one timeline, or drift apart over a long session?
+        // Drift (content − wire) is the headline number: constant drift means the
+        // two clocks advance together and the content clock is trustworthy; a
+        // STEP in drift is exactly a Send-Time discontinuity that the content
+        // clock rode through correctly (the behaviour we're betting on).
+        private readonly ContentClockDiag _audContentDiag = new ContentClockDiag("audio");
+        private readonly ContentClockDiag _vidContentDiag = new ContentClockDiag("video");
+
+        private sealed class ContentClockDiag {
+            private readonly string _name;
+            private readonly object _gate = new object();
+            private Logger _log;
+            private long _seen, _withContent, _absent, _backwards, _driftSteps;
+            private long _lastContent = long.MinValue, _lastWire = long.MinValue;
+            private long _winContentAdv, _winWireAdv, _winSeen, _winWithContent;
+            private long _lastDrift = long.MinValue;
+            private int  _lastLogTick;
+            private int  _detail, _absentLogged, _stepLogged;
+            private const int DetailSamples = 8;     // full dump of the opening MAUs
+            private const int LogEveryMs    = 5000;
+
+            public ContentClockDiag(string name) { _name = name; }
+            public void Attach(Logger log) { lock (_gate) { _log = log; } }
+
+            /// <summary>STAGE A: current (content − wire) for this stream, or
+            /// long.MinValue before the first content-carrying MAU. Measured
+            /// constant within a position and stepping only at genuine
+            /// discontinuities, so it converts a wire ms to content ms:
+            /// <c>contentMs = wireMs + CurrentDriftMs</c>. This is the shadow
+            /// stand-in for Stage B's per-MAU plumbing — it needs no changes to
+            /// the decode path, so Stage A stays behaviour-free.</summary>
+            public long CurrentDriftMs { get { lock (_gate) { return _lastDrift; } } }
+
+            /// <summary>STAGE A: most recent content time seen on the wire for
+            /// this stream (long.MinValue until the first sample).</summary>
+            public long LastContentMs { get { lock (_gate) { return _lastContent; } } }
+
+            /// <summary>Reset the run-state (not the totals) — call on a position
+            /// change so a legitimate reposition isn't counted as a fault.</summary>
+            public void MarkDiscontinuity(string reason) {
+                lock (_gate) {
+                    _lastContent = long.MinValue; _lastWire = long.MinValue;
+                    _lastDrift = long.MinValue;
+                    _log?.LogInfo($"[content-clock] {_name}: discontinuity expected ({reason}) — run-state reset");
+                }
+            }
+
+            public void Sample(long contentMs, long wireMs) {
+                Logger log;
+                string line = null;
+                lock (_gate) {
+                    log = _log;
+                    _seen++; _winSeen++;
+                    if (contentMs < 0) {
+                        _absent++;
+                        // A coverage hole is the single most important negative
+                        // result: it means the clock cannot carry playback alone.
+                        if (log != null && _absentLogged < 20) {
+                            _absentLogged++;
+                            log.LogInfo($"[content-clock] {_name}: MAU WITHOUT contentMs at wire={wireMs}ms " +
+                                        $"(#{_absent} of {_seen} seen) — clock is NOT per-MAU here");
+                        }
+                        return;
+                    }
+                    _withContent++; _winWithContent++;
+
+                    long drift = contentMs - wireMs;
+                    if (_lastContent != long.MinValue) {
+                        long dC = contentMs - _lastContent;
+                        long dW = wireMs - _lastWire;
+                        _winContentAdv += dC; _winWireAdv += dW;
+                        if (dC < 0) _backwards++;
+                        // A drift step = content and wire clocks diverged, i.e. the
+                        // wire jumped but content did not (or vice versa).
+                        if (_lastDrift != long.MinValue && Math.Abs(drift - _lastDrift) > 100) {
+                            _driftSteps++;
+                            if (log != null && _stepLogged < 40) {
+                                _stepLogged++;
+                                log.LogInfo($"[content-clock] {_name}: DRIFT STEP {_lastDrift}→{drift}ms " +
+                                            $"(Δ{drift - _lastDrift}ms) at content={contentMs} wire={wireMs} " +
+                                            $"[contentΔ={dC} wireΔ={dW}] — wire/content clocks diverged here");
+                            }
+                        }
+                    }
+                    _lastContent = contentMs; _lastWire = wireMs; _lastDrift = drift;
+
+                    if (_detail < DetailSamples && log != null) {
+                        _detail++;
+                        line = $"[content-clock] {_name}: sample #{_detail} content={contentMs}ms " +
+                               $"wire={wireMs}ms drift={drift}ms";
+                    } else {
+                        int now = Environment.TickCount;
+                        if (_lastLogTick == 0) _lastLogTick = now;
+                        else if (unchecked(now - _lastLogTick) >= LogEveryMs && log != null) {
+                            int win = unchecked(now - _lastLogTick);
+                            _lastLogTick = now;
+                            double cov = _winSeen > 0 ? _winWithContent * 100.0 / _winSeen : 0;
+                            // contentAdv/realTime ≈ 1.00 proves the clock runs at
+                            // real time; contentAdv vs wireAdv proves the two agree.
+                            line = $"[content-clock] {_name}: maus={_winSeen} withContent={_winWithContent} " +
+                                   $"({cov:F1}%) contentAdv={_winContentAdv}ms wireAdv={_winWireAdv}ms " +
+                                   $"over {win}ms (content/real={(win > 0 ? _winContentAdv / (double)win : 0):F3}) " +
+                                   $"content={contentMs} drift={drift}ms | totals: seen={_seen} " +
+                                   $"withContent={_withContent} absent={_absent} backwards={_backwards} " +
+                                   $"driftSteps={_driftSteps}";
+                            _winSeen = _winWithContent = 0; _winContentAdv = _winWireAdv = 0;
+                        }
+                    }
+                }
+                if (line != null) log?.LogInfo(line);
+            }
+        }
 
         // A/V offset via the RTCP Sender Report NTP↔RTP mapping — the canonical
         // cross-stream sync. Each stream's SR ties its RTP clock to absolute
@@ -990,6 +1126,36 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// next position's first MAUs re-latch them. Must accompany every anchor
         /// reset — stale refs would make the recomputed offset reuse the PREVIOUS
         /// position's content times.</summary>
+        /// <summary>Tell the content-clock survey that the coming timestamp jump
+        /// is a legitimate position change, so it isn't scored as a fault. The
+        /// survey still records what the clocks actually do across it — which is
+        /// the case we most need evidence for.</summary>
+        // ---- Sync epoch ----
+        // Incremented on every position change (seek, trick-play exit, new
+        // media). Every audio MAU is stamped with the epoch current at SUBMIT
+        // time and carries it through the decoder to NAudioMasterRenderer.WritePcm,
+        // which drops anything older than the accepted epoch. This is the audio
+        // counterpart of the video anchor gate: the decoder's Flush() is async, so
+        // without it, pre-seek PCM still in flight arrives AFTER ClearBuffer has
+        // re-seeded the gap tracker and re-anchors it on the OLD timeline — the
+        // first real post-seek chunk then reads as a multi-second forward gap and
+        // is "filled" with silence, permanently delaying audio behind video.
+        private long _syncEpoch;
+        private long CurrentEpoch => Interlocked.Read(ref _syncEpoch);
+
+        /// <summary>Bump the sync epoch and point the renderer at it. Call at the
+        /// START of every position change, before the pipeline is flushed.</summary>
+        private long BumpSyncEpoch(string reason) {
+            long e = Interlocked.Increment(ref _syncEpoch);
+            _log?.LogInfo($"[ext-sync] sync epoch → {e} ({reason})");
+            return e;
+        }
+
+        private void MarkContentDiscontinuity(string reason) {
+            _audContentDiag.MarkDiscontinuity(reason);
+            _vidContentDiag.MarkDiscontinuity(reason);
+        }
+
         private void ResetContentRefs() {
             Interlocked.Exchange(ref _audContentRefMs, -1L);
             Interlocked.Exchange(ref _audContentRefWireMs, -1L);
@@ -1012,6 +1178,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // hit in practice — see the SeekAsync note). Callers must invoke this
             // BEFORE sending the PLAY so the generation snapshot is the pre-PLAY
             // one and the gate reopens on this position's own RTP-Info.
+            BumpSyncEpoch(reason);
             ArmAnchorGate();
             _syncFinalized = false;
             Interlocked.Exchange(ref _firstAudioMauRtpRaw, -1L);
@@ -1025,6 +1192,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             Interlocked.Exchange(ref _resumePtsShiftMs, 0L);
             Interlocked.Exchange(ref _pauseStartMs, -1L);
             ResetContentRefs();   // new position = new content anchors
+            MarkContentDiscontinuity(reason);
             // The estimator still runs for diagnostics; reset it so its logged
             // fit restarts cleanly at the new position (we don't act on it).
             try { _rtsp?.ResetCorrespondenceEstimator(); } catch { }
@@ -1035,7 +1203,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // becomes its pts0 anchor (which would skew the recomputed offset).
             try { _decoder?.Flush(); } catch { }
             try { _videoDecoder?.Flush(); } catch { }
-            try { _renderer?.ClearBuffer(); } catch { }
+            try { _renderer?.ClearBuffer(CurrentEpoch); } catch { }
             // Anchor the re-anchored video to where the new audio segment ACTUALLY
             // starts playing (not the later video-frame-arrival master), so video
             // catches up instead of baking in its decode latency as audio-ahead.
@@ -1064,9 +1232,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// the two can still evolve independently.</para>
         /// </summary>
         private void ReanchorAfterTrickPlay() {
-            // Gate first, then clear the anchors — same ordering requirement as
-            // ReBaselineSync (see there); the caller invokes this BEFORE the
-            // rate-change PLAY so the gate reopens on the new RTP-Info.
+            // Epoch + gate first, then clear the anchors — same ordering
+            // requirement as ReBaselineSync (see there); the caller invokes this
+            // BEFORE the rate-change PLAY so the gate reopens on the new RTP-Info.
+            BumpSyncEpoch("trick-play exit → 1×");
             ArmAnchorGate();
             _syncFinalized = false;
             Interlocked.Exchange(ref _firstAudioMauRtpRaw, -1L);
@@ -1080,13 +1249,14 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             Interlocked.Exchange(ref _resumePtsShiftMs, 0L);
             Interlocked.Exchange(ref _pauseStartMs, -1L);
             ResetContentRefs();   // new position = new content anchors
+            MarkContentDiscontinuity("trick-play exit → 1×");
             try { _rtsp?.ResetCorrespondenceEstimator(); } catch { }
             // Drop the trick-play audio backlog (deep coded queue + PCM buffer)
             // and stale video frames so 1× resumes from the new position without
             // replaying stale audio or anchoring the pacer on a stale frame.
             try { _decoder?.Flush(); } catch { }
             try { _videoDecoder?.Flush(); } catch { }
-            try { _renderer?.ClearBuffer(); } catch { }
+            try { _renderer?.ClearBuffer(CurrentEpoch); } catch { }
             // Anchor the re-anchored video to where the new audio segment ACTUALLY
             // starts playing (not the later video-frame-arrival master), so video
             // catches up instead of baking in its decode latency as audio-ahead.
@@ -1204,7 +1374,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// </summary>
         public void HaltPlaybackNow() {
             try { _renderer?.Stop(); } catch { }
-            try { _renderer?.ClearBuffer(); } catch { }
+            try { _renderer?.ClearBuffer(CurrentEpoch); } catch { }
             lock (_videoGate) { try { _pacer?.SetPaused(true); } catch { } }
         }
 
@@ -1261,6 +1431,11 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             Interlocked.Exchange(ref _firstAudioMauWirePtsMs, -1L);
             Interlocked.Exchange(ref _firstVideoMauWirePtsMs, -1L);
             ResetContentRefs();
+            // New media = a brand-new content timeline (both clocks restart), so
+            // tell the survey it's expected. Without this the media change scored
+            // a false DRIFT STEP, inflating the very metric we're using to judge
+            // whether the content clock is trustworthy.
+            MarkContentDiscontinuity("new media");
             Interlocked.Exchange(ref _baseOffsetMs, 0L);
             // Reset the live trim to the config baseline. The trim was designed
             // to carry a FIXED pipeline/display residual across media, but the
@@ -1369,7 +1544,66 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 $"played={played} written={written} devSilence={devSilence} padSil={padSil} gapFill={gapFill} | " +
                 $"vidRelEl={vidRel} offset={offset} pacerDrift={relLag} | " +
                 $"present sub={submitted} pres={presented} backlog={presentBacklog}");
+
+            LogContentShadow(r, pc);
         }
+
+        /// <summary>
+        /// STAGE A of the content-clock migration (see CONTENT-CLOCK-MIGRATION.md).
+        /// Computes what the CONTENT rule would decide and compares it with what
+        /// the offset rule actually did — changing nothing.
+        ///
+        /// <para>Target rule: release when <c>frameContent &lt;= audibleContent + trim</c>.
+        /// So at the moment a frame is actually released, </para>
+        /// <code>shadowDelta = frameContent - (audibleContent + trim)</code>
+        /// <para>is zero if the two rules agree. Negative ⇒ the content rule would
+        /// have released it EARLIER (we are running late); positive ⇒ later (we are
+        /// running early). A stable near-zero delta across steady play, a seek and a
+        /// stall is the go/no-go for Stage B.</para>
+        ///
+        /// <para>Wire→content conversion uses the per-stream drift measured by the
+        /// <see cref="ContentClockDiag"/> survey (content − wire), which the logs
+        /// show is constant within a position and steps only at genuine
+        /// discontinuities. Using it here avoids touching the decode path, so
+        /// Stage A stays strictly behaviour-free — Stage B replaces it with real
+        /// per-MAU plumbing.</para>
+        /// </summary>
+        private void LogContentShadow(NAudioMasterRenderer r, PtsFramePacer pc) {
+            long aDrift = _audContentDiag.CurrentDriftMs;
+            long vDrift = _vidContentDiag.CurrentDriftMs;
+            long audWire = r.AudibleWirePtsMs;
+            long vidPts = pc.LastReleasedPtsMs;
+            if (aDrift == long.MinValue || vDrift == long.MinValue
+                || audWire == long.MinValue || vidPts == long.MinValue) {
+                _log?.LogInfo("[content-shadow] not ready " +
+                              $"(aDrift={(aDrift == long.MinValue ? "-" : aDrift.ToString())} " +
+                              $"vDrift={(vDrift == long.MinValue ? "-" : vDrift.ToString())} " +
+                              $"audWire={(audWire == long.MinValue ? "-" : audWire.ToString())} " +
+                              $"vidPts={(vidPts == long.MinValue ? "-" : vidPts.ToString())})");
+                return;
+            }
+            long trim = EffectiveTrimMs();
+            long audibleContent = audWire + aDrift;
+            long frameContent = vidPts + vDrift;
+            long shadowDelta = frameContent - (audibleContent + trim);
+            // axisSkew is migration Risk 3: authored vs playable byte axes. Expected
+            // to settle at 0 once the preroll hold has drained; a persistent value
+            // means Stage B needs an explicit reconciliation before the renderer can
+            // report audible CONTENT time directly.
+            long axisSkew = r.AuthoredMinusPlayableBytes;
+            _log?.LogInfo(
+                $"[content-shadow] audibleContent={audibleContent}ms frameContent={frameContent}ms " +
+                $"trim={trim}ms → shadowDelta={shadowDelta}ms " +
+                $"(offsetRuleDrift={vidRelLagForShadow(r, pc)}ms) | " +
+                $"aDrift={aDrift} vDrift={vDrift} audWire={audWire} vidPts={vidPts} " +
+                $"axisSkewBytes={axisSkew} trimmed={r.OverlapTrimmedMs}ms " +
+                $"staleChunks={r.StaleEpochChunks}");
+        }
+
+        /// <summary>The offset rule's own drift, recomputed here so the shadow line
+        /// is self-contained when grepped apart from [av-timing].</summary>
+        private long vidRelLagForShadow(NAudioMasterRenderer r, PtsFramePacer pc) =>
+            pc.LastReleasedElapsedMs - (r.GetMediaTimeMs() + pc.CurrentSyncOffsetMs);
 
         public void Dispose() {
             _disposed = true;

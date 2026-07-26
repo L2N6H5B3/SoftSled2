@@ -1,4 +1,4 @@
-using NAudio.Wave;
+﻿using NAudio.Wave;
 using SoftSled.Components.Diagnostics;
 using System;
 using System.Collections.Generic;
@@ -101,6 +101,15 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         // through that much underrun silence and drag slaved video ahead.
         private long _bytesDiscarded;
         private long _segmentStartMasterMs = -1; // see ClearBuffer / SegmentStartMasterMs
+        // Sync-epoch gate (see WritePcm). PCM whose SOURCE PACKET was submitted
+        // under an epoch below this is stale pre-seek audio and is dropped.
+        private long _acceptEpoch;
+        private long _staleEpochChunks;
+        /// <summary>Count of PCM chunks rejected as stale pre-seek audio.
+        /// Non-zero at each seek is EXPECTED and is the fix working; a steadily
+        /// climbing value during normal playback would mean the epoch is being
+        /// bumped when it shouldn't be.</summary>
+        public long StaleEpochChunks => Interlocked.Read(ref _staleEpochChunks);
         private bool _disposed;
 
         // Diagnostic (av-timing): wall-clock since the device first started
@@ -253,8 +262,13 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// clock's content cap (written − discarded) stays tight — it stalls
         /// at real playable content until fresh PCM arrives.
         /// </summary>
-        public void ClearBuffer() {
+        /// <param name="acceptEpoch">Sync epoch to accept from now on. PCM
+        /// decoded from packets submitted under an EARLIER epoch is dropped by
+        /// <see cref="WritePcm"/> — see the gate there. Pass the controller's
+        /// current epoch at every position change.</param>
+        public void ClearBuffer(long acceptEpoch) {
             if (_disposed) return;
+            Interlocked.Exchange(ref _acceptEpoch, acceptEpoch);
             lock (_gate) {
                 // Account for the unplayed bytes we're about to discard so the
                 // master clock's content cap (written − discarded) stays tight
@@ -287,6 +301,18 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 long realBytes = Math.Min(audible, content);
                 if (realBytes < 0) realBytes = 0;
                 Interlocked.Exchange(ref _segmentStartMasterMs, abps > 0 ? realBytes * 1000L / abps : -1L);
+                // ---- Byte-axis reconciliation (migration Risk 3) ----
+                // Two byte axes exist: AUTHORED (content accepted by WritePcm,
+                // including gap fills, counted even while the preroll hold is
+                // buffering) and PLAYABLE (written − discarded, what the master
+                // clock runs on). ClearBuffer discards on the playable axis only,
+                // so before this fix every seek permanently offset the two — seen
+                // as axisSkewBytes jumping 0 → 388224 (2.02s) at the seek and
+                // never reconverging. Re-origin the authored axis onto the
+                // playable one here; the gap reference re-seeds from it on the
+                // next write, so both agree again from this segment onward.
+                _authoredBytes = Interlocked.Read(ref _bytesWritten)
+                               - Interlocked.Read(ref _bytesDiscarded);
             }
         }
 
@@ -307,8 +333,28 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// expected to be contiguous (no PTS gaps) — we don't
         /// reset the base on later writes.
         /// </summary>
-        public void WritePcm(byte[] pcm, int len, long ptsMs) {
+        public void WritePcm(byte[] pcm, int len, long ptsMs, long epoch) {
             if (_disposed || pcm == null || len <= 0) return;
+            // ---- Sync-epoch gate ----
+            // Reject PCM decoded from packets submitted BEFORE the current
+            // position. ClearBuffer re-seeds the gap tracker so the next write
+            // re-anchors it; but the audio decoder's Flush() is asynchronous, so
+            // already-decoded pre-seek PCM was still in flight and landed AFTER
+            // the re-seed — re-anchoring the tracker on the OLD timeline. The
+            // first genuine post-seek chunk then looked like a multi-second
+            // FORWARD gap and got "filled" with silence, delaying audible audio
+            // and leaving video permanently ahead (log 20260726-162801: a 3192ms
+            // bogus fill at the seek, then fold-backs as the real content
+            // arrived). The offset rule could not see it, because rendered
+            // silence still advances the master clock.
+            if (epoch < Interlocked.Read(ref _acceptEpoch)) {
+                long n = Interlocked.Increment(ref _staleEpochChunks);
+                if (n <= 20 || (n % 100) == 0)
+                    _log?.LogInfo($"[naudio-master] dropped stale pre-seek PCM " +
+                                  $"(epoch={epoch} < accept={Interlocked.Read(ref _acceptEpoch)}, " +
+                                  $"{len}B, pts={ptsMs}) [total={n}]");
+                return;
+            }
             bool releaseAfterUnlock = false;
             long fillBytes = 0;
             int pcmOffset = 0;
@@ -563,6 +609,78 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// Useful for log correlation with RTP-Info / RTCP SR
         /// timestamps from the server side.</summary>
         public long FirstSampleWirePtsMs => _baseSet ? _basePtsMs : 0;
+
+        /// <summary>STAGE A (content-clock migration, shadow only): wire PTS of
+        /// the audio sample currently AUDIBLE.
+        ///
+        /// <para>Built on the existing clock rather than a second mapping:
+        /// <see cref="GetMediaTimeMs"/> already advances only with genuinely
+        /// audible content (underrun silence subtracted, discarded bytes
+        /// excluded), and the gap-fill / overlap-trim in <see cref="WritePcm"/>
+        /// exists precisely to keep the byte clock isomorphic to the content
+        /// timeline. If that isomorphism holds, basePts + mediaTime IS the
+        /// audible wire position — and the Stage A shadow delta is exactly the
+        /// test of whether it holds. Diagnostic only; nothing consumes it for
+        /// playback.</para></summary>
+        /// <para>CORRECTED 2026-07-26: the first version returned
+        /// <c>_basePtsMs + GetMediaTimeMs()</c>. <c>_basePtsMs</c> is latched from
+        /// the first sample of the MEDIA and never re-based, so after a seek it
+        /// described the pre-seek timeline while the byte clock ran on the new
+        /// one — the two are unrelated once the wire pts jumps, making every
+        /// post-seek shadow reading meaningless (log 20260726-184301: reported
+        /// audWire=58629 when the real post-seek wire pts was 67801). It now maps
+        /// through the PER-SEGMENT reference pair the gap tracker maintains, which
+        /// re-seeds on every ClearBuffer, so it is valid across seeks.</para></summary>
+        public long AudibleWirePtsMs {
+            get {
+                if (_disposed || !_baseSet) return long.MinValue;
+                lock (_gate) {
+                    long abps = _format.AverageBytesPerSecond;
+                    if (abps <= 0 || _gapRefPtsMs == long.MinValue) return long.MinValue;
+                    // Same audible-byte basis as GetMediaTimeMs: played minus
+                    // rendered underrun silence, capped at real playable content.
+                    long played = 0; try { played = _device.GetPosition(); } catch { }
+                    if (played < 0) played = 0;
+                    long content = Interlocked.Read(ref _bytesWritten)
+                                 - Interlocked.Read(ref _bytesDiscarded);
+                    long audible = played - _silenceProvider.SilenceBytes;
+                    long realBytes = Math.Min(audible, content);
+                    if (realBytes < 0) realBytes = 0;
+                    // The reference is on the AUTHORED axis; ClearBuffer now
+                    // re-origins authored onto playable, so the two agree.
+                    return _gapRefPtsMs + (realBytes - _gapRefAuthoredBytes) * 1000L / abps;
+                }
+            }
+        }
+
+        /// <summary>Cumulative audio DISCARDED by the overlap-trim, in ms. Unlike
+        /// gap-fill (which inserts bytes and keeps the byte clock isomorphic to
+        /// content), trimming drops content WITHOUT advancing bytes — so a large
+        /// value means the byte clock now under-represents content by that much,
+        /// and any byte→content mapping is skewed accordingly.</summary>
+        public long OverlapTrimmedMs {
+            get {
+                long abps = _format.AverageBytesPerSecond;
+                return abps > 0 ? Interlocked.Read(ref _overlapTrimmedBytes) * 1000L / abps : 0;
+            }
+        }
+
+        /// <summary>STAGE A: divergence between the two byte axes — authored
+        /// (content bytes accepted by WritePcm, including gap fills, counted
+        /// even while the preroll hold is still buffering) and playable
+        /// (written − discarded, the axis the master clock runs on). Migration
+        /// Risk 3: any audible-content mapping must pick ONE axis consistently.
+        /// Expected to settle at 0 once the hold has drained; a persistent
+        /// non-zero value means Stage B needs an explicit reconciliation.</summary>
+        public long AuthoredMinusPlayableBytes {
+            get {
+                if (_disposed) return 0;
+                lock (_gate) {
+                    return _authoredBytes - (Interlocked.Read(ref _bytesWritten)
+                                             - Interlocked.Read(ref _bytesDiscarded));
+                }
+            }
+        }
 
         // ----- av-timing diagnostics (see ExternalSyncMediaController's
         // [av-timing] snapshot). All 0-relative, same basis as GetMediaTimeMs. -----

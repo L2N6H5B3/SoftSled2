@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 
@@ -84,6 +84,40 @@ namespace SoftSled.Components.AudioVisual {
         /// server actually populates for x-wmf-pf, where the RTP header
         /// timestamp may not be the reliable presentation clock.</summary>
         public Action<string> DiagLog;
+
+        /// <summary>Loss/corruption sink, routed to the MAIN application log by
+        /// RTSPClient. Distinct from <see cref="DiagLog"/> (which goes to the
+        /// separate RTCP diag file): these are the events that explain visible
+        /// H.264 artifacting — RTP sequence gaps, dropped fragment buffers,
+        /// orphaned fragments, reassembly failures. They previously went only to
+        /// <c>Trace.WriteLine</c>, i.e. nowhere in a normal run, leaving the file
+        /// log with no way to tell packet loss from a decode/CPU problem.</summary>
+        public Action<string> WarnLog;
+
+        /// <summary>Total loss/corruption events seen (all kinds) since construction.
+        /// Included in every emitted line so a throttled log still shows the true
+        /// rate.</summary>
+        public long WarnCount => System.Threading.Interlocked.Read(ref _warnCount);
+        private long _warnCount;
+        // Split loss accounting (see the sequence-gap check): packets genuinely
+        // missing vs packets that merely arrived out of order.
+        private long _seqLost, _seqReordered;
+        /// <summary>Packets confirmed missing (sum of positive sequence gaps).</summary>
+        public long PacketsLost => System.Threading.Interlocked.Read(ref _seqLost);
+        /// <summary>Out-of-order / duplicate arrivals — NOT loss.</summary>
+        public long PacketsReordered => System.Threading.Interlocked.Read(ref _seqReordered);
+        private const int WarnVerboseLimit = 200;   // log every event up to here
+        private const int WarnThrottleEvery = 100;  // then 1 in this many
+
+        private void Warn(string msg) {
+            Trace.WriteLine(msg);
+            long n = System.Threading.Interlocked.Increment(ref _warnCount);
+            // Unthrottled while the count is small (a clean stream produces none,
+            // so any output is signal), then sampled so a persistently lossy link
+            // can't flood the log.
+            if (n > WarnVerboseLimit && (n % WarnThrottleEvery) != 0) return;
+            try { WarnLog?.Invoke($"{msg} [total={n}]"); } catch { }
+        }
         /// <summary>Per-MAU timing sample for the Correspondence-offset
         /// cross-check: (NTP seconds, header RTP timestamp raw). Fired for every
         /// first/complete MAU that carries a Correspondence field. Consumer
@@ -166,9 +200,16 @@ namespace SoftSled.Components.AudioVisual {
                 ushort expected = stream.ExpectedNextSeq.Value;
                 if (rtpSequenceNumber != expected) {
                     int gap = unchecked((short)(rtpSequenceNumber - expected));
-                    Trace.WriteLine($"WMRTP Video: SN gap on SSRC {rtpSsrc} — expected {expected}, got {rtpSequenceNumber} (delta {gap})");
+                    // A POSITIVE delta is genuine loss (packets missing). A
+                    // NEGATIVE delta is a late/reordered (or duplicate) packet —
+                    // the data did arrive, just out of order. Both are handled
+                    // identically below (behaviour unchanged), but they are
+                    // labelled and counted apart: conflating them overstates the
+                    // loss rate, and only true loss can cause visual artifacting.
+                    if (gap > 0) _seqLost += gap; else _seqReordered++;
+                    Warn($"WMRTP Video: SN {(gap > 0 ? "LOSS" : "REORDER")} on SSRC {rtpSsrc} — expected {expected}, got {rtpSequenceNumber} (delta {gap}; lostPkts={_seqLost} reordered={_seqReordered})");
                     if (stream.Fragments != null) {
-                        Trace.WriteLine($"WMRTP Video: dropping partial fragment buffer ({stream.Fragments.Count} frags) due to SN gap");
+                        Warn($"WMRTP Video: dropping partial fragment buffer ({stream.Fragments.Count} frags) due to SN gap");
                         stream.Fragments = null;
                     }
                     stream.PendingPostLossFlag = true;
@@ -203,7 +244,7 @@ namespace SoftSled.Components.AudioVisual {
             if (r2Present) currentOffset += 4;
             if (r3Present) currentOffset += 4;
             if (currentOffset > rtpPayloadLength) {
-                Trace.WriteLine($"WMRTP Video Error SN {rtpSequenceNumber}: BF1 + optional fields overrun ({currentOffset} > {rtpPayloadLength})");
+                Warn($"WMRTP Video Error SN {rtpSequenceNumber}: BF1 + optional fields overrun ({currentOffset} > {rtpPayloadLength})");
                 return;
             }
             if (!b2pPresent) {
@@ -228,7 +269,7 @@ namespace SoftSled.Components.AudioVisual {
             //   "M is set to 1 if any of the payloads in the RTP packet contain a complete
             //    MAU, or the last fragment of a MAU."
             if (rtpMarker && !sawAnyTerminator)
-                Trace.WriteLine($"WMRTP Video: SN {rtpSequenceNumber} M=1 but no F=2/F=3 payload found");
+                Warn($"WMRTP Video: SN {rtpSequenceNumber} M=1 but no F=2/F=3 payload found");
         }
 
         /// <summary>
@@ -260,7 +301,7 @@ namespace SoftSled.Components.AudioVisual {
             int payloadOffsetField = -1;          // sentinel: -1 means OP=0
             if (opPresent) {
                 if (currentOffset + 2 > bufLen) {
-                    Trace.WriteLine($"WMRTP Video Error SN {seqNum}: short Offset field");
+                    Warn($"WMRTP Video Error SN {seqNum}: short Offset field");
                     return false;
                 }
                 payloadOffsetField = (buf[currentOffset] << 8) | buf[currentOffset + 1];
@@ -274,7 +315,7 @@ namespace SoftSled.Components.AudioVisual {
             // We don't enforce this strictly — but timing should be ignored on F=0/F=2.
             if (b3pPresent) {
                 if (currentOffset >= bufLen) {
-                    Trace.WriteLine($"WMRTP Video Error SN {seqNum}: short Bit Field 3");
+                    Warn($"WMRTP Video Error SN {seqNum}: short Bit Field 3");
                     return false;
                 }
                 byte bitField3 = buf[currentOffset++];
@@ -317,7 +358,7 @@ namespace SoftSled.Components.AudioVisual {
                 if (xPresent) {
                     while (currentOffset < bufLen) {
                         if (currentOffset + 2 > bufLen) {
-                            Trace.WriteLine($"WMRTP Video Error SN {seqNum}: short Extension header");
+                            Warn($"WMRTP Video Error SN {seqNum}: short Extension header");
                             return false;
                         }
                         byte extHeader = buf[currentOffset++];
@@ -332,7 +373,7 @@ namespace SoftSled.Components.AudioVisual {
                         }
                         currentOffset += extLength;
                         if (currentOffset > bufLen) {
-                            Trace.WriteLine($"WMRTP Video Error SN {seqNum}: Extension overrun");
+                            Warn($"WMRTP Video Error SN {seqNum}: Extension overrun");
                             return false;
                         }
                         if (lastExt) break;
@@ -349,7 +390,7 @@ namespace SoftSled.Components.AudioVisual {
                 // size of the current payload", measured from the byte after the Offset field.
                 payloadDataEnd = offsetFieldStart + 2 + payloadOffsetField;
                 if (payloadDataEnd < payloadDataStart || payloadDataEnd > bufLen) {
-                    Trace.WriteLine($"WMRTP Video Error SN {seqNum}: Offset field {payloadOffsetField} → end {payloadDataEnd} out of range");
+                    Warn($"WMRTP Video Error SN {seqNum}: Offset field {payloadOffsetField} → end {payloadDataEnd} out of range");
                     return false;
                 }
             } else {
@@ -364,7 +405,7 @@ namespace SoftSled.Components.AudioVisual {
             // payloads can't be decoded — drop them (and discard any partial buffer for the
             // same MAU so we don't deliver half-encrypted data to the decoder).
             if (firstOrComplete && eBit) {
-                Trace.WriteLine($"WMRTP Video: SN {seqNum} E=1 (encrypted) — dropping payload (DRM not supported)");
+                Warn($"WMRTP Video: SN {seqNum} E=1 (encrypted) — dropping payload (DRM not supported)");
                 if (stream.Fragments != null) stream.Fragments = null;
                 stream.PendingPostLossFlag = true;
                 currentOffset = payloadDataEnd;
@@ -385,7 +426,7 @@ namespace SoftSled.Components.AudioVisual {
             switch (fragType) {
                 case F_COMPLETE_MAU:
                     if (stream.Fragments != null) {
-                        Trace.WriteLine($"WMRTP Video Warning SN {seqNum}: F=3 received while assembling — discarding {stream.Fragments.Count} prior frags");
+                        Warn($"WMRTP Video Warning SN {seqNum}: F=3 received while assembling — discarding {stream.Fragments.Count} prior frags");
                         stream.Fragments = null;
                     }
                     EmitMau(data, rtpTs, syncPoint: sBit, discontinuity: d1Bit || stream.PendingPostLossFlag,
@@ -396,7 +437,7 @@ namespace SoftSled.Components.AudioVisual {
 
                 case F_FIRST_FRAGMENT:
                     if (stream.Fragments != null)
-                        Trace.WriteLine($"WMRTP Video Warning SN {seqNum}: F=1 received while assembling — overwriting prior buffer");
+                        Warn($"WMRTP Video Warning SN {seqNum}: F=1 received while assembling — overwriting prior buffer");
                     stream.Fragments = new List<byte[]> { data };
                     stream.FirstFragmentSync     = sBit;
                     stream.FirstFragmentDiscont  = d1Bit;
@@ -407,7 +448,7 @@ namespace SoftSled.Components.AudioVisual {
 
                 case F_MIDDLE_FRAGMENT:
                     if (stream.Fragments == null) {
-                        Trace.WriteLine($"WMRTP Video Warning SN {seqNum}: F=0 with no buffer — dropping");
+                        Warn($"WMRTP Video Warning SN {seqNum}: F=0 with no buffer — dropping");
                         stream.PendingPostLossFlag = true;
                     } else {
                         stream.Fragments.Add(data);
@@ -416,7 +457,7 @@ namespace SoftSled.Components.AudioVisual {
 
                 case F_LAST_FRAGMENT:
                     if (stream.Fragments == null) {
-                        Trace.WriteLine($"WMRTP Video Warning SN {seqNum}: F=2 with no buffer — dropping");
+                        Warn($"WMRTP Video Warning SN {seqNum}: F=2 with no buffer — dropping");
                         stream.PendingPostLossFlag = true;
                     } else {
                         stream.Fragments.Add(data);
@@ -434,7 +475,7 @@ namespace SoftSled.Components.AudioVisual {
                             stream.PendingPostLossFlag = false;
                             emittedMau = true;
                         } catch (Exception ex) {
-                            Trace.WriteLine($"WMRTP Video Error SN {seqNum}: reassembly failed: {ex.Message}");
+                            Warn($"WMRTP Video Error SN {seqNum}: reassembly failed: {ex.Message}");
                         } finally {
                             stream.Fragments = null;
                         }

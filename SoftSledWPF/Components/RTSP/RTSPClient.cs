@@ -226,6 +226,7 @@ namespace SoftSled.Components.RTSP {
         // stale pre-seek MAU using the old RTP-Info (which left A/V out of sync
         // after a scrub).
         private long _rtpInfoGeneration;
+        private long _postLossSkips;   // video MAUs dropped awaiting a sync point
         public long RtpInfoGeneration => System.Threading.Interlocked.Read(ref _rtpInfoGeneration);
 
 
@@ -251,6 +252,11 @@ namespace SoftSled.Components.RTSP {
             // not be the reliable presentation clock).
             videoDepacketizer.DiagLog = msg => RtcpDiagLog(msg);
             audioDepacketizer.DiagLog = msg => RtcpDiagLog(msg);
+            // Loss/corruption → MAIN log. These are the events that distinguish
+            // genuine packet loss (visible as H.264 artifacting) from a decode or
+            // CPU shortfall; without them the file log shows only the symptom.
+            videoDepacketizer.WarnLog = msg => { try { m_logger?.LogInfo($"[wmrpt-loss] {msg}"); } catch { } };
+            audioDepacketizer.WarnLog = msg => { try { m_logger?.LogInfo($"[wmrpt-loss] {msg}"); } catch { } };
             // Correspondence-offset cross-check (logged only; does NOT drive sync).
             videoDepacketizer.TimingSample = (ntpSec, hdrRaw) => FeedCorrSample(true, ntpSec, hdrRaw);
             audioDepacketizer.TimingSample = (ntpSec, hdrRaw) => FeedCorrSample(false, ntpSec, hdrRaw);
@@ -264,6 +270,13 @@ namespace SoftSled.Components.RTSP {
                 // missing reference.
                 if (eventData.PostLoss && !eventData.SyncPoint) {
                     Trace.WriteLine($"Skipping post-loss non-keyframe MAU (len={eventData.data.Length})");
+                    // Also surface in the main log: each skip is one frame the
+                    // decoder never sees, i.e. a direct cause of visible
+                    // artifacting until the next sync point.
+                    long n = System.Threading.Interlocked.Increment(ref _postLossSkips);
+                    if (n <= 200 || (n % 100) == 0)
+                        try { m_logger?.LogInfo($"[wmrpt-loss] video: skipped post-loss non-keyframe MAU " +
+                                                $"(len={eventData.data.Length}) [totalSkips={n}]"); } catch { }
                     return;
                 }
 

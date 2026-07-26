@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 
@@ -66,6 +66,34 @@ namespace SoftSled.Components.AudioVisual {
         /// the first few MAUs' timing fields so audio and video Correspondence
         /// NTP timelines can be compared for a stable cross-stream A/V offset.</summary>
         public Action<string> DiagLog;
+
+        /// <summary>Loss/corruption sink routed to the MAIN application log —
+        /// see WmrptVideoDepacketizer.WarnLog. Audio loss matters as much as
+        /// video here: a dropped audio MAU shows up downstream as a content gap
+        /// the renderer fills with silence, which looks identical to a server
+        /// delivery stall unless the loss itself is logged.</summary>
+        public Action<string> WarnLog;
+
+        /// <summary>Total loss/corruption events since construction.</summary>
+        public long WarnCount => System.Threading.Interlocked.Read(ref _warnCount);
+        private long _warnCount;
+        // Split loss accounting (see the sequence-gap check): packets genuinely
+        // missing vs packets that merely arrived out of order.
+        private long _seqLost, _seqReordered;
+        /// <summary>Packets confirmed missing (sum of positive sequence gaps).</summary>
+        public long PacketsLost => System.Threading.Interlocked.Read(ref _seqLost);
+        /// <summary>Out-of-order / duplicate arrivals — NOT loss.</summary>
+        public long PacketsReordered => System.Threading.Interlocked.Read(ref _seqReordered);
+        private const int WarnVerboseLimit = 200;
+        private const int WarnThrottleEvery = 100;
+
+        private void Warn(string msg) {
+            Trace.WriteLine(msg);
+            long n = System.Threading.Interlocked.Increment(ref _warnCount);
+            if (n > WarnVerboseLimit && (n % WarnThrottleEvery) != 0) return;
+            try { WarnLog?.Invoke($"{msg} [total={n}]"); } catch { }
+        }
+
         /// <summary>Per-MAU timing sample for the Correspondence-offset
         /// cross-check: (NTP seconds, header RTP timestamp raw). See
         /// WmrptVideoDepacketizer.TimingSample.</summary>
@@ -101,9 +129,16 @@ namespace SoftSled.Components.AudioVisual {
                 ushort expected = stream.ExpectedNextSeq.Value;
                 if (rtpSequenceNumber != expected) {
                     int gap = unchecked((short)(rtpSequenceNumber - expected));
-                    Trace.WriteLine($"WMRTP Audio: SN gap on SSRC {rtpSsrc} — expected {expected}, got {rtpSequenceNumber} (delta {gap})");
+                    // A POSITIVE delta is genuine loss (packets missing). A
+                    // NEGATIVE delta is a late/reordered (or duplicate) packet —
+                    // the data did arrive, just out of order. Both are handled
+                    // identically below (behaviour unchanged), but they are
+                    // labelled and counted apart: conflating them overstates the
+                    // loss rate, and only true loss can cause visual artifacting.
+                    if (gap > 0) _seqLost += gap; else _seqReordered++;
+                    Warn($"WMRTP Audio: SN {(gap > 0 ? "LOSS" : "REORDER")} on SSRC {rtpSsrc} — expected {expected}, got {rtpSequenceNumber} (delta {gap}; lostPkts={_seqLost} reordered={_seqReordered})");
                     if (stream.Fragments != null) {
-                        Trace.WriteLine($"WMRTP Audio: dropping partial fragment buffer ({stream.Fragments.Count} frags) due to SN gap");
+                        Warn($"WMRTP Audio: dropping partial fragment buffer ({stream.Fragments.Count} frags) due to SN gap");
                         stream.Fragments = null;
                     }
                     stream.PendingPostLossFlag = true;
@@ -136,7 +171,7 @@ namespace SoftSled.Components.AudioVisual {
             if (r2Present) currentOffset += 4;
             if (r3Present) currentOffset += 4;
             if (currentOffset > rtpPayloadLength) {
-                Trace.WriteLine($"WMRTP Audio Error SN {rtpSequenceNumber}: BF1 + optional fields overrun ({currentOffset} > {rtpPayloadLength})");
+                Warn($"WMRTP Audio Error SN {rtpSequenceNumber}: BF1 + optional fields overrun ({currentOffset} > {rtpPayloadLength})");
                 return;
             }
             if (!b2pPresent) return;
@@ -152,7 +187,7 @@ namespace SoftSled.Components.AudioVisual {
             }
 
             if (rtpMarker && !sawAnyTerminator)
-                Trace.WriteLine($"WMRTP Audio: SN {rtpSequenceNumber} M=1 but no F=2/F=3 payload found");
+                Warn($"WMRTP Audio: SN {rtpSequenceNumber} M=1 but no F=2/F=3 payload found");
         }
 
         private bool ProcessOnePayload(byte[] buf, int bufLen, ref int currentOffset,
@@ -176,7 +211,7 @@ namespace SoftSled.Components.AudioVisual {
             int payloadOffsetField = -1;
             if (opPresent) {
                 if (currentOffset + 2 > bufLen) {
-                    Trace.WriteLine($"WMRTP Audio Error SN {seqNum}: short Offset field");
+                    Warn($"WMRTP Audio Error SN {seqNum}: short Offset field");
                     return false;
                 }
                 payloadOffsetField = (buf[currentOffset] << 8) | buf[currentOffset + 1];
@@ -222,7 +257,7 @@ namespace SoftSled.Components.AudioVisual {
                 if (xPresent) {
                     while (currentOffset < bufLen) {
                         if (currentOffset + 2 > bufLen) {
-                            Trace.WriteLine($"WMRTP Audio Error SN {seqNum}: short Extension header");
+                            Warn($"WMRTP Audio Error SN {seqNum}: short Extension header");
                             return false;
                         }
                         byte extHeader = buf[currentOffset++];
@@ -244,7 +279,7 @@ namespace SoftSled.Components.AudioVisual {
             if (opPresent) {
                 payloadDataEnd = offsetFieldStart + 2 + payloadOffsetField;
                 if (payloadDataEnd < payloadDataStart || payloadDataEnd > bufLen) {
-                    Trace.WriteLine($"WMRTP Audio Error SN {seqNum}: Offset {payloadOffsetField} → end {payloadDataEnd} out of range");
+                    Warn($"WMRTP Audio Error SN {seqNum}: Offset {payloadOffsetField} → end {payloadDataEnd} out of range");
                     return false;
                 }
             } else {
@@ -254,7 +289,7 @@ namespace SoftSled.Components.AudioVisual {
             if (payloadDataLen < 0) return false;
 
             if (firstOrComplete && eBit) {
-                Trace.WriteLine($"WMRTP Audio: SN {seqNum} E=1 (encrypted) — dropping payload (DRM not supported)");
+                Warn($"WMRTP Audio: SN {seqNum} E=1 (encrypted) — dropping payload (DRM not supported)");
                 if (stream.Fragments != null) stream.Fragments = null;
                 stream.PendingPostLossFlag = true;
                 currentOffset = payloadDataEnd;
@@ -273,7 +308,7 @@ namespace SoftSled.Components.AudioVisual {
             switch (fragType) {
                 case F_COMPLETE_MAU:
                     if (stream.Fragments != null) {
-                        Trace.WriteLine($"WMRTP Audio Warning SN {seqNum}: F=3 received while assembling — discarding {stream.Fragments.Count} prior frags");
+                        Warn($"WMRTP Audio Warning SN {seqNum}: F=3 received while assembling — discarding {stream.Fragments.Count} prior frags");
                         stream.Fragments = null;
                     }
                     EmitMau(data, rtpTs, sBit, d1Bit || stream.PendingPostLossFlag, eBit, stream.PendingPostLossFlag, contentMs);
@@ -283,7 +318,7 @@ namespace SoftSled.Components.AudioVisual {
 
                 case F_FIRST_FRAGMENT:
                     if (stream.Fragments != null)
-                        Trace.WriteLine($"WMRTP Audio Warning SN {seqNum}: F=1 received while assembling — overwriting prior buffer");
+                        Warn($"WMRTP Audio Warning SN {seqNum}: F=1 received while assembling — overwriting prior buffer");
                     stream.Fragments = new List<byte[]> { data };
                     stream.FirstFragmentSync    = sBit;
                     stream.FirstFragmentDiscont = d1Bit;
@@ -294,7 +329,7 @@ namespace SoftSled.Components.AudioVisual {
 
                 case F_MIDDLE_FRAGMENT:
                     if (stream.Fragments == null) {
-                        Trace.WriteLine($"WMRTP Audio Warning SN {seqNum}: F=0 with no buffer — dropping");
+                        Warn($"WMRTP Audio Warning SN {seqNum}: F=0 with no buffer — dropping");
                         stream.PendingPostLossFlag = true;
                     } else {
                         stream.Fragments.Add(data);
@@ -303,7 +338,7 @@ namespace SoftSled.Components.AudioVisual {
 
                 case F_LAST_FRAGMENT:
                     if (stream.Fragments == null) {
-                        Trace.WriteLine($"WMRTP Audio Warning SN {seqNum}: F=2 with no buffer — dropping");
+                        Warn($"WMRTP Audio Warning SN {seqNum}: F=2 with no buffer — dropping");
                         stream.PendingPostLossFlag = true;
                     } else {
                         stream.Fragments.Add(data);
@@ -319,7 +354,7 @@ namespace SoftSled.Components.AudioVisual {
                             stream.PendingPostLossFlag = false;
                             emittedMau = true;
                         } catch (Exception ex) {
-                            Trace.WriteLine($"WMRTP Audio Error SN {seqNum}: reassembly failed: {ex.Message}");
+                            Warn($"WMRTP Audio Error SN {seqNum}: reassembly failed: {ex.Message}");
                         } finally {
                             stream.Fragments = null;
                         }
@@ -355,7 +390,7 @@ namespace SoftSled.Components.AudioVisual {
             // Audio block-alignment hint (16-bit stereo = 4 bytes/frame). Misalignment after a
             // post-loss reassembly would produce L/R channel swap or static.
             if (postLoss && mau.Length % 4 != 0)
-                Trace.WriteLine($"WMRTP Audio Warning: post-loss MAU length {mau.Length} not block-aligned (16-bit stereo)");
+                Warn($"WMRTP Audio Warning: post-loss MAU length {mau.Length} not block-aligned (16-bit stereo)");
             AudioDataReady?.Invoke(this, new EventData {
                 data          = mau,
                 timestamp     = ts,
