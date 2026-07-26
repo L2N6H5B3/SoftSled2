@@ -116,17 +116,65 @@ Stage A also *measures* Risk 3 rather than assuming it away.
 
 ### Stage B — plumb real content time
 
-* **Audio:** `OnAudioMau → SubmitPacket(data, contentMs) → OnPcm →
-  WritePcm(..., contentMs)`. `WritePcm` uses pts only for gap detection, and
-  relatively, so the unit switch is safe and strictly better: a pause stops
-  looking like missing content, making `_resumePtsShiftMs` dead on the audio
-  side.
-* **Video:** `pkt->pts = contentMs`; read back **`best_effort_timestamp` only**.
-  libav then performs decode→display reordering for us.
+Split into B1 (audio) and B2 (video) because the plan's original video approach
+collided with the still-live offset rule (see B2).
 
-### Stage C — flip the pacer
+**B1 — audio (DONE 2026-07-26).** `OnAudioMau → SubmitPacket(data, …, contentMs)
+→ OnPcm(…, contentMs) → WritePcm` fed content time (falling back to wire only
+for a stream with no content clock). The renderer's gap tracker + reference pair
+now run in content units; `AudibleWirePtsMs` → `AudibleContentMs`, exact and
+drift-free. The byte master clock (`GetMediaTimeMs`) is byte-derived and
+untouched, so the offset rule and WMC `Position` are unaffected. This also fixed
+a latent shadow bug: the old reconstruction mixed resume-shifted wire
+(`audibleWire`) with unshifted-wire drift (`aDrift`) — correct only while
+`_resumePtsShiftMs == 0`. Confirmed: 144/160 shadow samples ≤50 ms, axisSkew 0.
 
-Behind a config flag, so both paths can be A/B'd within one session.
+**B2 — video (DONE 2026-07-26).** *Deviation from the original plan:* NOT
+`pkt->pts = contentMs`. That breaks the offset rule, which captures
+`_firstVideoMauRtpRaw` / `_firstVideoMauWirePtsMs` from the decoded frame's pts
+for its RTP-Info path and content-ref re-expression — both assume WIRE units.
+Reorder can only track one timeline via pts, and the offset rule needs it to be
+wire until Stage D. So instead the pacer reconstructs each frame's content as
+`framePts + videoDrift`, where `videoDrift` (content − wire) is measured
+continuously by the content-clock survey and is constant within a position
+(exact reconstruction). `PtsFramePacer.SetVideoContentDrift` + `LastReleasedContentMs`.
+No decoder or offset-rule change.
+
+*Known caveat:* `videoDrift` is sampled on the UNSHIFTED wire basis while
+`framePts` from the decoder is resume-shifted, so a pause+resume skews video
+frameContent by `_resumePtsShiftMs` until the next re-baseline. Narrow (pause
+only), and it vanishes at Stage D when the shift is removed. Audio has no such
+issue (content fed directly). If Stage C shows it mattering, sample the video
+drift post-shift.
+
+### Stage C — flip the pacer (DONE 2026-07-26, behind flag, awaiting A/B)
+
+Config flag `SoftSledConfig.UseContentReleaseMode` (default **false** = the proven
+offset rule). When true, `PtsFramePacer` releases each frame when
+`framePts + videoDrift <= audibleContent + trim`, where `audibleContent` is the
+renderer's `AudibleContentMs` through a dedicated smoother
+(`SmoothedAudibleContentMs`, same jitter-rejection as the master smoother). No
+`_pts0`, `_masterAtAnchor`, or `_syncOffsetMs` in the release path.
+
+The offset computation (`UpdateSyncOffset`) still runs and still calls
+`SetSyncOffsetMs` — but ONLY to size the jitter buffer (`|offset|` = the
+video-lead the buffer must hold). The pacer ignores it for timing. This reuse
+means content mode inherits the proven buffer-sizing with no new tuning.
+
+Seek handling needs no re-derivation: `ResetMasterSmoothing` clears the content
+smoother too, `AudibleContentMs` returns `MinValue` until the post-clear write
+re-establishes the reference (pacer holds meanwhile), then the smoother re-seeds
+to the new content position. That is the whole resilience win — a seek/reposition
+is just the audible content clock jumping, which video follows automatically.
+
+**Measured prediction to verify:** H.264 steady-state should drop from the offset
+rule's ~+60 ms residual to ~0 (release is *at* audibleContent + trim). MPEG-2 was
+already ~0. The `[content-shadow] shadowDelta` should sit near 0 by construction
+in this mode (it *is* the release condition), so the real test is the eye + the
+seek transients (positive-offset speed-through should become a clean skip).
+
+To A/B: set `UseContentReleaseMode` true in config, restart playback; the log
+prints `[ext-sync] CONTENT release mode ENABLED`.
 
 ### Stage D — delete the dead machinery
 

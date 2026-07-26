@@ -104,6 +104,34 @@ namespace SoftSled.Components.AudioVisual.Utilities {
 
         public void SetMasterClock(Func<long> masterClockMs) { _masterClockMs = masterClockMs; }
 
+        // STAGE B2: content-time source for video frames. Returns (content − wire)
+        // ms for the video stream, measured continuously by the controller's
+        // content-clock survey and constant within a position. A frame's content
+        // time = its wire PtsMs + this drift. long.MinValue = not yet measured.
+        // Kept as drift-reconstruction (not pkt->pts = content) so the decoder
+        // keeps reordering on the wire pts the offset rule still depends on; the
+        // reconstruction is exact within a position because the drift is constant.
+        // Stage C releases against content using this; for now it only feeds the
+        // shadow's frameContent so BOTH sides are productionised.
+        private Func<long> _videoContentDrift;
+        public void SetVideoContentDrift(Func<long> drift) { _videoContentDrift = drift; }
+
+        // STAGE C: content-release mode. When enabled, the release loop ignores
+        // the derived offset + pts0/masterAtAnchor anchor entirely and instead
+        // releases each frame when its CONTENT time (PtsMs + drift) has been
+        // reached by the audible content clock:  PtsMs + drift <= audible + trim.
+        // The offset (SetSyncOffsetMs) is still honoured for BUFFER SIZING only.
+        private volatile bool _contentRelease;
+        private Func<long> _contentClockMs;   // smoothed audible content time
+        private long _contentTrimMs;
+        public void SetContentReleaseMode(bool on) { _contentRelease = on; }
+        public void SetContentClock(Func<long> audibleContentMs) { _contentClockMs = audibleContentMs; }
+        public void SetContentTrimMs(long trimMs) { Interlocked.Exchange(ref _contentTrimMs, trimMs); }
+        private long _lastReleasedContentMs = long.MinValue;
+        /// <summary>Content time (ms) of the most recently released frame —
+        /// PtsMs + video drift. long.MinValue until drift is available.</summary>
+        public long LastReleasedContentMs { get { lock (_gate) { return _lastReleasedContentMs; } } }
+
         /// <summary>Set the masterAtAnchor to use on the NEXT re-anchor (see
         /// <see cref="_reanchorMasterOverride"/>). Call right before Reanchor().</summary>
         public void SetReanchorMasterOverride(long masterMs) {
@@ -361,6 +389,40 @@ namespace SoftSled.Components.AudioVisual.Utilities {
                             _bufBytes -= f.Buf.Length;
                             due = f;
                         }
+                    } else if (_contentRelease && _contentClockMs != null) {
+                        // ---- STAGE C: content-time release ----
+                        // Release each frame when its content time has been
+                        // reached by the audible content clock. No offset, no
+                        // pts0/anchor — the shared timeline aligns the streams
+                        // directly, so a seek/reposition needs no re-derivation.
+                        long audible = _contentClockMs();
+                        var vcd = _videoContentDrift;
+                        long drift = vcd != null ? vcd() : long.MinValue;
+                        long trim = Interlocked.Read(ref _contentTrimMs);
+                        if (audible != long.MinValue && drift != long.MinValue) {
+                            _started = true;
+                            // frameContent = PtsMs + drift <= audible + trim
+                            long threshold = audible + trim - drift;
+                            while (_queue.Count > 0 && _queue.Peek().PtsMs <= threshold) {
+                                if (due != null) {
+                                    Recycle(due.Value.Buf);
+                                    Interlocked.Increment(ref _dropped);
+                                }
+                                var f = _queue.Dequeue();
+                                _bufBytes -= f.Buf.Length;
+                                due = f;
+                            }
+                            if (due != null) {
+                                _lastReleasedPts = due.Value.PtsMs;
+                                _lastReleasedContentMs = due.Value.PtsMs + drift;
+                                // Diag: released content vs the target (audible+trim);
+                                // ~0 means the frame on screen matches the audio.
+                                _lastReleasedElapsed = _lastReleasedContentMs;
+                                sElapsed = audible + trim;
+                            }
+                        }
+                        // audible/drift not ready (post-seek re-establish) → hold.
+                        sQueue = _queue.Count;
                     } else {
                         bool slaved = _masterClockMs != null;
                         if (_pts0 == long.MinValue) {
@@ -447,6 +509,12 @@ namespace SoftSled.Components.AudioVisual.Utilities {
                             if (due != null) {
                                 _lastReleasedElapsed = due.Value.PtsMs - _pts0;
                                 _lastReleasedPts = due.Value.PtsMs;   // Stage A shadow
+                                // Stage B2: express the released frame on the
+                                // content timeline (wire pts + measured drift).
+                                var vcd = _videoContentDrift;
+                                long d = vcd != null ? vcd() : long.MinValue;
+                                _lastReleasedContentMs = d != long.MinValue
+                                    ? due.Value.PtsMs + d : long.MinValue;
                             }
                         }
 

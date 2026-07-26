@@ -634,7 +634,8 @@ namespace SoftSledWPF.Components.Shell {
             // The GPU presenter needs a window handle, so it's created in
             // OnLoaded and attached then (see AttachVideoPresenterWhenReady).
             _extSyncController = new SoftSled.Components.AudioVisual.ExternalSync
-                .ExternalSyncMediaController(_avLogger, cfg.AudioSyncOffsetMs, cfg.VideoJitterBufferMs);
+                .ExternalSyncMediaController(_avLogger, cfg.AudioSyncOffsetMs, cfg.VideoJitterBufferMs,
+                                             cfg.UseContentReleaseMode);
             AvCtrlHandler.MediaController = _extSyncController;
 
             // Create the GPU video presenter (D3D9Ex device + D3DImage) and

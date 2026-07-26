@@ -610,28 +610,20 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// timestamps from the server side.</summary>
         public long FirstSampleWirePtsMs => _baseSet ? _basePtsMs : 0;
 
-        /// <summary>STAGE A (content-clock migration, shadow only): wire PTS of
-        /// the audio sample currently AUDIBLE.
+        /// <summary>STAGE B: file-global CONTENT time (ms) of the audio sample
+        /// currently AUDIBLE — the master position expressed on the shared
+        /// cross-stream timeline. This is what the Stage C pacer will release
+        /// video against (frameContent &lt;= AudibleContentMs + trim).
         ///
-        /// <para>Built on the existing clock rather than a second mapping:
-        /// <see cref="GetMediaTimeMs"/> already advances only with genuinely
-        /// audible content (underrun silence subtracted, discarded bytes
-        /// excluded), and the gap-fill / overlap-trim in <see cref="WritePcm"/>
-        /// exists precisely to keep the byte clock isomorphic to the content
-        /// timeline. If that isomorphism holds, basePts + mediaTime IS the
-        /// audible wire position — and the Stage A shadow delta is exactly the
-        /// test of whether it holds. Diagnostic only; nothing consumes it for
-        /// playback.</para></summary>
-        /// <para>CORRECTED 2026-07-26: the first version returned
-        /// <c>_basePtsMs + GetMediaTimeMs()</c>. <c>_basePtsMs</c> is latched from
-        /// the first sample of the MEDIA and never re-based, so after a seek it
-        /// described the pre-seek timeline while the byte clock ran on the new
-        /// one — the two are unrelated once the wire pts jumps, making every
-        /// post-seek shadow reading meaningless (log 20260726-184301: reported
-        /// audWire=58629 when the real post-seek wire pts was 67801). It now maps
-        /// through the PER-SEGMENT reference pair the gap tracker maintains, which
-        /// re-seeds on every ClearBuffer, so it is valid across seeks.</para></summary>
-        public long AudibleWirePtsMs {
+        /// <para>Since Stage B, <see cref="WritePcm"/> is fed content time
+        /// directly (not the wire pts), so the gap-tracker reference pair
+        /// (<c>_gapRefPtsMs</c>, <c>_gapRefAuthoredBytes</c>) is in content units
+        /// and re-seeds on every ClearBuffer — valid across seeks with no drift
+        /// reconstruction. The audible-byte basis matches <see cref="GetMediaTimeMs"/>
+        /// exactly: device-played bytes, minus rendered underrun silence, capped
+        /// at real playable content. long.MinValue until the first post-clear
+        /// write establishes the reference.</para></summary>
+        public long AudibleContentMs {
             get {
                 if (_disposed || !_baseSet) return long.MinValue;
                 lock (_gate) {

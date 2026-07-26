@@ -167,18 +167,24 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private TaskCompletionSource<bool> _openTcs =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public ExternalSyncMediaController(Logger log) : this(log, 0, 250) { }
+        public ExternalSyncMediaController(Logger log) : this(log, 0, 250, false) { }
 
         public ExternalSyncMediaController(Logger log, int audioSyncOffsetMs)
-            : this(log, audioSyncOffsetMs, 250) { }
+            : this(log, audioSyncOffsetMs, 250, false) { }
 
-        public ExternalSyncMediaController(Logger log, int audioSyncOffsetMs, int videoJitterBufferMs) {
+        public ExternalSyncMediaController(Logger log, int audioSyncOffsetMs, int videoJitterBufferMs)
+            : this(log, audioSyncOffsetMs, videoJitterBufferMs, false) { }
+
+        public ExternalSyncMediaController(Logger log, int audioSyncOffsetMs, int videoJitterBufferMs,
+                                           bool useContentReleaseMode) {
             _log = log;
             AudioSyncOffsetMs = audioSyncOffsetMs;
             _liveTrimMs = audioSyncOffsetMs;   // live-nudgeable starting point
             _videoJitterBufferMs = videoJitterBufferMs > 0 ? videoJitterBufferMs : 250;
+            _useContentRelease = useContentReleaseMode;
             _log?.LogInfo($"[ext-sync] controller constructed (audioSyncOffset={audioSyncOffsetMs}ms, " +
-                          $"videoJitterBuffer={_videoJitterBufferMs}ms)");
+                          $"videoJitterBuffer={_videoJitterBufferMs}ms, " +
+                          $"contentRelease={_useContentRelease})");
             // Refactor step 1/2: surface the pure offset-policy self-test (fixture
             // status) once at startup. Diagnostic only — proves the module loads
             // and shows which fixtures still need ground truth.
@@ -381,7 +387,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 _log?.LogDebug($"[ext-sync-anchor] first audio MAU rtpTs={rtpTs} ({ptsMs}ms, clk={_audioClockHz})");
                 UpdateSyncOffset();
             }
-            _decoder.SubmitPacket(data, ptsMs, CurrentEpoch);
+            // Stage B: carry the raw content time (unshifted — the content clock
+            // doesn't jump on pause/seek, so it needs no _resumePtsShiftMs) so the
+            // renderer can run its gap tracker + clock in content units.
+            _decoder.SubmitPacket(data, ptsMs, CurrentEpoch, contentMs);
         }
 
         private void OnDecoderFormatReady() {
@@ -420,8 +429,13 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             }
         }
 
-        private void OnDecodedPcm(byte[] pcm, int len, long ptsMs, long epoch) {
-            _renderer?.WritePcm(pcm, len, ptsMs, epoch);
+        private void OnDecodedPcm(byte[] pcm, int len, long ptsMs, long epoch, long contentMs) {
+            // Stage B: feed the renderer CONTENT time when the stream carries it
+            // (all tested content: 100% coverage). Fall back to the wire pts only
+            // for a stream with no content clock, so such a stream stays on one
+            // consistent timeline rather than mixing units.
+            long timelineMs = contentMs >= 0 ? contentMs : ptsMs;
+            _renderer?.WritePcm(pcm, len, timelineMs, epoch);
         }
 
         /// <summary>Rate-limited view of the audio master clock for video pacing.
@@ -463,7 +477,44 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         }
 
         private void ResetMasterSmoothing() {
-            lock (_smoothLock) { _smoothMasterMs = -1; }
+            lock (_smoothLock) { _smoothMasterMs = -1; _smoothContentMs = -1; }
+        }
+
+        // ----- Stage C: smoothed AUDIBLE CONTENT clock -----
+        // The content-mode counterpart of SmoothedMasterMs. Same jitter-rejection
+        // algorithm, but the raw source is the renderer's AudibleContentMs (the
+        // master position expressed on the shared B57/NPT timeline) instead of the
+        // 0-relative byte clock. The pacer releases video against this in content
+        // mode. Reset alongside the master smoother (ResetMasterSmoothing), and it
+        // re-seeds to raw on the first call after a reset — so a seek's content
+        // jump (which AudibleContentMs shows once WritePcm re-establishes the
+        // reference) is adopted, not fought by the monotonic clamp.
+        private double _smoothContentMs = -1;
+        private long _smoothContentLastWallMs;
+        private long SmoothedAudibleContentMs() {
+            long raw = _renderer?.AudibleContentMs ?? long.MinValue;
+            if (raw == long.MinValue) return long.MinValue;   // reference not established yet
+            lock (_smoothLock) {
+                long wallNow = _smoothWall.ElapsedMilliseconds;
+                if (_smoothContentMs < 0) {
+                    _smoothContentMs = raw; _smoothContentLastWallMs = wallNow; return raw;
+                }
+                long dt = wallNow - _smoothContentLastWallMs;
+                if (dt < 0) dt = 0;
+                _smoothContentLastWallMs = wallNow;
+                double adv = _smoothContentMs + dt;                 // advance at real-time
+                double lag = raw - adv;
+                if (lag > 0) {
+                    double catchUp = dt * (MaxClockCatchUpMsPerSec / 1000.0);
+                    if (catchUp > lag) catchUp = lag;
+                    adv += catchUp;
+                }
+                if (adv > raw) adv = raw;                            // never past available content
+                if (raw - adv > MaxClockLagMs) adv = raw - MaxClockLagMs;
+                if (adv < _smoothContentMs) adv = _smoothContentMs;  // monotonic within a segment
+                _smoothContentMs = adv;
+                return (long)adv;
+            }
         }
 
         /// <summary>Current smoothed-clock value WITHOUT advancing it (diagnostic
@@ -503,6 +554,20 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                     prerollMs: _videoJitterBufferMs, _log);
                 // Slave video presentation to the audio device clock.
                 _pacer.SetMasterClock(SmoothedMasterMs);
+                // Stage B2: give the pacer the video stream's content drift so it
+                // can express each frame on the shared content timeline.
+                _pacer.SetVideoContentDrift(() => _vidContentDiag.CurrentDriftMs);
+                // Stage C: in content-release mode, video is released against the
+                // audible CONTENT clock + trim, NOT the derived offset. The offset
+                // computation still runs (it sizes the jitter buffer via
+                // SetSyncOffsetMs → SizeBufferForOffset: |offset| = the video-lead
+                // the buffer must hold), but the pacer ignores it for timing.
+                if (_useContentRelease) {
+                    _pacer.SetContentReleaseMode(true);
+                    _pacer.SetContentClock(SmoothedAudibleContentMs);
+                    _pacer.SetContentTrimMs(Interlocked.Read(ref _liveTrimMs));
+                    _log?.LogInfo("[ext-sync] CONTENT release mode ENABLED — video paced to audible content time");
+                }
                 // Feed the video RTCP BFR W3 the pacer's REAL buffered span so
                 // WMPNss sees the jitter buffer draining and speeds up to refill
                 // — without this, video delivery settles ~3% under real-time and
@@ -908,6 +973,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         // Combined with the user's _liveTrimMs wherever the pacer offset is set.
         private long _videoCodecTrimMs;
         private bool _videoIsH264;   // set at codec commit; gates the derived-vPad H.264 offset
+        private readonly bool _useContentRelease;   // Stage C: release video on content time, not offset
         private long EffectiveTrimMs() =>
             Interlocked.Read(ref _liveTrimMs) + Interlocked.Read(ref _videoCodecTrimMs);
 
@@ -922,6 +988,9 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             long trim = Interlocked.Add(ref _liveTrimMs, deltaMs);
             long offset = Interlocked.Read(ref _baseOffsetMs) + trim + Interlocked.Read(ref _videoCodecTrimMs);
             _pacer?.SetSyncOffsetMs(offset);
+            // Content mode: the trim is applied directly (the base offset is not
+            // used for timing there), so push it separately.
+            if (_useContentRelease) _pacer?.SetContentTrimMs(trim);
             _log?.LogInfo($"[ext-sync] A/V trim nudged {(deltaMs >= 0 ? "+" : "")}{deltaMs}ms " +
                           $"→ trim {trim}ms (base {Interlocked.Read(ref _baseOffsetMs)}ms → offset {offset}ms)");
             return (int)trim;
@@ -1569,33 +1638,26 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// per-MAU plumbing.</para>
         /// </summary>
         private void LogContentShadow(NAudioMasterRenderer r, PtsFramePacer pc) {
-            long aDrift = _audContentDiag.CurrentDriftMs;
-            long vDrift = _vidContentDiag.CurrentDriftMs;
-            long audWire = r.AudibleWirePtsMs;
-            long vidPts = pc.LastReleasedPtsMs;
-            if (aDrift == long.MinValue || vDrift == long.MinValue
-                || audWire == long.MinValue || vidPts == long.MinValue) {
+            // Stage B: BOTH sides are now productionised on the content timeline —
+            // audibleContent straight from the renderer (runs on content time),
+            // frameContent from the pacer (released frame's wire pts + measured
+            // video drift). No ad-hoc reconstruction in the shadow itself.
+            long audibleContent = r.AudibleContentMs;
+            long frameContent = pc.LastReleasedContentMs;
+            if (audibleContent == long.MinValue || frameContent == long.MinValue) {
                 _log?.LogInfo("[content-shadow] not ready " +
-                              $"(aDrift={(aDrift == long.MinValue ? "-" : aDrift.ToString())} " +
-                              $"vDrift={(vDrift == long.MinValue ? "-" : vDrift.ToString())} " +
-                              $"audWire={(audWire == long.MinValue ? "-" : audWire.ToString())} " +
-                              $"vidPts={(vidPts == long.MinValue ? "-" : vidPts.ToString())})");
+                              $"(audibleContent={(audibleContent == long.MinValue ? "-" : audibleContent.ToString())} " +
+                              $"frameContent={(frameContent == long.MinValue ? "-" : frameContent.ToString())})");
                 return;
             }
             long trim = EffectiveTrimMs();
-            long audibleContent = audWire + aDrift;
-            long frameContent = vidPts + vDrift;
             long shadowDelta = frameContent - (audibleContent + trim);
-            // axisSkew is migration Risk 3: authored vs playable byte axes. Expected
-            // to settle at 0 once the preroll hold has drained; a persistent value
-            // means Stage B needs an explicit reconciliation before the renderer can
-            // report audible CONTENT time directly.
             long axisSkew = r.AuthoredMinusPlayableBytes;
             _log?.LogInfo(
                 $"[content-shadow] audibleContent={audibleContent}ms frameContent={frameContent}ms " +
                 $"trim={trim}ms → shadowDelta={shadowDelta}ms " +
                 $"(offsetRuleDrift={vidRelLagForShadow(r, pc)}ms) | " +
-                $"aDrift={aDrift} vDrift={vDrift} audWire={audWire} vidPts={vidPts} " +
+                $"vDrift={_vidContentDiag.CurrentDriftMs} vidPts={pc.LastReleasedPtsMs} " +
                 $"axisSkewBytes={axisSkew} trimmed={r.OverlapTrimmedMs}ms " +
                 $"staleChunks={r.StaleEpochChunks}");
         }

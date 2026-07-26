@@ -106,7 +106,12 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         /// a seek stays stale even if it decodes after the flush — that in-flight
         /// PCM is exactly what used to re-anchor the renderer's gap tracker on the
         /// OLD timeline after a seek (spurious multi-second silence fill).</para>
-        public event Action<byte[], int, long, long> OnPcm;
+        /// <para>Stage B: the 5th arg is the file-global CONTENT time (B57/NPT,
+        /// ms) of the source MAU, carried in parallel with the wire pts. -1 when
+        /// the stream carries no content clock. The renderer runs its gap tracker
+        /// and clock on this instead of the wire pts, so a pause/seek jump in the
+        /// Send-Time wire clock no longer looks like missing content.</para>
+        public event Action<byte[], int, long, long, long> OnPcm;
 
         public LibAvAudioDecoder(AVCodecID codecId, Logger log)
             : this(codecId, log, hintSampleRate: 0, hintChannels: 0) { }
@@ -198,7 +203,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             _worker.Start();
         }
 
-        public void SubmitPacket(byte[] data, long ptsMs, long epoch) {
+        public void SubmitPacket(byte[] data, long ptsMs, long epoch, long contentMs) {
             if (_disposed || data == null || data.Length == 0) return;
 
             // Diagnostics: log first MAU's first 64 bytes so we can
@@ -219,11 +224,11 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             Interlocked.Add(ref _statPacketsIn, 1);
             Interlocked.Add(ref _statBytesIn, data.Length);
 
-            if (!_queue.TryAdd(new QueuedPacket { Data = data, PtsMs = ptsMs, Epoch = epoch })) {
+            if (!_queue.TryAdd(new QueuedPacket { Data = data, PtsMs = ptsMs, Epoch = epoch, ContentMs = contentMs })) {
                 // Queue full — drop oldest, retry. Bounded backpressure
                 // matches the LibAvDecoder pattern: better to lose old
                 // audio than to block the depacketizer.
-                if (_queue.TryTake(out _)) _queue.TryAdd(new QueuedPacket { Data = data, PtsMs = ptsMs, Epoch = epoch });
+                if (_queue.TryTake(out _)) _queue.TryAdd(new QueuedPacket { Data = data, PtsMs = ptsMs, Epoch = epoch, ContentMs = contentMs });
             }
         }
 
@@ -350,12 +355,12 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                     }
 
                     SendPacket(pkt, qp);
-                    DrainFrames(frame, qp.PtsMs, qp.Epoch);
+                    DrainFrames(frame, qp.PtsMs, qp.Epoch, qp.ContentMs);
                     MaybeEmitStats();
                 }
                 // Flush
                 ffmpeg.avcodec_send_packet(_ctx, null);
-                DrainFrames(frame, 0, long.MaxValue);   // EOF drain: never epoch-gated
+                DrainFrames(frame, 0, long.MaxValue, -1);   // EOF drain: never epoch-gated, no content
             } catch (Exception ex) {
                 _log?.LogError($"[libav-audio] worker exception: {ex.Message}");
             } finally {
@@ -385,7 +390,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private bool _formatReadyFired;
         private byte[] _outBuf;
 
-        private void DrainFrames(AVFrame* frame, long ptsMs, long epoch) {
+        private void DrainFrames(AVFrame* frame, long ptsMs, long epoch, long contentMs) {
             while (true) {
                 int ret = ffmpeg.avcodec_receive_frame(_ctx, frame);
                 if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) || ret == ffmpeg.AVERROR_EOF) return;
@@ -440,7 +445,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                 Interlocked.Add(ref _statFramesOut, 1);
                 Interlocked.Add(ref _statPcmBytesOut, producedBytes);
                 try {
-                    OnPcm?.Invoke(_outBuf, producedBytes, ptsMs, epoch);
+                    OnPcm?.Invoke(_outBuf, producedBytes, ptsMs, epoch, contentMs);
                 } catch (Exception ex) {
                     _log?.LogError($"[libav-audio] OnPcm threw: {ex.Message}");
                 }
@@ -498,6 +503,7 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             public byte[] Data;
             public long PtsMs;
             public long Epoch;   // sync epoch at submit time (see OnPcm)
+            public long ContentMs;   // file-global content time of the MAU (-1 = none)
         }
     }
 }
