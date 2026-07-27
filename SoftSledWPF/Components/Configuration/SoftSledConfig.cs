@@ -19,6 +19,14 @@ namespace SoftSled.Components.Configuration {
         public bool EnableRemoteRendering = true;
         public bool EnableOverscanMargin = false;
         public bool Enable2DAnimations = true;
+        // When true (default) video is composited on the GPU via a
+        // Direct3D9Ex-backed D3DImage (D3DImagePresenter). When false, video
+        // falls back to a plain WPF WriteableBitmap (WriteableBitmapPresenter) —
+        // no GPU surface. Useful on machines where the D3D path is unavailable
+        // or misbehaves (RDP sessions, old/virtual GPUs). If 3D is enabled but
+        // the D3D device can't be created, the session auto-falls back to the
+        // software presenter so video still renders. Takes effect next session.
+        public bool Enable3DAcceleration = true;
         public bool EnableIntenseAnimations = false;
         public bool InitialSetupComplete = false;
         public bool UseTvSkin = false;

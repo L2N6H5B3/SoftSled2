@@ -73,10 +73,12 @@ namespace SoftSledWPF.Components.Shell {
         private SoftSled.Components.AudioVisual.WmcFastpathOverlayRegionDecoder.OverlayRegion _lastOverlay;
         // Sole playback controller: audio decoded via libav + rendered through
         // NAudio (the master clock); video decoded via libav and presented on a
-        // GPU surface (D3DImage), paced to the audio clock. _videoPresenter owns
-        // the D3D9Ex device + D3DImage; it's bound to VideoImage.Source.
+        // GPU surface (D3DImage) or a software WriteableBitmap, paced to the
+        // audio clock. _videoPresenter owns the presenter surface; its Image is
+        // bound to VideoImage.Source. The concrete type depends on the
+        // Enable3DAcceleration config (D3DImagePresenter vs WriteableBitmapPresenter).
         private SoftSled.Components.AudioVisual.ExternalSync.ExternalSyncMediaController _extSyncController;
-        private SoftSled.Components.AudioVisual.Utilities.D3DImagePresenter _videoPresenter;
+        private SoftSled.Components.AudioVisual.Utilities.IVideoPresenter _videoPresenter;
         // Render mode (GDI vs RUI), resolved once at session start. GDI mode
         // letterboxes the RDP framebuffer (rdpDisplay, Stretch=Uniform) inside
         // the window, so the video plane must be constrained to that same
@@ -638,20 +640,49 @@ namespace SoftSledWPF.Components.Shell {
                                              cfg.UseContentReleaseMode);
             AvCtrlHandler.MediaController = _extSyncController;
 
-            // Create the GPU video presenter (D3D9Ex device + D3DImage) and
-            // bind it to the VideoImage plane. Needs a window handle, which is
-            // available now (Start runs after the page is shown).
+            // Create the video presenter and bind it to the VideoImage plane.
+            // With 3D acceleration enabled (default) this is the GPU
+            // D3DImagePresenter (D3D9Ex device + D3DImage), which needs a window
+            // handle — available now (Start runs after the page is shown). With
+            // it disabled, or if the D3D device can't be created, we fall back to
+            // the software WriteableBitmapPresenter so video still renders.
             try {
                 var win = System.Windows.Window.GetWindow(this);
                 IntPtr hwnd = win != null
                     ? new System.Windows.Interop.WindowInteropHelper(win).Handle
                     : IntPtr.Zero;
-                _videoPresenter = new SoftSled.Components.AudioVisual.Utilities
-                    .D3DImagePresenter(Dispatcher, hwnd, _avLogger);
+
+                SoftSled.Components.AudioVisual.Utilities.IVideoPresenter presenter = null;
+                if (cfg.Enable3DAcceleration) {
+                    try {
+                        presenter = new SoftSled.Components.AudioVisual.Utilities
+                            .D3DImagePresenter(Dispatcher, hwnd, _avLogger);
+                    } catch (Exception ex) {
+                        _avLogger?.LogError($"[video] 3D acceleration unavailable ({ex.Message}); " +
+                                            "falling back to software presenter");
+                        presenter = null;
+                    }
+                } else {
+                    _avLogger?.LogInfo("[video] 3D acceleration disabled in config — using software presenter");
+                }
+                if (presenter == null) {
+                    presenter = new SoftSled.Components.AudioVisual.Utilities
+                        .WriteableBitmapPresenter(Dispatcher, _avLogger);
+                }
+
+                _videoPresenter = presenter;
                 VideoImage.Source = _videoPresenter.Image;
+                // The software presenter re-allocates its WriteableBitmap on a
+                // resolution change (a WriteableBitmap can't resize in place), so
+                // re-bind the plane's Source whenever the surface is replaced.
+                // The GPU presenter's D3DImage is stable and never raises this.
+                _videoPresenter.ImageChanged += () => {
+                    if (Dispatcher.CheckAccess()) VideoImage.Source = _videoPresenter?.Image;
+                    else Dispatcher.BeginInvoke(new Action(() => VideoImage.Source = _videoPresenter?.Image));
+                };
                 _extSyncController.AttachVideoPresenter(_videoPresenter);
             } catch (Exception ex) {
-                _avLogger?.LogError($"[video] D3DImage presenter init failed: {ex.Message}");
+                _avLogger?.LogError($"[video] presenter init failed: {ex.Message}");
             }
 
             _avLogger?.LogInfo($"[controller] playback controller active " +

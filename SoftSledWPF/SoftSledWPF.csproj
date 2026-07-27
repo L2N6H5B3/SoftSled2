@@ -214,6 +214,8 @@
     <Compile Include="Components\AudioVisual\Utilities\PtsFramePacer.cs" />
     <Compile Include="Components\AudioVisual\Utilities\Yuv420ToBgra.cs" />
     <Compile Include="Components\AudioVisual\Utilities\D3DImagePresenter.cs" />
+    <Compile Include="Components\AudioVisual\Utilities\IVideoPresenter.cs" />
+    <Compile Include="Components\AudioVisual\Utilities\WriteableBitmapPresenter.cs" />
     <Compile Include="Components\AudioVisual\Utilities\FfmpegRuntime.cs" />
     <Compile Include="Components\AudioVisual\ExternalSync\AvSyncPolicy.cs" />
     <Compile Include="Components\AudioVisual\ExternalSync\ExternalAudioFormat.cs" />

@@ -365,6 +365,7 @@ namespace SoftSledWPF.Components.Shell {
                 ChkMinimizeToTray.IsChecked    = _config.MinimizeToTray;
                 ChkBootTray.IsChecked          = _config.BootStartMode == BootStartMode.Tray;
                 ChkBootUi.IsChecked            = _config.BootStartMode == BootStartMode.Ui;
+                ChkAcceleration.IsChecked      = _config.Enable3DAcceleration;
                 ChkRemoteRendering.IsChecked   = _config.EnableRemoteRendering;
                 Chk2DAnimations.IsChecked      = _config.Enable2DAnimations;
                 ChkIntenseAnimations.IsChecked = _config.EnableIntenseAnimations;
@@ -516,6 +517,7 @@ namespace SoftSledWPF.Components.Shell {
             _config.CloseOnWmcClose         = ChkCloseOnWmcClose.IsChecked == true;
             _config.KeepScreenAwake         = ChkKeepScreenAwake.IsChecked == true;
             _config.MediaPlaybackModeEnabled = ChkMediaMode.IsChecked == true;
+            _config.Enable3DAcceleration    = ChkAcceleration.IsChecked == true;
             _config.EnableRemoteRendering   = ChkRemoteRendering.IsChecked == true;
             _config.Enable2DAnimations      = Chk2DAnimations.IsChecked == true;
             _config.EnableIntenseAnimations = ChkIntenseAnimations.IsChecked == true;

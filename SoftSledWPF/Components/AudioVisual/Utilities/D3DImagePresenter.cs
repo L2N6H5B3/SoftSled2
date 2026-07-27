@@ -4,6 +4,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace SoftSled.Components.AudioVisual.Utilities {
@@ -22,7 +23,7 @@ namespace SoftSled.Components.AudioVisual.Utilities {
     /// thread — it copies into a staging buffer and coalesces a single
     /// UI-thread present, mirroring the RDP paint coalescer.</para>
     /// </summary>
-    internal sealed class D3DImagePresenter : IDisposable {
+    internal sealed class D3DImagePresenter : IVideoPresenter {
 
         private readonly Dispatcher _dispatcher;
         private readonly Logger _log;
@@ -32,6 +33,13 @@ namespace SoftSled.Components.AudioVisual.Utilities {
         private Surface _surface;
 
         public D3DImage Image { get; }
+
+        // IVideoPresenter.Image is typed as ImageSource; the GPU surface is a
+        // stable D3DImage that WPF composites directly. It never changes, so
+        // ImageChanged never fires (explicit no-op add/remove keeps the compiler
+        // from warning about an unused event field).
+        ImageSource IVideoPresenter.Image => Image;
+        event Action IVideoPresenter.ImageChanged { add { } remove { } }
 
         // Staging buffer (BGRA, stride = width*4). Filled by SubmitFrame,
         // drained by DoPresent. Guarded by _gate.

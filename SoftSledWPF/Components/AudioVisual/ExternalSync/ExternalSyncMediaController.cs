@@ -98,9 +98,11 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
         private bool _lastOptimisedPreroll;
         private double _lastRequestedRate = 1.0;
 
-        // Video pipeline (libav + D3DImage, audio-slaved). The presenter is
-        // created and owned by the session; the decoder + pacer are owned here.
-        private D3DImagePresenter _presenter;
+        // Video pipeline (libav + presenter, audio-slaved). The presenter is
+        // created and owned by the session (either the GPU D3DImagePresenter or
+        // the software WriteableBitmapPresenter — see IVideoPresenter); the
+        // decoder + pacer are owned here.
+        private IVideoPresenter _presenter;
         private LibAvVideoPushDecoder _videoDecoder;
         private PtsFramePacer _pacer;
         private readonly object _videoGate = new object();
@@ -193,9 +195,10 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             _vidContentDiag.Attach(log);
         }
 
-        /// <summary>Bind the session-owned GPU presenter. Must be called before
-        /// video starts (the session does this right after construction).</summary>
-        public void AttachVideoPresenter(D3DImagePresenter presenter) {
+        /// <summary>Bind the session-owned video presenter (GPU or software).
+        /// Must be called before video starts (the session does this right after
+        /// construction).</summary>
+        public void AttachVideoPresenter(IVideoPresenter presenter) {
             _presenter = presenter;
         }
 
