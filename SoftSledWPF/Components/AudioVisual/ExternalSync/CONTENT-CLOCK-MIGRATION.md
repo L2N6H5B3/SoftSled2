@@ -140,12 +140,26 @@ continuously by the content-clock survey and is constant within a position
 (exact reconstruction). `PtsFramePacer.SetVideoContentDrift` + `LastReleasedContentMs`.
 No decoder or offset-rule change.
 
-*Known caveat:* `videoDrift` is sampled on the UNSHIFTED wire basis while
-`framePts` from the decoder is resume-shifted, so a pause+resume skews video
-frameContent by `_resumePtsShiftMs` until the next re-baseline. Narrow (pause
-only), and it vanishes at Stage D when the shift is removed. Audio has no such
-issue (content fed directly). If Stage C shows it mattering, sample the video
-drift post-shift.
+*Resume-shift interaction (FOUND + FIXED 2026-07-26, log 20260726-211912).*
+A 15.7 s pause produced a −15725 ms `_resumePtsShiftMs`. In content mode that was
+catastrophic: the shift cancels the real Send-Time jump in the DECODER path (so
+`vidPts` stays continuous) while the survey samples UNSHIFTED wire (so `vDrift`
+steps −15725), and `frameContent = vidPts + vDrift` collapsed ~13 s → every frame
+past-due → video raced at 150 fps while audio was fine.
+
+Fixed two ways together (Stage C content path only; offset path untouched):
+1. **Content mode skips the resume-shift** — the content clock doesn't jump across
+   a pause, and the survey tracks the real wire step, so cancelling it is both
+   unnecessary and harmful.
+2. **Frame content is baked at EMIT time**, not release: the `OnFrame` handler
+   submits `wirePts + drift` as the pacer's timestamp. This makes each frame
+   immune to a mixed pre/post-pause queue — a single release-time drift would
+   mis-value one side of the pause. The pacer's content branch then compares the
+   stored content directly (no drift), and the buffer-overflow check runs on the
+   continuous content span rather than the jumping wire span.
+
+Audio never had this (content fed directly since B1). The offset path still uses
+the shift and is unchanged.
 
 ### Stage C — flip the pacer (DONE 2026-07-26, behind flag, awaiting A/B)
 

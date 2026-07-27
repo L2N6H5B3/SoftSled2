@@ -104,15 +104,12 @@ namespace SoftSled.Components.AudioVisual.Utilities {
 
         public void SetMasterClock(Func<long> masterClockMs) { _masterClockMs = masterClockMs; }
 
-        // STAGE B2: content-time source for video frames. Returns (content − wire)
-        // ms for the video stream, measured continuously by the controller's
-        // content-clock survey and constant within a position. A frame's content
-        // time = its wire PtsMs + this drift. long.MinValue = not yet measured.
-        // Kept as drift-reconstruction (not pkt->pts = content) so the decoder
-        // keeps reordering on the wire pts the offset rule still depends on; the
-        // reconstruction is exact within a position because the drift is constant.
-        // Stage C releases against content using this; for now it only feeds the
-        // shadow's frameContent so BOTH sides are productionised.
+        // Video content drift (content − wire, ms) from the controller's survey.
+        // Used ONLY by the OFFSET-mode release path, to express its wire-pts frames
+        // on the content timeline for the [content-shadow] diagnostic. In CONTENT
+        // mode the controller bakes content into each frame's PtsMs at emit time
+        // (immune to the resume Send-Time step + mixed pre/post-pause queues), so
+        // the content release path does not use this at all.
         private Func<long> _videoContentDrift;
         public void SetVideoContentDrift(Func<long> drift) { _videoContentDrift = drift; }
 
@@ -396,13 +393,13 @@ namespace SoftSled.Components.AudioVisual.Utilities {
                         // pts0/anchor — the shared timeline aligns the streams
                         // directly, so a seek/reposition needs no re-derivation.
                         long audible = _contentClockMs();
-                        var vcd = _videoContentDrift;
-                        long drift = vcd != null ? vcd() : long.MinValue;
                         long trim = Interlocked.Read(ref _contentTrimMs);
-                        if (audible != long.MinValue && drift != long.MinValue) {
+                        if (audible != long.MinValue) {
                             _started = true;
-                            // frameContent = PtsMs + drift <= audible + trim
-                            long threshold = audible + trim - drift;
+                            // In content mode Frame.PtsMs IS the content time (the
+                            // controller bakes wire+drift per-frame before Submit),
+                            // so it compares directly against the audible content.
+                            long threshold = audible + trim;
                             while (_queue.Count > 0 && _queue.Peek().PtsMs <= threshold) {
                                 if (due != null) {
                                     Recycle(due.Value.Buf);
@@ -414,14 +411,14 @@ namespace SoftSled.Components.AudioVisual.Utilities {
                             }
                             if (due != null) {
                                 _lastReleasedPts = due.Value.PtsMs;
-                                _lastReleasedContentMs = due.Value.PtsMs + drift;
+                                _lastReleasedContentMs = due.Value.PtsMs;
                                 // Diag: released content vs the target (audible+trim);
                                 // ~0 means the frame on screen matches the audio.
                                 _lastReleasedElapsed = _lastReleasedContentMs;
                                 sElapsed = audible + trim;
                             }
                         }
-                        // audible/drift not ready (post-seek re-establish) → hold.
+                        // audible clock not ready (post-seek re-establish) → hold.
                         sQueue = _queue.Count;
                     } else {
                         bool slaved = _masterClockMs != null;

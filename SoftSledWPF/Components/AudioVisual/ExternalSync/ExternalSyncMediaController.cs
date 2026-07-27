@@ -624,7 +624,19 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
                             if (!_syncFinalized) UpdateSyncOffset();
                         }
                     }
-                    _pacer?.Submit(ptr, stride, w, h, ptsMs, colorspace, range);
+                    // CONTENT mode: submit the frame's CONTENT time (wire pts +
+                    // measured drift), baked in HERE per-frame. Doing it at emit
+                    // time — not at release — makes each frame immune to the resume
+                    // Send-Time step AND to a mixed pre/post-pause queue (a single
+                    // release-time drift would mis-value one side of the pause).
+                    // OFFSET mode submits the raw wire pts, as before.
+                    long tsForPacer = ptsMs;
+                    if (_useContentRelease) {
+                        long dr = _vidContentDiag.CurrentDriftMs;
+                        if (dr == long.MinValue) return;   // drift not measured yet (startup) — drop this frame
+                        tsForPacer = ptsMs + dr;
+                    }
+                    _pacer?.Submit(ptr, stride, w, h, tsForPacer, colorspace, range);
                 };
                 try {
                     d.Start();
@@ -658,7 +670,14 @@ namespace SoftSled.Components.AudioVisual.ExternalSync {
             // rtpTs values are far larger than the shift, so no unsigned
             // underflow; a re-baseline/new-media zeroes the shift before any
             // earlier-position stream could make it underflow.
-            long vShiftMs = Interlocked.Read(ref _resumePtsShiftMs);
+            // OFFSET mode cancels the pause-induced Send-Time jump at the source
+            // so the wire-based pacer + gap-fill stay continuous. CONTENT mode must
+            // NOT: the content clock doesn't jump across a pause, and the survey
+            // tracks the real wire step (as a drift step), so cancelling it here
+            // would drop frameContent by the whole pause duration → video races
+            // forward while audio is fine (log 20260726-211912: a 15.7s pause →
+            // −15725ms shift → rel/s spiked to 150 for seconds).
+            long vShiftMs = _useContentRelease ? 0 : Interlocked.Read(ref _resumePtsShiftMs);
             if (vShiftMs > 0 && _videoClockHz > 0)
                 rtpTs = (uint)((long)rtpTs - vShiftMs * _videoClockHz / 1000L);
             // Latch the content-clock reference from the first post-gate MAU

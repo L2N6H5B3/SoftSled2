@@ -59,7 +59,14 @@ namespace Rtsp
 
                 if (ok)
                 {
-                    data_socket.Client.ReceiveBufferSize = 100 * 1024;
+                    // 4 MB kernel receive buffer (was 100 KB ≈ only ~40 ms at
+                    // 20 Mbps HD). The RTP read loop drains the socket then runs
+                    // the depacketizer synchronously before the next Receive, so
+                    // any stall on that thread — a GC pause, a scheduling hiccup —
+                    // must be absorbed here or the kernel drops packets (seen as
+                    // RTP sequence gaps indistinguishable from source loss). 4 MB
+                    // gives ~1.6 s of headroom.
+                    data_socket.Client.ReceiveBufferSize = 4 * 1024 * 1024;
                     data_socket.Client.SendBufferSize = 65535; // default is 8192. Make it as large as possible for large RTP packets which are not fragmented
 
                     control_socket.Client.DontFragment = false;
