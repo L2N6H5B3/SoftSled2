@@ -142,6 +142,15 @@ namespace Rtsp
 
             data_read_thread = new Thread(() => DoWorkerJob(data_socket, data_port));
             data_read_thread.Name = "DataPort " + data_port;
+            // AboveNormal so this latency-critical socket-drain thread is not
+            // starved by the video decoder's slice-threaded workers (up to 8 cores
+            // at Normal priority). On a CPU-bound laptop a post-loss decode-recovery
+            // burst at high bitrate saturated every core, the receive thread stalled,
+            // and the (kernel) UDP buffer overflowed — dropping a contiguous run of
+            // packets (seen: 296-packet gaps in log 20260727-213500), which itself
+            // caused more post-loss stalls: a self-amplifying loss cascade. This
+            // thread does little CPU work; it just must keep the socket drained.
+            data_read_thread.Priority = ThreadPriority.AboveNormal;
             data_read_thread.Start();
 
             control_read_thread = new Thread(() => DoWorkerJob(control_socket, control_port));
