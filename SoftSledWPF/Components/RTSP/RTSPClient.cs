@@ -181,6 +181,11 @@ namespace SoftSled.Components.RTSP {
         // Initialise Variables to hold Depacketizers
         WmrptVideoDepacketizer videoDepacketizer = null;
         WmrptAudioDepacketizer audioDepacketizer = null;
+        // RTP resequencing in front of each depacketizer — absorbs the adjacent-
+        // packet reordering the wired LAN produces (which the depacketizer would
+        // otherwise mistake for loss and turn into artifacts). See RtpReorderBuffer.
+        RtpReorderBuffer videoReorder = null;
+        RtpReorderBuffer audioReorder = null;
         private bool _wmaFirstPayloadLogged;   // one-shot WMA payload dump (framing diagnostic)
 
         int rtp_count = 0; // used for statistics
@@ -245,6 +250,17 @@ namespace SoftSled.Components.RTSP {
         public RTSPClient() {
             videoDepacketizer = new WmrptVideoDepacketizer();
             audioDepacketizer = new WmrptAudioDepacketizer();
+            // Resequence RTP before depacketizing (see the field declaration). The
+            // deliver callbacks feed the depacketizer in strict sequence order;
+            // the reorder log routes to the main log alongside [wmrpt-loss].
+            videoReorder = new RtpReorderBuffer("video",
+                (payload, len, ssrc, seq, ts, marker) =>
+                    videoDepacketizer.ProcessWmrptPayload(payload, len, ssrc, seq, ts, marker),
+                msg => { try { m_logger?.LogInfo(msg); } catch { } });
+            audioReorder = new RtpReorderBuffer("audio",
+                (payload, len, ssrc, seq, ts, marker) =>
+                    audioDepacketizer.ProcessWmrptPayload(payload, len, ssrc, seq, ts, marker),
+                msg => { try { m_logger?.LogInfo(msg); } catch { } });
             // Dump the WMRTP per-MAU timing fields (header ts vs Send Time vs
             // Correspondence NTP↔RTP vs Decode/Presentation/NPT) for the first
             // few MAUs to the always-on diag log, so we can see which timeline
@@ -1875,6 +1891,10 @@ namespace SoftSled.Components.RTSP {
             // re-latch after the reset.
             System.Threading.Interlocked.Exchange(ref _firstAudioContentMs, -1L);
             System.Threading.Interlocked.Exchange(ref _firstVideoContentMs, -1L);
+            // Drop any pre-seek packets held in the reorder buffers so the new
+            // position starts clean (thread-safe: honoured on the UDP thread).
+            try { videoReorder?.RequestReset(); } catch { }
+            try { audioReorder?.RequestReset(); } catch { }
             // Bump generation so the controller knows the post-seek play-point
             // timestamps are now available and it can safely re-anchor.
             System.Threading.Interlocked.Increment(ref _rtpInfoGeneration);
@@ -2225,7 +2245,7 @@ namespace SoftSled.Components.RTSP {
                 UpdateRtcpSeqTracking(isAudio: false, (ushort)rtp_sequence_number);
                 // Marker bit propagated for cross-checking F-field fragmentation completion
                 // (WMRTP spec line 643).
-                videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
+                videoReorder.Accept(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
                 return;
             }
 
@@ -2235,7 +2255,7 @@ namespace SoftSled.Components.RTSP {
                 byte[] rtp_payload = new byte[rtp_payload_len];
                 Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
                 UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
+                audioReorder.Accept(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
                 return;
             }
 
@@ -2255,7 +2275,7 @@ namespace SoftSled.Components.RTSP {
                 byte[] rtp_payload = new byte[rtp_payload_len];
                 Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
                 UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
+                audioReorder.Accept(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
                 return;
             }
 
@@ -2269,7 +2289,7 @@ namespace SoftSled.Components.RTSP {
                 byte[] rtp_payload = new byte[rtp_payload_len];
                 Array.Copy(e.Message.Data, rtp_payload_start, rtp_payload, 0, rtp_payload_len);
                 UpdateRtcpSeqTracking(isAudio: false, (ushort)rtp_sequence_number);
-                videoDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
+                videoReorder.Accept(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
                 return;
             }
 
@@ -2343,7 +2363,7 @@ namespace SoftSled.Components.RTSP {
                                 $"firstBytes={BitConverter.ToString(rtp_payload, 0, Math.Min(24, rtp_payload_len))}");
                 }
                 UpdateRtcpSeqTracking(isAudio: true, (ushort)rtp_sequence_number);
-                audioDepacketizer.ProcessWmrptPayload(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
+                audioReorder.Accept(rtp_payload, rtp_payload_len, rtp_ssrc, (ushort)rtp_sequence_number, rtp_timestamp, rtp_marker == 1);
                 return;
             }
 

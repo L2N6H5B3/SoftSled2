@@ -274,6 +274,7 @@
     <Compile Include="Components\RTSP\Messages\RTSPResponse.cs" />
     <Compile Include="Components\RTSP\Messages\RTSPTransport.cs" />
     <Compile Include="Components\RTSP\RTSPClient.cs" />
+    <Compile Include="Components\RTSP\RtpReorderBuffer.cs" />
     <Compile Include="Components\RTSP\RTSPListener.cs" />
     <Compile Include="Components\RTSP\RTSPMessageEventArgs.cs" />
     <Compile Include="Components\RTSP\RTSPTCPTransport.cs" />
