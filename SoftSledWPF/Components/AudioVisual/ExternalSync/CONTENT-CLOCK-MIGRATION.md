@@ -190,22 +190,43 @@ seek transients (positive-offset speed-through should become a clean skip).
 To A/B: set `UseContentReleaseMode` true in config, restart playback; the log
 prints `[ext-sync] CONTENT release mode ENABLED`.
 
-### Stage D — delete the dead machinery
+### Stage D — promote to default, then delete the dead machinery
 
-`_pts0`, `_masterAtAnchor`, `_anchored`, `_reanchorMasterOverride`,
-`Reanchor()`, `_syncOffsetMs`/`_targetOffsetMs`/slew, `UpdateSyncOffset`,
-`_baseOffsetMs`, `_videoCodecTrimMs`, the content-ref pairs,
-`MaxPlausibleOffsetMs`/`MaxPlausibleContentOffsetMs`, `_resumePtsShiftMs`,
-`_pauseStartMs`.
+Split into D-1 (promote) and D-2 (delete), per the decisions taken 2026-07-27:
 
-**Keep:** `_liveTrimMs`; `SmoothedMasterMs` (now smoothing content time);
-`SilenceCountingProvider` + gap-fill/overlap-trim (now in content units — more
-correct); decoder flush/backpressure; the anchor gate, demoted from *sync
-correctness* to *pipeline hygiene*.
+**D-1 — content mode is the DEFAULT (DONE 2026-07-27).**
+`SoftSledConfig.UseContentReleaseMode` now defaults **true**. The offset rule
+stays present as the flag-off fallback so rollback is one line, and so it can be
+reshaped into the no-clock fallback in D-2. Soak as default across real use
+before D-2.
 
-Hold the Stage C flag for a while before deleting — the cost is a little dead
-code, the benefit is a one-line rollback if something surfaces on untested
-content.
+**D-2 — delete the offset release machinery (LATER).**
+To remove once content-default has soaked:
+`_pts0`, `_masterAtAnchor`, `_anchored`, `_reanchorMasterOverride`, the offset
+release branch + anchor role of `Reanchor()` (keep its queue-clear),
+`_syncOffsetMs`/`_targetOffsetMs`/slew/`SlewSyncOffsetMs`, `SetMasterClock`/
+`_masterClockMs`, `SmoothedMasterMs`/master smoother, `_baseOffsetMs`,
+`_videoCodecTrimMs`/`_videoIsH264` (H.264 vPad selection), the RTP-Info fallback
+branch, `AvSyncPolicy` candidate logging, `_resumePtsShiftMs`/`_pauseStartMs` +
+the resume-shift in `OnAudioMau`/`OnVideoMau`/`PlayAsync`/`PauseAsync`.
+
+**MUST preserve** (not "dead"):
+- The **content-offset computation** in `UpdateSyncOffset` — it still sizes the
+  jitter buffer (`SetSyncOffsetMs → SizeBufferForOffset`, `|offset|` = video-lead
+  to hold). Refactor to a `ComputeVideoLead`-style helper, don't delete.
+- `_liveTrimMs` + `NudgeAudioSyncTrim` (device-latency trim, still applies).
+- `SmoothedAudibleContentMs` + content smoother; `AudibleContentMs`;
+  `SilenceCountingProvider` + gap-fill/overlap-trim (now in content units);
+  the `ContentClockDiag` survey (now core, not just diagnostic); decoder
+  flush/backpressure; the anchor gate (demoted to pipeline hygiene); the epoch
+  gate; the RTP reorder buffer; trick-play free-run.
+
+**No-clock fallback (decision 2026-07-27):** keep a **minimal wire-PTS release
+path** for a stream that carries no B57/NPT content clock (theoretical for
+WMPNss, which always has it, but retained for robustness). At deletion time this
+means auto-detecting "no content clock after N MAUs" and using a stripped
+wire-based release instead of failing to render — rather than a full content-only
+delete.
 
 ## Risks
 

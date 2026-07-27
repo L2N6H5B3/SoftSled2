@@ -170,14 +170,20 @@ namespace SoftSled.Components.Configuration {
         // 0–4000 ms in the UI. Takes effect on the next playback.
         public int VideoJitterBufferMs = 250;
 
-        // Content-clock migration (Stage C). When true, the video pacer releases
-        // each frame against the AUDIBLE CONTENT time (frameContent <= audible +
-        // trim) on the shared B57/NPT timeline, instead of the derived cross-
-        // stream OFFSET + anchor. Removes the offset re-derivation that made
-        // seeks/repositions fragile, and (measured) nulls the ~60ms H.264 residual.
-        // Default false = the proven offset rule; flip to A/B the content rule.
-        // See Components/AudioVisual/ExternalSync/CONTENT-CLOCK-MIGRATION.md.
-        public bool UseContentReleaseMode = false;
+        // Content-clock migration. When true, the video pacer releases each frame
+        // against the AUDIBLE CONTENT time (frameContent <= audible + trim) on the
+        // shared B57/NPT timeline, instead of the derived cross-stream OFFSET +
+        // anchor. Removes the offset re-derivation that made seeks/repositions
+        // fragile, nulls the ~60ms H.264 residual, and is resilient to
+        // pause/reposition/loss (all validated on recorded + live TV, MPEG-2 +
+        // H.264, across a stack of testing).
+        //
+        // DEFAULT true as of Stage D-1 (2026-07-27): content mode is now the
+        // shipping path. The offset rule is still present as the flag-off fallback
+        // (set this false to revert) until Stage D deletes it — at which point a
+        // minimal wire-PTS fallback is retained for any stream lacking the content
+        // clock. See Components/AudioVisual/ExternalSync/CONTENT-CLOCK-MIGRATION.md.
+        public bool UseContentReleaseMode = true;
 
         // User-customised remote-control button → command mappings, set from
         // the Remote settings page's "learn" flow. Each entry pins a catalog
