@@ -3746,7 +3746,28 @@ namespace SoftSled.Components.Splash {
                 double durMs = 0;
                 if (anim.Keyframes != null && anim.SortedIndices != null && anim.KeyframeCount > 0)
                     durMs = anim.Keyframes[anim.SortedIndices[anim.KeyframeCount - 1]].TimeSec * 1000.0;
-                _dumper.OnEvent($"  [anim-start] h=0x{anim.Handle:X8} kind={anim.Kind} target=0x{anim.TargetVisual:X8} start={startMs:F1}ms dur={durMs:F0}ms batchDepth={_batchDepth} kf={anim.KeyframeCount} playing={_playingAnimations.Count}");
+                // Per-keyframe (time, easing) in TIMELINE order. When a set
+                // of animations the wire meant to finish together instead
+                // stagger, this line reveals which of the three causes is
+                // at play: differing dur= across them → genuinely different
+                // wire durations (intended or not); identical dur= but
+                // differing start= → cross-buffer start drift; identical
+                // dur= + start= but a Logarithmic/high-weight ease on the
+                // "early" one → perceptual (the curve plateaus near 1.0
+                // before t=1.0), not an actual end-time difference.
+                string kfDetail = "";
+                if (anim.Keyframes != null && anim.SortedIndices != null && anim.KeyframeCount > 0) {
+                    var sb = new System.Text.StringBuilder();
+                    for (int i = 0; i < anim.KeyframeCount; i++) {
+                        int idx = anim.SortedIndices[i];
+                        var kf = anim.Keyframes[idx];
+                        if (i > 0) sb.Append(' ');
+                        sb.Append($"t={kf.TimeSec:F3}/{kf.Easing}");
+                        if (kf.EaseP1 != 0 || kf.EaseP2 != 0) sb.Append($"(w={kf.EaseP1:F2},h={kf.EaseP2:F2})");
+                    }
+                    kfDetail = sb.ToString();
+                }
+                _dumper.OnEvent($"  [anim-start] h=0x{anim.Handle:X8} kind={anim.Kind} target=0x{anim.TargetVisual:X8} start={startMs:F1}ms dur={durMs:F0}ms batchDepth={_batchDepth} kf={anim.KeyframeCount} playing={_playingAnimations.Count} [{kfDetail}]");
             }
         }
 
@@ -3856,6 +3877,16 @@ namespace SoftSled.Components.Splash {
             float progress = ComputeAnimationProgress(anim);
             anim.Playing = false;
             _playingAnimations.Remove(anim);
+            // [anim-done] — pairs with [anim-start] to MEASURE actual
+            // overlap. endMs is the same _animClock timebase as [anim-start]'s
+            // start=, so two animations that truly finish together show
+            // (near-)identical endMs. cmd= distinguishes a natural
+            // completion (cmdOverride null) from an explicit wire Stop.
+            // elapsed= is wall time since this Play cycle began.
+            if (_dumper != null) {
+                double endMs = _animClock.Elapsed.TotalMilliseconds;
+                _dumper.OnEvent($"  [anim-done] h=0x{anim.Handle:X8} kind={anim.Kind} target=0x{anim.TargetVisual:X8} endMs={endMs:F1} elapsed={endMs - anim.StartTimeMs:F1}ms progress={progress:F2} cmd={(cmdOverride.HasValue ? cmdOverride.Value.ToString() : "natural")} playing={_playingAnimations.Count}");
+            }
             int cmd = cmdOverride ?? anim.StopCommand;
             // Apply the stop-command per spec 2.2.4.17.25:
             //   0 = no move  (leave at current value)
@@ -4216,18 +4247,55 @@ namespace SoftSled.Components.Splash {
                     float curve = t * t * (3f - 2f * t);
                     return t + (curve - t) * wBlend;
                 }
-                // Single-piece power curve. p1=flWeight (steepness),
-                // p2=flHandle (additional shaping; spec says it's the
-                // exp↔linear transition point). NOTE: WMC never sends
-                // EaseOut and only ~40 EaseIn/session (flHandle 0.4–0.8);
-                // the piecewise spec form remains a follow-up. Default
-                // (w=0,h=0) gives exponent=2 → smooth quadratic ease.
-                case Objects.AnimationEasing.EaseIn:
-                    return (float)Math.Pow(t,
-                        1.0 + (p1 > 0 ? p1 : 1.0) + (p2 > 0 ? p2 : 0.0));
-                case Objects.AnimationEasing.EaseOut:
-                    return 1f - (float)Math.Pow(1f - t,
-                        1.0 + (p1 > 0 ? p1 : 1.0) + (p2 > 0 ? p2 : 0.0));
+                // PIECEWISE EaseOut/EaseIn per spec §2.2.4.17.2/.3.
+                //   p1 = flWeight  — steepness of the curved segment
+                //   p2 = flHandle  — the PROGRESS FRACTION at which the
+                //                    curve switches between its curved and
+                //                    linear halves (spec: "the percentage of
+                //                    progress where the interpolation
+                //                    changes", 0<h<1 exclusive).
+                // EaseOut: exponential on [0,h] → linear on [h,1].
+                // EaseIn : linear on [0,h] → logarithmic on [h,1].
+                // The join is C1-continuous (curved-segment slope carried
+                // into the linear segment) and both endpoints are exact
+                // (0→0, 1→1), so — like every easing — the COMPLETION INSTANT
+                // is unchanged; only the mid-curve pacing differs.
+                //
+                // The previous form was a single Math.Pow(t, 1+w+h) that
+                // ignored the piecewise structure and misused flHandle as an
+                // exponent addend (the code even flagged the spec form as a
+                // "follow-up"). The exponential/logarithmic segments reuse
+                // the same monotone rate-family used by standalone
+                // Exponential/Logarithmic below, so they're consistent at
+                // w=1. The precise WMC segment SHAPE is still pending an
+                // Xbox A/B (see the easing-investigation notes); honoring
+                // flHandle as the transition point is the concrete spec fix.
+                case Objects.AnimationEasing.EaseOut: {
+                    double w = p1 > 0 ? Math.Min(p1, 20.0) : 1.0;
+                    double h = (p2 > 0 && p2 < 1) ? p2 : 0.5;
+                    double ewm1 = Math.Exp(w) - 1.0;
+                    double slopeAt1 = w * Math.Exp(w) / ewm1;      // E'(1)
+                    double vH = 1.0 / (1.0 + slopeAt1 * (1.0 - h) / h);
+                    if (t <= h) {
+                        double seg = t / h;
+                        double e = (Math.Exp(w * seg) - 1.0) / ewm1; // ExpUnit(seg,w)
+                        return (float)(vH * e);
+                    }
+                    double linSlope = vH * slopeAt1 / h;           // f'(h)
+                    return (float)(vH + linSlope * (t - h));
+                }
+                case Objects.AnimationEasing.EaseIn: {
+                    double w = p1 > 0 ? Math.Min(p1, 20.0) : 1.0;
+                    double h = (p2 > 0 && p2 < 1) ? p2 : 0.5;
+                    double ewm1 = Math.Exp(w) - 1.0;
+                    double slopeAt0 = ewm1 / w;                     // L'(0)
+                    double m = slopeAt0 / ((1.0 - h) + h * slopeAt0);
+                    double vH = m * h;
+                    if (t <= h) return (float)(m * t);
+                    double seg = (t - h) / (1.0 - h);
+                    double l = Math.Log(1.0 + ewm1 * seg) / w;     // LogUnit(seg,w)
+                    return (float)(vH + (1.0 - vH) * l);
+                }
                 case Objects.AnimationEasing.Logarithmic: {
                     // Concave (fast start → gentle settle). Rate = flWeight.
                     if (p1 <= 0) return t;
