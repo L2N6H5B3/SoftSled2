@@ -3880,12 +3880,18 @@ namespace SoftSled.Components.Splash {
             // [anim-done] — pairs with [anim-start] to MEASURE actual
             // overlap. endMs is the same _animClock timebase as [anim-start]'s
             // start=, so two animations that truly finish together show
-            // (near-)identical endMs. cmd= distinguishes a natural
-            // completion (cmdOverride null) from an explicit wire Stop.
-            // elapsed= is wall time since this Play cycle began.
+            // (near-)identical endMs. elapsed= is wall time since this Play
+            // cycle began. cmd= shows the post-stop command: an explicit wire
+            // Stop value when the caller supplied one, else "dflt(N)" where N
+            // is the stored SetStopCommand (this covers both timeline
+            // completion AND the msgid-25 supersede-stop, which share the
+            // no-override path). Use progress= as the real "ran to the end"
+            // signal: 1.00 = reached the last keyframe, <1.00 = interrupted
+            // mid-flight (e.g. a page navigation tore it down).
             if (_dumper != null) {
                 double endMs = _animClock.Elapsed.TotalMilliseconds;
-                _dumper.OnEvent($"  [anim-done] h=0x{anim.Handle:X8} kind={anim.Kind} target=0x{anim.TargetVisual:X8} endMs={endMs:F1} elapsed={endMs - anim.StartTimeMs:F1}ms progress={progress:F2} cmd={(cmdOverride.HasValue ? cmdOverride.Value.ToString() : "natural")} playing={_playingAnimations.Count}");
+                string cmdLabel = cmdOverride.HasValue ? cmdOverride.Value.ToString() : $"dflt({anim.StopCommand})";
+                _dumper.OnEvent($"  [anim-done] h=0x{anim.Handle:X8} kind={anim.Kind} target=0x{anim.TargetVisual:X8} endMs={endMs:F1} elapsed={endMs - anim.StartTimeMs:F1}ms progress={progress:F2} cmd={cmdLabel} playing={_playingAnimations.Count}");
             }
             int cmd = cmdOverride ?? anim.StopCommand;
             // Apply the stop-command per spec 2.2.4.17.25:
