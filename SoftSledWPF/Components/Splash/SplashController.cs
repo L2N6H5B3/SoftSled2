@@ -2013,12 +2013,10 @@ namespace SoftSled.Components.Splash {
                     if (rdr.Remaining >= 12) {
                         rdr.ReadVector3(out v.PosX, out v.PosY, out v.PosZ);
                         v.ApplyTransform();
-                        // RULE 2/3 in ComputeEffectiveOpacity reads
-                        // Parent.PosX AND Parent.Parent.PosX (the
-                        // scroll container two levels above). So
-                        // re-evaluate down to GRANDCHILDREN, not just
-                        // direct children.
-                        ReapplyAlphaToDescendants(v, depth: 3);
+                        // No descendant opacity re-evaluation: effective
+                        // opacity is no longer position-dependent (the old
+                        // Parent.PosX / GrandParent.PosX hide rules were
+                        // removed from ComputeEffectiveOpacity).
                         _dumper?.OnEvent($"  Visual_SetPosition=({v.PosX:F2},{v.PosY:F2},{v.PosZ:F2})");
                         RefreshVideoRectIfRelevant(v, "SetPosition");
                     }
@@ -3702,26 +3700,6 @@ namespace SoftSled.Components.Splash {
 
         // -------- Animation playback engine (slice 5.2) --------
 
-        /// <summary>
-        /// Recursively re-applies the effective opacity to descendants
-        /// after a Position change. ComputeEffectiveOpacity has hide
-        /// rules that read ancestor PosX values, so an animated scroll
-        /// at a parent visual must re-evaluate the bit-marked level-2
-        /// wrappers below it.
-        ///
-        /// Depth-limited (defaults to 3 — enough to reach the level-2
-        /// wrapper from the scroll container 2 levels above) so we
-        /// don't walk the entire scene on every tick.
-        /// </summary>
-        private static void ReapplyAlphaToDescendants(SplashVisual v, int depth) {
-            if (v == null || depth <= 0) return;
-            for (int i = 0; i < v.Children.Count; i++) {
-                var child = v.Children[i];
-                child.ApplyAlpha();
-                if (depth > 1) ReapplyAlphaToDescendants(child, depth - 1);
-            }
-        }
-
         private void StartAnimation(Objects.SplashAnimation anim) {
             EnsureAnimTickHooked();
             if (!_animClock.IsRunning) _animClock.Start();
@@ -3757,6 +3735,19 @@ namespace SoftSled.Components.Splash {
             ResolveDynamicKeyframes(anim);
             BuildSortedKeyframeIndices(anim);
             _playingAnimations.Add(anim);
+            // Diagnostic for the serial-vs-parallel question: animations
+            // the wire intends to run together should show (near-)identical
+            // start= and a shared batch= depth. Divergent start= across
+            // co-scheduled anims → cross-buffer drift (they arrived in
+            // separate wire buffers); identical start= but staggered visible
+            // completion → frame starvation elsewhere. durMs is the sorted
+            // last keyframe's time.
+            if (_dumper != null) {
+                double durMs = 0;
+                if (anim.Keyframes != null && anim.SortedIndices != null && anim.KeyframeCount > 0)
+                    durMs = anim.Keyframes[anim.SortedIndices[anim.KeyframeCount - 1]].TimeSec * 1000.0;
+                _dumper.OnEvent($"  [anim-start] h=0x{anim.Handle:X8} kind={anim.Kind} target=0x{anim.TargetVisual:X8} start={startMs:F1}ms dur={durMs:F0}ms batchDepth={_batchDepth} kf={anim.KeyframeCount} playing={_playingAnimations.Count}");
+            }
         }
 
         /// <summary>
@@ -4053,9 +4044,21 @@ namespace SoftSled.Components.Splash {
             _animTickHooked = true;
             // CompositionTarget.Rendering fires once per frame on the WPF
             // dispatcher, so we can mutate scene-graph state from inside
-            // safely. Static-style event; we never need to unhook for a
-            // single-controller-per-process lifetime.
+            // safely.
             System.Windows.Media.CompositionTarget.Rendering += OnAnimTick;
+        }
+
+        /// <summary>
+        /// Detach the per-frame tick when no animations are playing. A live
+        /// CompositionTarget.Rendering subscriber keeps WPF's composition
+        /// pass running every vblank even when the scene is static, so
+        /// leaving it hooked burns idle CPU/GPU on the extender between
+        /// animations. StartAnimation re-hooks via EnsureAnimTickHooked.
+        /// </summary>
+        private void UnhookAnimTick() {
+            if (!_animTickHooked) return;
+            _animTickHooked = false;
+            System.Windows.Media.CompositionTarget.Rendering -= OnAnimTick;
         }
 
         // Reusable scratch buffer for the per-tick snapshot of playing
@@ -4067,7 +4070,7 @@ namespace SoftSled.Components.Splash {
             = new System.Collections.Generic.List<Objects.SplashAnimation>();
 
         private void OnAnimTick(object sender, EventArgs e) {
-            if (_playingAnimations.Count == 0) return;
+            if (_playingAnimations.Count == 0) { UnhookAnimTick(); return; }
             double nowMs = _animClock.Elapsed.TotalMilliseconds;
             _animTickScratch.Clear();
             _animTickScratch.AddRange(_playingAnimations);
@@ -4075,6 +4078,11 @@ namespace SoftSled.Components.Splash {
                 TickAnimation(_animTickScratch[i], nowMs);
             }
             _animTickScratch.Clear(); // drop refs eagerly
+            // Last animation finished on this tick — stop the per-frame
+            // render pump so the scene goes fully idle. Any chained
+            // OnComplete start already re-hooked, so only unhook when the
+            // set is genuinely empty.
+            if (_playingAnimations.Count == 0) UnhookAnimTick();
         }
 
         private void TickAnimation(Objects.SplashAnimation a, double nowMs) {
@@ -4274,19 +4282,27 @@ namespace SoftSled.Components.Splash {
                 case Objects.AnimationKind.Position:
                     v.PosX = kf.VecX; v.PosY = kf.VecY; v.PosZ = kf.VecZ;
                     v.ApplyTransform();
-                    // Position changes ripple to descendants' hide rules
-                    // (Rule 2/3 in ComputeEffectiveOpacity reads
-                    // Parent.PosX + GrandParent.PosX, so a Position
-                    // animation on the scroll container must re-evaluate
-                    // the level-2 wrappers' opacity each tick).
-                    ReapplyAlphaToDescendants(v, depth: 3);
+                    // NOTE: no descendant opacity re-evaluation here. The
+                    // position-dependent hide rules that once required it
+                    // (Parent.PosX / GrandParent.PosX in
+                    // ComputeEffectiveOpacity) were removed — effective
+                    // opacity now depends only on Visible / AlphaByte /
+                    // Color / DataBitsDeactivated, none positional — so the
+                    // former per-tick subtree walk was pure waste on the
+                    // hottest (scroll) animation path.
                     break;
                 case Objects.AnimationKind.Size:
                     v.SizeX = kf.VecX; v.SizeY = kf.VecY; v.SizeZ = kf.VecZ;
-                    // Pivot depends on Size, so the transform must redo,
-                    // and stretch-to-visual surface ops need a re-paint.
+                    // Pivot depends on Size, so the transform must redo.
+                    // Content only needs re-rasterizing when it actually
+                    // tracks the visual's Size (stretch-to-visual ops) AND
+                    // the size moved — RepaintContentIfSizeAffected skips
+                    // the per-frame RenderOpen otherwise. Fixed-rect /
+                    // fractional content is size-independent and would paint
+                    // identically, so a Size sweep over it now costs nothing
+                    // beyond the transform update.
                     v.ApplyTransform();
-                    v.RepaintContent();
+                    v.RepaintContentIfSizeAffected();
                     // Keep the bounds-clip in lockstep with the live Size
                     // so children stay clipped during Size animations
                     // (otherwise a fast Size pulse would briefly let

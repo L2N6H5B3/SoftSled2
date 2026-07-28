@@ -546,12 +546,33 @@ namespace SoftSled.Components.Splash.Objects {
         // §2.2.4.6.4 Visual_SetColor) — White = untinted fast path.
         private List<Action<DrawingContext, Size, Color>> _cachedOps;
 
+        // True when at least one cached op resolves its destination from
+        // the visual's Size at paint time (a stretch-to-visual op). ONLY
+        // such content changes when Size changes; fixed-rect / fractional
+        // content renders byte-for-byte identically regardless of Size, so
+        // a Size animation on a visual whose content is size-independent
+        // can skip the (expensive) per-frame RenderOpen re-rasterization
+        // entirely. Set from the RenderBuilder at SetContent time.
+        public bool ContentDependsOnSize { get; private set; }
+
+        // Size at which _cachedOps were last painted. Lets RepaintContent
+        // coalesce redundant re-rasterizations when an animation ticks the
+        // Size to the same value twice (WMC often over-sends). NaN until
+        // the first paint.
+        private double _lastPaintW = double.NaN, _lastPaintH = double.NaN;
+
         public void SetContentFromRenderBuilder(SplashRenderBuilder rb,
                                                 System.Collections.Generic.IReadOnlyList<SplashGradient> pendingGradients = null) {
             ContentRenderBuilderHandle = rb?.Handle ?? 0;
             // Snapshot the RB's ops so RepaintContent can run later with
             // a new Size after the RB has been Clear()'d / re-filled.
             _cachedOps = rb?.SnapshotOps();
+            // Capture whether any op depends on the visual's Size BEFORE
+            // rb.Clear() (below) resets the flag on the shared builder.
+            ContentDependsOnSize = rb?.HasStretchToVisualOp ?? false;
+            // Force the coalescing guard to repaint on the next size-driven
+            // call — content just changed, so the last-painted size is stale.
+            _lastPaintW = double.NaN; _lastPaintH = double.NaN;
             RepaintContent();
             // Apply any gradients that were queued onto this RB via
             // Gradient_Draw (spec §2.2.4.15) as the visual's OpacityMask.
@@ -594,9 +615,26 @@ namespace SoftSled.Components.Splash.Objects {
         /// Re-paint the cached RenderBuilder ops onto this visual using
         /// the current Size. No-op if no content has ever been bound.
         /// </summary>
+        /// <summary>
+        /// Re-paint only if the content actually tracks Size and the Size
+        /// has changed since the last paint. Called from the Size-animation
+        /// tick, this skips the per-frame RenderOpen for the common case
+        /// (size-independent content) and coalesces duplicate sizes —
+        /// turning a Size sweep over fixed-rect content from N re-rasters
+        /// into zero. Content whose destination stretches to the visual
+        /// still repaints exactly when the size moves.
+        /// </summary>
+        public void RepaintContentIfSizeAffected() {
+            if (!ContentDependsOnSize) return;
+            double w = SizeX > 0 ? SizeX : 0, h = SizeY > 0 ? SizeY : 0;
+            if (w == _lastPaintW && h == _lastPaintH) return;
+            RepaintContent();
+        }
+
         public void RepaintContent() {
             if (_cachedOps == null) return;
             var bounds = new Size(SizeX > 0 ? SizeX : 0, SizeY > 0 ? SizeY : 0);
+            _lastPaintW = bounds.Width; _lastPaintH = bounds.Height;
             // Tint (Visual_SetColor, spec §2.2.4.6.4): the RGB channels
             // modulate the painted content (vector op colors multiply;
             // images route through a cached multiplied bitmap). The ALPHA
@@ -664,6 +702,17 @@ namespace SoftSled.Components.Splash.Objects {
         private readonly List<Action<DrawingContext, Size, Color>> _ops = new List<Action<DrawingContext, Size, Color>>();
 
         /// <summary>
+        /// True once any op added to this builder resolves its destination
+        /// from the consuming visual's Size at paint time (the WMC
+        /// <c>dst=(0,0,-1,-1)</c> stretch-to-visual sentinel). The visual
+        /// captures this at SetContent time as
+        /// <see cref="SplashVisual.ContentDependsOnSize"/> so a Size
+        /// animation can skip re-rasterizing size-independent content.
+        /// Reset by <see cref="Clear"/> alongside the ops.
+        /// </summary>
+        public bool HasStretchToVisualOp { get; private set; }
+
+        /// <summary>
         /// Gradient handles queued via <c>Gradient_Draw / Gradient_Push rb=this</c>.
         /// Drained by the next <c>Visual_SetContent</c> that consumes this RB
         /// and applied as that visual's OpacityMask (NEXT-BOUND model).
@@ -696,6 +745,7 @@ namespace SoftSled.Components.Splash.Objects {
 
         public void Clear() {
             _ops.Clear();
+            HasStretchToVisualOp = false;
             // Pending gradients are SetContent-scoped, not Clear-scoped:
             // WMC sometimes calls Gradient_Draw between Surface_Draw ops
             // and the SetContent that consumes them. Clearing on every
@@ -777,14 +827,27 @@ namespace SoftSled.Components.Splash.Objects {
         private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<BitmapSource, Dictionary<uint, BitmapSource>>
             s_tintCache = new System.Runtime.CompilerServices.ConditionalWeakTable<BitmapSource, Dictionary<uint, BitmapSource>>();
 
+        // Upper bound on distinct tints cached per source bitmap. A Color
+        // animation drives a DIFFERENT tint every frame, so an uncapped
+        // cache would insert (and hold, via the ConditionalWeakTable, for
+        // the life of the source) a full-image copy per animation frame —
+        // both a per-frame allocation storm and an unbounded leak over a
+        // sweep. Real static usage needs only a handful of distinct tints
+        // (focus/selected/dimmed states), so a small cap keeps the steady
+        // state fully cached while a live animation simply computes-and-
+        // discards past the cap instead of accumulating garbage.
+        private const int TintCachePerSourceCap = 8;
+
         /// <summary>Return <paramref name="src"/> multiplied by the tint RGB
         /// (cached), or the source itself for a White tint.</summary>
         private static BitmapSource TintedIfNeeded(BitmapSource src, Color tint) {
             if (src == null || IsWhite(tint)) return src;
             uint key = ((uint)tint.R << 16) | ((uint)tint.G << 8) | tint.B;
             var perSrc = s_tintCache.GetOrCreateValue(src);
+            bool cacheFull;
             lock (perSrc) {
                 if (perSrc.TryGetValue(key, out var cached)) return cached;
+                cacheFull = perSrc.Count >= TintCachePerSourceCap;
             }
             try {
                 BitmapSource bgra = src.Format == PixelFormats.Bgra32
@@ -801,7 +864,14 @@ namespace SoftSled.Components.Splash.Objects {
                 }
                 var tinted = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, px, stride);
                 tinted.Freeze();
-                lock (perSrc) { perSrc[key] = tinted; }
+                // Only cache when under the per-source cap. Past it (i.e.
+                // mid color-animation) we return the freshly-tinted bitmap
+                // without storing it — no accumulation, no leak.
+                if (!cacheFull) {
+                    lock (perSrc) {
+                        if (perSrc.Count < TintCachePerSourceCap) perSrc[key] = tinted;
+                    }
+                }
                 return tinted;
             } catch {
                 return src; // any conversion hiccup → draw untinted rather than nothing
@@ -809,6 +879,7 @@ namespace SoftSled.Components.Splash.Objects {
         }
 
         public void AddSolid(Rect rect, Color color, bool stretchToVisual = false) {
+            if (stretchToVisual) HasStretchToVisualOp = true;
             if (stretchToVisual) {
                 _ops.Add((dc, b, tint) => {
                     if (b.Width > 0 && b.Height > 0)
@@ -820,6 +891,7 @@ namespace SoftSled.Components.Splash.Objects {
         }
 
         public void AddOutline(Rect rect, Color color, double thickness, bool stretchToVisual = false) {
+            if (stretchToVisual) HasStretchToVisualOp = true;
             if (stretchToVisual) {
                 _ops.Add((dc, b, tint) => {
                     if (b.Width > 0 && b.Height > 0)
@@ -844,6 +916,7 @@ namespace SoftSled.Components.Splash.Objects {
         /// </summary>
         public void AddImage(BitmapSource src, Rect srcRect, Rect dstRect, bool stretchToVisual) {
             if (src == null) return;
+            if (stretchToVisual) HasStretchToVisualOp = true;
             BitmapSource toDraw;
             if (srcRect.X == 0 && srcRect.Y == 0
                 && (int)srcRect.Width  == src.PixelWidth
@@ -882,6 +955,7 @@ namespace SoftSled.Components.Splash.Objects {
         public void AddImageMapped(BitmapSource src, Rect srcSubRect, Rect dstFraction,
                                    Rect explicitDst, bool stretchToVisual) {
             if (src == null) return;
+            if (stretchToVisual) HasStretchToVisualOp = true;
             BitmapSource cropped = TryCrop(src,
                 (int)srcSubRect.X, (int)srcSubRect.Y,
                 (int)srcSubRect.Width, (int)srcSubRect.Height);
@@ -927,6 +1001,7 @@ namespace SoftSled.Components.Splash.Objects {
                                       float gridY1, float gridY2,
                                       Rect dstRect, bool stretchToVisual) {
             if (src == null) return;
+            if (stretchToVisual) HasStretchToVisualOp = true;
             int srcW = src.PixelWidth;
             int srcH = src.PixelHeight;
             // Clamp grid values into [0, srcDim) and ensure the two
