@@ -585,9 +585,19 @@ namespace SoftSled.Components.Splash.Objects {
             // and are tracked separately.
             if (pendingGradients != null && pendingGradients.Count > 0) {
                 var last = pendingGradients[pendingGradients.Count - 1];
+                // AppliedGradientHandle tracks the LAST gradient so the
+                // Gradient_SetOffset / offset-animation rebuild path
+                // (RebuildMasksForGradient) can still find this visual.
+                // Combined-mask visuals are viewport edge-clips, which WMC
+                // does not offset-animate, so tracking only the last is
+                // sufficient in practice.
                 AppliedGradientHandle = last?.Handle ?? 0;
-                var mask = last?.BuildOpacityMask(SizeX, SizeY);
-                DrawingVisual.OpacityMask = mask;
+                // Combine ALL queued gradients (multiplicative) rather than
+                // applying only the last: WMC ships a scroll viewport's clip
+                // as a left+right (or top+bottom) edge-fade PAIR on one RB,
+                // and WPF allows one OpacityMask per visual. Single-gradient
+                // binds take the original BuildOpacityMask path unchanged.
+                DrawingVisual.OpacityMask = SplashGradient.BuildCombinedMask(pendingGradients, SizeX, SizeY);
             } else {
                 // No queued gradients = no mask. Clearing is important so
                 // a previously masked visual that gets re-bound without
@@ -1666,6 +1676,133 @@ namespace SoftSled.Components.Splash.Objects {
                 // Hold the end values past the explicit stops so a fade
                 // from 0..1 over a small range stays at 1 across the rest
                 // of the visual (otherwise WPF tiles by default).
+                SpreadMethod = GradientSpreadMethod.Pad,
+            };
+            brush.Freeze();
+            return brush;
+        }
+
+        /// <summary>
+        /// Resolve a stop to an absolute pixel coordinate along the axis
+        /// (mirrors <see cref="BuildOpacityMask"/>'s per-stop switch,
+        /// including <see cref="Offset"/>).
+        /// </summary>
+        private double ResolveStopPx(Stop s, double axisLen) {
+            double px;
+            switch (s.Relative) {
+                case 1:  px = axisLen + s.Position; break;   // from max corner
+                case 4:  // global — best-effort local-min
+                case 0:
+                default: px = s.Position; break;             // from min corner
+            }
+            return px + Offset;
+        }
+
+        /// <summary>
+        /// Interpolated alpha (0..1) this gradient would apply at absolute
+        /// pixel <paramref name="px"/>, with Pad spread (clamped to the
+        /// first/last stop value outside the stop range) — matching the
+        /// <see cref="GradientSpreadMethod.Pad"/> brushes we build. Used by
+        /// <see cref="BuildCombinedMask"/> to multiply several gradients'
+        /// masks together.
+        /// </summary>
+        private double AlphaAt(double px, double axisLen) {
+            int n = Stops.Count;
+            if (n == 0) return 1.0; // no stops = fully opaque (identity)
+            var arr = new (double Px, double Val)[n];
+            for (int i = 0; i < n; i++)
+                arr[i] = (ResolveStopPx(Stops[i], axisLen), Stops[i].Value);
+            System.Array.Sort(arr, (a, b) => a.Px.CompareTo(b.Px));
+            if (px <= arr[0].Px)     return Clamp01(arr[0].Val);
+            if (px >= arr[n - 1].Px) return Clamp01(arr[n - 1].Val);
+            for (int i = 0; i < n - 1; i++) {
+                if (px >= arr[i].Px && px <= arr[i + 1].Px) {
+                    double span = arr[i + 1].Px - arr[i].Px;
+                    double t = span > 1e-9 ? (px - arr[i].Px) / span : 0.0;
+                    return Clamp01(arr[i].Val + (arr[i + 1].Val - arr[i].Val) * t);
+                }
+            }
+            return Clamp01(arr[n - 1].Val);
+        }
+
+        private static double Clamp01(double v) => v < 0 ? 0 : (v > 1 ? 1 : v);
+
+        /// <summary>
+        /// Build a single OpacityMask that is the MULTIPLICATIVE combination
+        /// of several gradients' masks against one visual size. WMC ships a
+        /// scroll viewport's edge clip as a PAIR of gradients drawn onto the
+        /// same RenderBuilder — a fade-in from the leading edge plus a
+        /// fade-out at the trailing edge — but WPF allows only one
+        /// OpacityMask per visual. Applying only the last (the prior
+        /// behaviour) clipped just one edge, so content scrolled off the
+        /// other edge stayed visible (the recorded-TV popup tab strip
+        /// bleeding past the popup's left edge).
+        ///
+        /// <para>Same-orientation gradients are merged into one
+        /// LinearGradientBrush whose alpha at each sampled position is the
+        /// product of every gradient's alpha there (the correct meaning of
+        /// stacking opacity masks). For the both-edges case this yields
+        /// stops 0@0, 1@lead, 1@(len-trail), 0@len — transparent at both
+        /// ends, opaque in the middle. Mixed-orientation sets can't be a
+        /// single linear brush, so they fall back to the last gradient's
+        /// mask (unchanged from before). A single gradient also takes the
+        /// original path, so all one-mask cases (home-row window masks, EPG
+        /// bound, title fades) are byte-for-byte unchanged.</para>
+        /// </summary>
+        public static Brush BuildCombinedMask(
+                System.Collections.Generic.IReadOnlyList<SplashGradient> grads,
+                double w, double h) {
+            if (grads == null || grads.Count == 0) return null;
+            if (grads.Count == 1) return grads[0].BuildOpacityMask(w, h);
+            if (w <= 0 || h <= 0) return null;
+
+            var dir = grads[0].Direction;
+            for (int i = 1; i < grads.Count; i++)
+                if (grads[i].Direction != dir)
+                    return grads[grads.Count - 1].BuildOpacityMask(w, h); // mixed → last
+
+            double axisLen = dir == Orientation.Horizontal ? w : h;
+
+            // Union of every gradient's stop positions (plus the axis ends),
+            // so the piecewise-linear product is sampled wherever any input
+            // has a knee.
+            var posSet = new System.Collections.Generic.SortedSet<double>();
+            posSet.Add(0); posSet.Add(axisLen);
+            foreach (var g in grads)
+                foreach (var s in g.Stops)
+                    posSet.Add(g.ResolveStopPx(s, axisLen));
+
+            var pts = new System.Collections.Generic.List<(double Px, double A)>(posSet.Count);
+            foreach (var px in posSet) {
+                double a = 1.0;
+                foreach (var g in grads) a *= g.AlphaAt(px, axisLen);
+                pts.Add((px, a));
+            }
+
+            double minPx = pts[0].Px, maxPx = pts[pts.Count - 1].Px;
+            if (Math.Abs(maxPx - minPx) < 0.001) {
+                byte a0 = (byte)Math.Max(0, Math.Min(255, (int)Math.Round(pts[0].A * 255)));
+                var solid = new SolidColorBrush(Color.FromArgb(a0, 0xFF, 0xFF, 0xFF));
+                solid.Freeze();
+                return solid;
+            }
+
+            var sc = new GradientStopCollection();
+            foreach (var p in pts) {
+                double t = (p.Px - minPx) / (maxPx - minPx);
+                byte a = (byte)Math.Max(0, Math.Min(255, (int)Math.Round(p.A * 255)));
+                sc.Add(new GradientStop(Color.FromArgb(a, 0xFF, 0xFF, 0xFF), t));
+            }
+            sc.Freeze();
+
+            Point start, end;
+            if (dir == Orientation.Horizontal) {
+                start = new Point(minPx, h * 0.5); end = new Point(maxPx, h * 0.5);
+            } else {
+                start = new Point(w * 0.5, minPx); end = new Point(w * 0.5, maxPx);
+            }
+            var brush = new LinearGradientBrush(sc, start, end) {
+                MappingMode  = BrushMappingMode.Absolute,
                 SpreadMethod = GradientSpreadMethod.Pad,
             };
             brush.Freeze();
